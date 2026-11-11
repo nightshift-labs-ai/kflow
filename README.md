@@ -50,12 +50,12 @@ __bug_table (addr,file,line,flags): 9850 sites, 7831 WARN (resume after the trap
 __jump_table: 9237 static-key sites, 5129 keys named by a symbol, 9006 targets in the same function
 __ex_table (insn,fixup,data): 671 faulting instructions with a fixup, 635 fixups in the same function; types UACCESS 410, IMM_REG 87, WRMSR 42, RDMSR 39, FAULT_SGX 23, CLEAR_FS 15
 
-$ python3 -m kflow kernel.elf --list jump --limit 3
+$ python3 -m kflow kernel.elf --list jump --limit 3   (summary lines and the '... more' line left out here)
 0xffffffff8e391de7 -> 0xffffffff8e391dfc  arch_exit_to_user_mode_prepare.isra.0    key randomize_kstack_offset (likely)
 0xffffffff8ef08602 -> 0xffffffff8ef08625  __do_fast_syscall_32                     key randomize_kstack_offset (likely)
 0xffffffff8ef08705 -> 0xffffffff8ef087f2  do_syscall_64                            key randomize_kstack_offset (likely)
 
-$ python3 -m kflow kernel.elf --list ex --limit 3
+$ python3 -m kflow kernel.elf --list ex --limit 3   (same)
 0xffffffff8e200029 -> 0xffffffff8e20002b  sev_es_terminate                         WRMSR
 0xffffffff8e20057d -> 0xffffffff8e20057f  early_set_pages_state                    WRMSR
 0xffffffff8e200583 -> 0xffffffff8e200585  early_set_pages_state                    RDMSR
@@ -63,12 +63,12 @@ $ python3 -m kflow kernel.elf --list ex --limit 3
 
 (`--list warn` and `--list bug` print `address  WARN|BUG  function  file:line`; WARN sites whose bytes are no longer `ud2` sit in init code that the running kernel had freed.)
 
-The comments kflow writes in IDA look like this:
+The comments kflow writes in IDA, for three of the sites above (text produced by `kflow/idalayer.py` through the fake-IDA test, not an IDA screenshot):
 
 ```
-kflow: WARN at mm/userfaultfd.c:722 (the kernel reports and continues after this trap)
-kflow: static key randomize_kstack_offset (static_branch_likely): runtime-patched NOP/branch; branch target 0x...
-kflow: may fault -> fixup at 0x... (UACCESS)
+0xffffffff8e629bc4 (mfill_atomic_copy):  kflow: WARN at mm/userfaultfd.c:755 (the kernel reports and continues after this trap)
+0xffffffff8e391de7 (arch_exit_to_user_mode_prepare.isra.0):  kflow: static key randomize_kstack_offset (static_branch_likely): runtime-patched NOP/branch; branch target 0xFFFFFFFF8E391DFC
+0xffffffff8e200029 (sev_es_terminate):  kflow: may fault -> fixup at 0xFFFFFFFF8E20002B (WRMSR)
 ```
 
 ## What was verified
