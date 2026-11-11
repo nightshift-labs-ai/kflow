@@ -65,6 +65,8 @@ class Tables(unittest.TestCase):
         m.put(tab, struct.pack("<iii", BASE + 0x100 - tab, BASE + 0x110 - (tab + 4), 3))
         layout, (x,) = decode_ex_table(m.read, tab, tab + 12)
         self.assertEqual((layout, x.insn, x.fixup, x.type_name()), ("insn,fixup,data", BASE + 0x100, BASE + 0x110, "UACCESS"))
+        self.assertEqual(x.type_name("aarch64"), "KACCESS_ERR_ZERO")  # same number, arm64 meaning
+        self.assertEqual(x.type_name("riscv"), "type 3")
 
     def test_ex_8_byte_layout_by_sort_order(self):
         # arm64 before 5.16: {int insn, fixup}; 6 entries = 48 bytes also fit 4 x 12

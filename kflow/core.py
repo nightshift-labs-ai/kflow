@@ -30,6 +30,8 @@ EX_TYPE_NAMES = {
     19: "UCOPY_LEN", 20: "ZEROPAD", 21: "ERETU",
 }  # low byte of the data word; values from Linux v6.12 arch/x86/include/asm/extable_fixup_types.h
 # (the immediate sits in the upper bits: EFAULT_REG = IMM_REG with imm -EFAULT). Older kernels number differently.
+EX_TYPE_NAMES_ARM64 = {0: "NONE", 1: "BPF", 2: "UACCESS_ERR_ZERO", 3: "KACCESS_ERR_ZERO", 4: "LOAD_UNALIGNED_ZEROPAD"}
+# arch/arm64/include/asm/asm-extable.h, same numbers in v6.1 and v6.12 (16-bit type at offset 8; 12-byte entries since 5.16)
 
 
 @dataclass
@@ -76,9 +78,10 @@ class ExSite:
     def type_name(self, arch="x86_64"):
         if self.data is None:
             return "-"
-        if arch != "x86_64":
+        names = {"x86_64": EX_TYPE_NAMES, "aarch64": EX_TYPE_NAMES_ARM64}.get(arch)
+        if names is None:
             return "type %d" % self.type
-        return EX_TYPE_NAMES.get(self.type, str(self.type))
+        return names.get(self.type, "type %d" % self.type)
 
 
 def _cstr(read, ea, limit=256):
