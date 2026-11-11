@@ -138,7 +138,8 @@ def summary(elf, t):
                      % (len(jumps), named, same))
     exs = t.get("ex")
     if exs is not None:
-        types = collections.Counter(x.type_name(elf.arch) for x in exs)
+        types = collections.Counter(("handler " + elf.by_addr.get(x.handler, hex(x.handler))) if x.handler is not None
+                                    else x.type_name(elf.arch) for x in exs)
         same = sum(1 for x in exs if elf.func(x.insn) and elf.func(x.insn) == elf.func(x.fixup))
         lines.append("__ex_table (%s): %d faulting instructions with a fixup, %d fixups in the same function; types %s"
                      % (t["ex_layout"], len(exs), same, ", ".join("%s %d" % kv for kv in types.most_common(6))))
@@ -179,7 +180,8 @@ def main(argv=None):
                             elf.by_addr.get(j.key, "%#x" % j.key), " (likely)" if j.branch else ""))
         else:
             for x in t.get("ex", []):
-                rows.append("%#x -> %#x  %-40s %s" % (x.insn, x.fixup, elf.func(x.insn) or "?", x.type_name(elf.arch)))
+                rows.append("%#x -> %#x  %-40s %s" % (x.insn, x.fixup, elf.func(x.insn) or "?",
+                            ("handler " + elf.by_addr.get(x.handler, hex(x.handler))) if x.handler is not None else x.type_name(elf.arch)))
         for r in rows[:a.limit]:
             print(r)
         if len(rows) > a.limit:

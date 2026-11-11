@@ -70,6 +70,7 @@ class ExSite:
     fixup: int
     data: int
     entry: int = 0
+    handler: int = None  # x86 before 5.16: address of the fixup handler function (then data is None)
 
     @property
     def type(self):
@@ -165,7 +166,7 @@ def decode_jump_table(read, start, stop):
     return out
 
 
-EX_LAYOUTS = {"insn,fixup,data": 12, "insn,fixup": 8}  # x86_64 4.x+ and arm64 5.16+: 12; arm64 before 5.16: 8
+EX_LAYOUTS = {"insn,fixup,data": 12, "insn,fixup": 8}  # "insn,fixup,handler" is reported when 12-byte data points into text  # x86_64 4.x+ and arm64 5.16+: 12; arm64 before 5.16: 8
 
 
 def decode_ex_table(read, start, stop, layout=None, in_text=None):
@@ -192,6 +193,16 @@ def decode_ex_table(read, start, stop, layout=None, in_text=None):
             if in_text is not None and in_text(x.insn) and in_text(x.fixup):
                 good += 1
             out.append(x)
+        # x86 before 5.16: the third field is a relative pointer to a handler function, not a type
+        if es == 12 and in_text is not None and out:
+            targets = [x.entry + 8 + x.data for x in out]
+            handlers = sum(1 for a in targets if in_text(a))
+            # real handlers are a few functions shared by many entries; a type read as a pointer
+            # gives a different address for every entry
+            if handlers > len(out) // 2 and len(set(targets)) <= max(16, len(out) // 10):
+                for x in out:
+                    x.handler, x.data = x.entry + 8 + x.data, None
+                name = "insn,fixup,handler"
         # the build sorts __ex_table by instruction address (scripts/sorttable), so the
         # right layout gives an ascending list; in-text counts break ties
         ordered = sum(1 for a, b in zip(out, out[1:]) if b.insn >= a.insn)

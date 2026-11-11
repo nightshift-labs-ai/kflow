@@ -115,7 +115,10 @@ def jump_comment(j):
 
 
 def ex_comment(x, arch):
-    t = "" if x.data is None else " (%s)" % x.type_name(arch or "x86_64")
+    if x.handler is not None:
+        t = " (handler %s)" % name_or_hex(x.handler)
+    else:
+        t = "" if x.data is None else " (%s)" % x.type_name(arch or "x86_64")
     return "%s: may fault -> fixup at 0x%X%s" % (TAG, x.fixup, t)
 
 

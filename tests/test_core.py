@@ -92,6 +92,18 @@ class Tables(unittest.TestCase):
         self.assertEqual([x.insn for x in xs], [BASE + 0x100 + 0x40 * k for k in range(6)])
         self.assertEqual(xs[0].type_name(), "-")
 
+    def test_ex_x86_before_5_16_handler(self):
+        m = Mem()
+        tab = BASE + 0x1000
+        text = (BASE, BASE + 0x800)
+        for k in range(3):
+            ea = tab + 12 * k
+            m.put(ea, struct.pack("<iii", BASE + 0x100 + 0x10 * k - ea, BASE + 0x400 - (ea + 4), BASE + 0x600 - (ea + 8)))
+        layout, xs = decode_ex_table(m.read, tab, tab + 36, in_text=lambda a: text[0] <= a < text[1])
+        self.assertEqual(layout, "insn,fixup,handler")
+        self.assertEqual({x.handler for x in xs}, {BASE + 0x600})
+        self.assertTrue(all(x.data is None and x.type_name() == "-" for x in xs))
+
     def test_bad_sizes(self):
         m = Mem()
         with self.assertRaises(ValueError):
