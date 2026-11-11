@@ -58,6 +58,40 @@ def install(w, names=True):
                                                  and elf.by_addr.get(elf.symbols[n]) == n else BAD)
     m["ida_nalt"] = types.ModuleType("ida_nalt")
     m["ida_nalt"].get_input_file_path = lambda: w.get("path")
+    m["ida_nalt"].get_imagebase = lambda: w.get("imagebase", 0)
+    nn = m["ida_netnode"] = types.ModuleType("ida_netnode")
+    nn.BADNODE = BAD
+    store = w.setdefault("netnodes", {})
+
+    class netnode:  # alt values only, default tag; a name that does not exist has index BADNODE unless created
+        def __init__(self, name, namlen=0, do_create=False):
+            self.name = name
+            if do_create:
+                store.setdefault(name, {})
+
+        def index(self):
+            return 1000 + sorted(store).index(self.name) if self.name in store else BAD
+
+        def altset(self, i, v):
+            store[self.name][i] = v
+            return True
+
+        def altval(self, i):
+            return store.get(self.name, {}).get(i, 0)
+
+        def _after(self, cur):
+            ks = sorted(k for k in store.get(self.name, {}) if cur is None or k > cur)
+            return ks[0] if ks else BAD
+
+        def altfirst(self):
+            return self._after(None)
+
+        def altnext(self, cur):
+            return self._after(cur)
+
+        def kill(self):
+            store.pop(self.name, None)
+    nn.netnode = netnode
     m["ida_name"].get_name = lambda ea: elf.by_addr.get(ea, "") if names else ""
     m["ida_ida"].inf_is_64bit = lambda: True
     m["ida_ida"].inf_get_procname = lambda: "metapc" if elf.arch == "x86_64" else "ARM"
@@ -115,6 +149,12 @@ def run(path):
             w["xrefs"][(j.code, j.target)] = False
             w["by_from"].setdefault(j.code, set()).add(j.target)
             own += 1
+    # a reference the user added before kflow ran, at one of kflow's own sites: Remove must keep it
+    mine = next(((j.code, j.target) for j in t["jump"] if il.in_text(j.code) and il.in_text(j.target)
+                 and (j.code, j.target) not in w["xrefs"]), None)
+    if mine is not None:
+        w["xrefs"][mine] = True
+        w["by_from"].setdefault(mine[0], set()).add(mine[1])
     note = next((b.addr for b in t["bug"] if il.in_text(b.addr)), None)
     if note is not None:
         w["cmts"][note] = "my note"
@@ -130,16 +170,30 @@ def run(path):
     ours = [c for c in w["cmts"].values() if c.startswith("kflow: ")]
     assert len(ours) <= res["comments"] and ours, (len(ours), res)  # sites sharing an address keep the last comment
     users = sum(1 for u in w["xrefs"].values() if u)
-    assert users == res["xrefs"], (users, res)
+    assert users == res["xrefs"] + (mine is not None), (users, res)
+    assert res["xrefs"] > 0 and len(w["netnodes"].get(il.NODE, {})) == res["xrefs"]
     removed = il.remove_annotations(t)
     assert removed == res["xrefs"], (removed, res)
     assert sum(1 for u in w["xrefs"].values() if not u) == own  # IDA's own references stay
+    assert [k for k, u in w["xrefs"].items() if u] == ([mine] if mine else []), "only the user's own reference stays"
+    assert il.NODE not in w["netnodes"]
     assert not any(c.startswith("kflow: ") for c in w["cmts"].values())
     if other is not None:
         assert w["cmts"][other] == "kflow-like note by the user"
     assert il.remove_annotations(t) == 0
-    print("OK %s: found by %s; %d comments, %d user xrefs added and removed, %d IDA xrefs kept, %d user comment kept"
-          % (os.path.basename(path), t["found_by"], res["comments"], res["xrefs"], own, res["kept_user_comments"]))
+    # rebase after annotating: the recorded offsets follow the image base, so Remove still finds every reference
+    res2 = il.annotate(t, il.current_arch())
+    delta = 0x200000
+    w["xrefs"] = {(f + delta, to + delta): u for (f, to), u in w["xrefs"].items()}
+    w["by_from"] = {}
+    for f, to in w["xrefs"]:
+        w["by_from"].setdefault(f, set()).add(to)
+    w["imagebase"] = w.get("imagebase", 0) + delta
+    assert il.remove_annotations({"bug": [], "jump": [], "ex": []}) == res2["xrefs"] == res["xrefs"]
+    assert [k for k, u in w["xrefs"].items() if u] == ([(mine[0] + delta, mine[1] + delta)] if mine else [])
+    print("OK %s: found by %s; %d comments, %d user xrefs added and removed, %d IDA xrefs + %d earlier user xref kept, "
+          "%d user comments kept" % (os.path.basename(path), t["found_by"], res["comments"], res["xrefs"], own,
+                                     mine is not None, res["kept_user_comments"]))
     return t, w
 
 
