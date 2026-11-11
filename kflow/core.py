@@ -60,7 +60,7 @@ class JumpSite:
     target: int
     key: int
     branch: bool  # bit 0 of the key field: jump_entry_is_branch (static_branch_likely)
-    init: bool  # bit 1: site in init text
+    init: bool  # bit 1: set by the running kernel for sites in init text (memory images); on disk, x86 objtool uses it as a NOP marker
     entry: int = 0
 
 

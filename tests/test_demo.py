@@ -15,8 +15,16 @@ assert not t["missing"] or t["missing"] == ["jump"], t["missing"]  # stripped vm
 bugs, jumps, exs = t["bug"], t.get("jump", []), t["ex"]
 # every enabled jump-label site (x86 jmp rel8/rel32, arm64 b) must land on the decoded target
 checked = 0
+ib, ie = e.symbols.get("__init_begin"), e.symbols.get("__init_end")
+
+
+def in_init(ea):
+    # bit 1 of the key means "init" only in a running kernel (on disk x86 objtool uses it as a NOP marker)
+    return ib <= ea < ie if ib and ie else False
+
+
 for j in jumps:
-    if j.init:
+    if in_init(j.code):
         continue  # init text is freed after boot (memory images hold other bytes there)
     if e.arch == "aarch64":
         w = int.from_bytes(e.read(j.code, 4), "little")
