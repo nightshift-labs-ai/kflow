@@ -10,7 +10,7 @@ kflow reads these tables from the database and, in IDA, comments every site and 
 
 ## Status: read this first
 
-**kflow has not yet been run inside real IDA.** It was built without access to an IDA installation. The table decoders are checked against the instruction bytes of three real kernels (below); the IDA layer is small, uses 50 IDAPython names that all exist in the official stubs (`tests/check_ida_api.py`), and has only been exercised with fake `ida_*` modules. Bug reports are very welcome.
+**kflow has not yet been run inside real IDA.** It was built without access to an IDA installation. The table decoders are checked against the instruction bytes of four real kernels (below); the IDA layer is small, uses 50 IDAPython names that all exist in the official stubs (`tests/check_ida_api.py`), and has only been exercised with fake `ida_*` modules. Bug reports are very welcome.
 
 kflow was built by an AI agent (Claude, operated by Nightshift Labs).
 
@@ -80,13 +80,14 @@ kflow: may fault -> fixup at 0x... (UACCESS)
 | Debian 13 6.12.115 x86_64 (MemLens demo, memory image) | 9,850 (7,831 WARN) | 9,237 | 671 (12-byte entries) | every enabled site (663 `jmp`) lands on the decoded target; the rest are 2/5-byte NOPs |
 | Debian `vmlinux` x86_64, stripped (`extract-vmlinux`) | 9,993 (7,615 WARN, all `ud2`) | needs symbols | 630 | tables found by section name |
 | Android 13 GKI 5.10 arm64 (vmlinux-to-elf) | 24,386 (17,374 WARN, all `brk #0x800`) | 75,316 | 1,488 (8-byte entries) | all 55,053 enabled sites are `b` to the decoded target; the rest are `nop` |
+| Android GKI 6.1 arm64 (vmlinux-to-elf) | 12,223 (8,792 WARN, all `brk #0x800`) | 10,629 | 1,043 (12-byte entries: 1,022 UACCESS_ERR_ZERO, 12 LOAD_UNALIGNED_ZEROPAD, 9 KACCESS_ERR_ZERO) | all 1,128 enabled sites are `b` to the decoded target; the rest are `nop` |
 
 The entry layout is chosen from the data: for `__bug_table` the layout whose entries name source files, for `__ex_table` the layout that gives the address-sorted list the kernel build produces (arm64 before 5.16 has 8-byte entries).
 
 ## Limits
 
 - 64-bit little-endian kernels with relative table entries (x86_64; arm64 with `CONFIG_GENERIC_BUG_RELATIVE_POINTERS`). Not 32-bit kernels.
-- Exception-type names are the x86_64 numbers of Linux 6.12; other versions number some types differently, so treat the name as a hint. arm64 types are shown as numbers.
+- Exception-type names: x86_64 from Linux 6.12, arm64 from Linux 6.1/6.12 (`asm-extable.h`, same numbers in both). Other versions number some x86_64 types differently, so treat the name as a hint; arm64 kernels before 5.16 have no type field.
 - kflow does not change how IDA treats a WARN `ud2` (IDA may still end the block there); the comment says that execution continues. Not tried in IDA.
 - Static-key sites in freed init code (memory images) are decoded but not commented when they are outside code segments.
 - Alternatives (`.altinstructions`) are not handled; see [ida-linux-alternatives](https://github.com/opensrcsec/ida-linux-alternatives).
