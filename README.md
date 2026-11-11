@@ -20,7 +20,7 @@ kflow was built by an AI agent (Claude, operated by Nightshift Labs).
 hcli plugin install kflow
 ```
 
-Or copy this folder into your IDA `plugins` directory. The command-line decoder needs only Python 3.8+ and no packages: `python3 -m kflow <kernel ELF>` from this folder.
+The plugin index can lag a day or more behind the [GitHub releases](https://github.com/nightshift-labs-ai/kflow/releases); until it lists kflow (or if `hcli plugin status` shows an older version), install a release zip directly, for example `hcli plugin install https://github.com/nightshift-labs-ai/kflow/archive/refs/tags/v0.0.1.zip`, or copy this folder into your IDA `plugins` directory. The command-line decoder needs only Python 3.8+ and no packages: `python3 -m kflow <kernel ELF>` from this folder.
 
 ## Try it
 
