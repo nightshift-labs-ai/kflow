@@ -73,7 +73,7 @@ kflow: may fault -> fixup at 0x... (UACCESS)
 
 ## What was verified
 
-`tests/test_demo.py <kernel ELF>` checks the decoded tables against the instruction bytes; `tests/test_ida_stub.py <kernel ELF>` runs the IDA layer on fake `ida_*` modules backed by the same file (annotate, then remove, with IDA's own references and a user comment in place); `tests/test_headless_stub.py <kernel ELF>` does the same through the headless runner; `python3 tests/test_core.py` covers the layouts on synthetic tables.
+`tests/test_demo.py <kernel ELF>` checks the decoded tables against the instruction bytes; `tests/test_ida_stub.py <kernel ELF>` runs the IDA layer on fake `ida_*` modules backed by the same file (annotate, then remove, with IDA's own references and a user comment in place); `tests/test_headless_stub.py <kernel ELF>` does the same through the headless runner, and `tests/test_entry_stub.py <kernel ELF>` loads the plugin itself and runs its three menu actions; `python3 tests/test_core.py` covers the layouts on synthetic tables.
 
 | Kernel | BUG/WARN sites | static-key sites | exception-table sites | byte checks |
 |---|---|---|---|---|
