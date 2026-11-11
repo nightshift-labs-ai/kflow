@@ -19,6 +19,7 @@ class InputError(Exception):
 
 class Elf:
     def __init__(self, path):
+        self.path = path
         with open(path, "rb") as fh:
             self.data = d = fh.read()
         if d[:4] != b"\x7fELF":

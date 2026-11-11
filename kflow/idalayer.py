@@ -2,6 +2,7 @@
 import ida_bytes
 import ida_ida
 import ida_idaapi
+import ida_nalt
 import ida_name
 import ida_segment
 import ida_xref
@@ -40,12 +41,37 @@ def in_text(ea):
     return seg is not None and bool(seg.perm & ida_segment.SEGPERM_EXEC or seg.type == ida_segment.SEG_CODE)
 
 
+_FILE_SYMBOLS = {}
+
+
+def file_symbols():
+    """The input file's own ELF symbol table, read once per path ({} if it cannot be read).
+
+    IDA keeps one name per address, and __stop_ names usually share theirs with another symbol
+    (__stop___bug_table with __start_orc_header, for example), so the database may not have them."""
+    path = ida_nalt.get_input_file_path() or ""
+    if path not in _FILE_SYMBOLS:
+        try:
+            from .cli import Elf
+            _FILE_SYMBOLS[path] = Elf(path).symbols
+        except Exception:  # noqa: BLE001  (missing, moved or not an ELF: just no fallback)
+            _FILE_SYMBOLS[path] = {}
+    return _FILE_SYMBOLS[path]
+
+
 def table_range(kind):
-    """[start, stop) of a table from its __start_/__stop_ names, else from a segment of the same name."""
+    """[start, stop) of a table from its __start_/__stop_ names in the database, else from the input file's
+    symbol table (shifted like the database if __start_ is known there), else from a segment of the same name."""
     s, e = core.TABLES[kind]
     a, b = ida_name.get_name_ea(BADADDR, s), ida_name.get_name_ea(BADADDR, e)
     if a != BADADDR and b != BADADDR and b > a:
         return a, b, "names"
+    fs = file_symbols()
+    if s in fs and e in fs and fs[e] > fs[s]:
+        delta = a - fs[s] if a != BADADDR else 0  # the database may have been rebased
+        start, stop = fs[s] + delta, fs[e] + delta
+        if ida_segment.getseg(start) is not None:
+            return start, stop, "input file symbols"
     seg = ida_segment.get_segm_by_name(s[len("__start_"):])
     if seg is not None:
         return seg.start_ea, seg.end_ea, "segment"

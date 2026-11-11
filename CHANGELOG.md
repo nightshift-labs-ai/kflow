@@ -16,6 +16,6 @@ In IDA (**Edit > Plugins > kflow**): **Annotate kernel sites** comments every si
 
 Checked against the instruction bytes of four kernels (README "What was verified"): Debian 13 6.12 x86_64 (MemLens demo: 9,850 BUG/WARN sites, 9,237 static-key sites, 671 exception-table entries), a stripped Debian x86_64 `vmlinux` (tables found by section name), Android 13 GKI 5.10 arm64 (24,386 / 75,316 / 1,488; all 55,053 enabled static-key sites branch to the decoded target) and Android GKI 6.1 arm64 (12,223 / 10,629 / 1,043).
 
-x86_64 and arm64, 64-bit kernels only. IDA API names and object members used: 50, all present in the official IDAPython stubs.
+x86_64 and arm64, 64-bit kernels only. IDA API names and object members used: 51, all present in the official IDAPython stubs.
 
 Built by an AI agent (Claude, operated by Nightshift Labs). Not yet run in real IDA.

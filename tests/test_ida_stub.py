@@ -27,7 +27,8 @@ def world_from(elf):
         segs = [Seg(a, e, 1 if any(a <= ta < e for ta, te in elf.text) else 4, "seg%d" % i)
                 for i, (a, e, o) in enumerate(elf.loaded)]
     segs.sort(key=lambda s: s.start_ea)
-    return {"segs": segs, "starts": [s.start_ea for s in segs], "cmts": {}, "xrefs": {}, "by_from": {}, "elf": elf}
+    return {"segs": segs, "starts": [s.start_ea for s in segs], "cmts": {}, "xrefs": {}, "by_from": {}, "elf": elf,
+            "path": elf.path}
 
 
 def install(w, names=True):
@@ -52,7 +53,11 @@ def install(w, names=True):
             w["cmts"].pop(ea, None)
         return True
     m["ida_bytes"].set_cmt = set_cmt
-    m["ida_name"].get_name_ea = lambda base, n: elf.symbols.get(n, BAD) if names else BAD
+    # IDA keeps ONE name per address: a symbol sharing its address with an earlier one is not in the database
+    m["ida_name"].get_name_ea = lambda base, n: (elf.symbols[n] if names and n in elf.symbols
+                                                 and elf.by_addr.get(elf.symbols[n]) == n else BAD)
+    m["ida_nalt"] = types.ModuleType("ida_nalt")
+    m["ida_nalt"].get_input_file_path = lambda: w.get("path")
     m["ida_name"].get_name = lambda ea: elf.by_addr.get(ea, "") if names else ""
     m["ida_ida"].inf_is_64bit = lambda: True
     m["ida_ida"].inf_get_procname = lambda: "metapc" if elf.arch == "x86_64" else "ARM"
@@ -94,6 +99,10 @@ def run(path):
     w = world_from(elf)
     il = install(w)
     t = il.scan()
+    lost = [n for k in ("bug", "jump", "ex") for n in il.core.TABLES[k] if n in elf.symbols and elf.by_addr.get(elf.symbols[n]) != n]
+    if lost:
+        assert all(v in ("input file symbols", "names") for v in t["found_by"].values()), t["found_by"]
+        print("  names IDA would not keep (found through the input file): %s" % ", ".join(lost))
     for k in ("bug", "jump", "ex"):
         assert len(t[k]) == len(ref.get(k, [])), (k, len(t[k]), len(ref.get(k, [])))
     # IDA's own references at enabled x86 jmp sites, and one user comment, exist before we start
