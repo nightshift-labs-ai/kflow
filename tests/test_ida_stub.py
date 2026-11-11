@@ -1,0 +1,135 @@
+"""Runs kflow's IDA layer on fake ida_* modules backed by a real kernel ELF.
+Usage: python3 tests/test_ida_stub.py <kernel.elf> [<stripped vmlinux>]   (SKIPs without a path)"""
+import bisect
+import importlib
+import os
+import sys
+import types
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(HERE, ".."))
+from kflow.cli import Elf, load  # noqa: E402
+
+BAD = 2 ** 64 - 1
+
+
+class Seg:
+    def __init__(self, s, e, perm, name):
+        self.start_ea, self.end_ea, self.perm, self.type, self.name = s, e, perm, 0, name
+
+
+def world_from(elf):
+    segs = []
+    for name, (a, e) in elf.sections.items():
+        exe = any(a <= ta < e for ta, te in elf.text)
+        segs.append(Seg(a, e, 1 if exe else 4, name))
+    if not segs:  # ELF without section names: one segment per loaded range
+        segs = [Seg(a, e, 1 if any(a <= ta < e for ta, te in elf.text) else 4, "seg%d" % i)
+                for i, (a, e, o) in enumerate(elf.loaded)]
+    segs.sort(key=lambda s: s.start_ea)
+    return {"segs": segs, "starts": [s.start_ea for s in segs], "cmts": {}, "xrefs": {}, "by_from": {}, "elf": elf}
+
+
+def install(w, names=True):
+    elf = w["elf"]
+    m = {n: types.ModuleType(n) for n in "ida_bytes ida_ida ida_idaapi ida_name ida_segment ida_xref".split()}
+    m["ida_idaapi"].BADADDR = BAD
+
+    def getseg(ea):
+        i = bisect.bisect_right(w["starts"], ea) - 1
+        return w["segs"][i] if i >= 0 and ea < w["segs"][i].end_ea else None
+    m["ida_segment"].getseg = getseg
+    m["ida_segment"].get_segm_by_name = lambda n: next((s for s in w["segs"] if s.name == n), None)
+    m["ida_segment"].SEGPERM_EXEC, m["ida_segment"].SEG_CODE = 1, 2
+    m["ida_bytes"].get_bytes = lambda ea, n: elf.read(ea, n)
+    m["ida_bytes"].is_loaded = lambda ea: elf.read(ea, 1) is not None
+    m["ida_bytes"].get_cmt = lambda ea, rep: w["cmts"].get(ea)
+
+    def set_cmt(ea, text, rep):
+        if text:
+            w["cmts"][ea] = text
+        else:
+            w["cmts"].pop(ea, None)
+        return True
+    m["ida_bytes"].set_cmt = set_cmt
+    m["ida_name"].get_name_ea = lambda base, n: elf.symbols.get(n, BAD) if names else BAD
+    m["ida_name"].get_name = lambda ea: elf.by_addr.get(ea, "") if names else ""
+    m["ida_ida"].inf_is_64bit = lambda: True
+    m["ida_ida"].inf_get_procname = lambda: "metapc" if elf.arch == "x86_64" else "ARM"
+    x = m["ida_xref"]
+    x.fl_JN, x.XREF_USER, x.XREF_FAR = 19, 32, 1
+
+    def add_cref(f, t, k):
+        w["xrefs"][(f, t)] = bool(k & 32)
+        w["by_from"].setdefault(f, set()).add(t)
+        return True
+    x.add_cref = add_cref
+
+    def del_cref(f, t, expand):
+        w["by_from"].get(f, set()).discard(t)
+        return w["xrefs"].pop((f, t), None) is not None
+    x.del_cref = del_cref
+
+    class xrefblk_t:
+        def first_from(self, ea, flags):
+            self._it = iter(sorted((t, w["xrefs"][(ea, t)]) for t in w["by_from"].get(ea, ())))
+            return self.next_from()
+
+        def next_from(self):
+            try:
+                self.to, self.user = next(self._it)
+            except StopIteration:
+                return False
+            self.iscode = True
+            return True
+    x.xrefblk_t = xrefblk_t
+    sys.modules.update(m)
+    sys.modules.pop("kflow.idalayer", None)
+    return importlib.import_module("kflow.idalayer")
+
+
+def run(path):
+    elf = Elf(path)
+    ref = load(elf)
+    w = world_from(elf)
+    il = install(w)
+    t = il.scan()
+    for k in ("bug", "jump", "ex"):
+        assert len(t[k]) == len(ref.get(k, [])), (k, len(t[k]), len(ref.get(k, [])))
+    # IDA's own references at enabled x86 jmp sites, and one user comment, exist before we start
+    own = 0
+    for j in t["jump"]:
+        b = elf.read(j.code, 4)
+        enabled = b and ((elf.arch == "x86_64" and b[0] in (0xE9, 0xEB))
+                         or (elf.arch == "aarch64" and len(b) == 4 and int.from_bytes(b, "little") >> 26 == 0b000101))
+        if not j.init and enabled:
+            w["xrefs"][(j.code, j.target)] = False
+            w["by_from"].setdefault(j.code, set()).add(j.target)
+            own += 1
+    note = next((b.addr for b in t["bug"] if il.in_text(b.addr)), None)
+    if note is not None:
+        w["cmts"][note] = "my note"
+    res = il.annotate(t, il.current_arch())
+    assert res["kept_user_comments"] == (1 if note is not None else 0), res
+    if note is not None:
+        assert w["cmts"][note] == "my note"
+    ours = [c for c in w["cmts"].values() if c.startswith("kflow: ")]
+    assert len(ours) <= res["comments"] and ours, (len(ours), res)  # sites sharing an address keep the last comment
+    users = sum(1 for u in w["xrefs"].values() if u)
+    assert users == res["xrefs"], (users, res)
+    removed = il.remove_annotations(t)
+    assert removed == res["xrefs"], (removed, res)
+    assert sum(1 for u in w["xrefs"].values() if not u) == own  # IDA's own references stay
+    assert not any(c.startswith("kflow") for c in w["cmts"].values())
+    assert il.remove_annotations(t) == 0
+    print("OK %s: found by %s; %d comments, %d user xrefs added and removed, %d IDA xrefs kept, %d user comment kept"
+          % (os.path.basename(path), t["found_by"], res["comments"], res["xrefs"], own, res["kept_user_comments"]))
+    return t, w
+
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print("SKIP: pass a kernel ELF path")
+        sys.exit(0)
+    for p in sys.argv[1:]:
+        run(p)
