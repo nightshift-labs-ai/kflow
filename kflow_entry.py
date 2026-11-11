@@ -71,7 +71,11 @@ class AnnotateAction(ida_kernwin.action_handler_t):
         t = scan_or_warn()
         if t is None:
             return 0
-        res = idalayer.annotate(t, idalayer.current_arch())
+        ida_kernwin.show_wait_box("kflow: writing comments and references")
+        try:
+            res = idalayer.annotate(t, idalayer.current_arch())
+        finally:
+            ida_kernwin.hide_wait_box()
         report("comments: %d, references added: %d, user comments kept: %d"
                % (res["comments"], res["xrefs"], res["kept_user_comments"]))
         return 1
@@ -119,7 +123,12 @@ class RemoveAction(ida_kernwin.action_handler_t):
         t = STATE["tables"] or scan_or_warn()
         if t is None:
             return 0
-        report("references removed: %d" % idalayer.remove_annotations(t))
+        ida_kernwin.show_wait_box("kflow: removing comments and references")
+        try:
+            removed = idalayer.remove_annotations(t)
+        finally:
+            ida_kernwin.hide_wait_box()
+        report("references removed: %d" % removed)
         return 1
 
     def update(self, ctx):
