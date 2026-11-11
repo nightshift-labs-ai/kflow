@@ -46,6 +46,13 @@ for j in jumps:
     else:
         assert b in (bytes.fromhex("0f1f440000"), bytes(5)) or b[:2] == b"\x66\x90", (hex(j.code), b.hex())
 assert checked > 0 or not jumps
+# file names are real kernel paths (a wrong pointer base gives cut names such as "el/workqueue.c")
+TOP = ("arch/", "kernel/", "mm/", "fs/", "net/", "drivers/", "include/", "lib/", "block/", "crypto/", "security/",
+       "sound/", "virt/", "init/", "ipc/", "io_uring/", "certs/", "rust/", "usr/", "samples/", "./", "/")
+named = [b for b in bugs if b.file]
+assert len(named) >= 0.95 * len(bugs), (len(named), len(bugs))
+good = sum(1 for b in named if b.file.startswith(TOP))
+assert good >= 0.95 * len(named), (good, len(named), [b.file for b in named if not b.file.startswith(TOP)][:5])
 # every bug entry that names a file has a line; WARN/BUG sites that are not freed init text are ud2
 for b in bugs:
     assert (b.file is None) == (b.line is None)
