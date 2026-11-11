@@ -114,7 +114,9 @@ def decode_bug_table(read, start, stop, layout=None, in_text=None):
         raise ValueError("bug table not readable at 0x%x" % start)
     names = [layout] if layout else list(BUG_LAYOUTS)
     best = None
-    for name in names:
+    # Before Linux 5.19 (commit 69505e3d9a39) every displacement is relative to the START of the entry;
+    # since then each is relative to its own field. Both are tried; the one whose file pointers start strings wins.
+    for name, field_rel in [(n, r) for n in names for r in (True, False)]:
         es, off = BUG_LAYOUTS[name]
         if size % es:
             continue
@@ -123,21 +125,23 @@ def decode_bug_table(read, start, stop, layout=None, in_text=None):
             base = k * es
             ea = start + base
             disp, = struct.unpack_from("<i", raw, base + off["addr"])
-            site = BugSite(addr=ea + off["addr"] + disp, entry=ea)
+            site = BugSite(addr=ea + (off["addr"] if field_rel else 0) + disp, entry=ea)
             site.flags, = struct.unpack_from("<H", raw, base + off["flags"])
             if off["file"] is not None:
                 fd, = struct.unpack_from("<i", raw, base + off["file"])
-                f = _cstr(read, ea + off["file"] + fd)
+                fea = ea + (off["file"] if field_rel else 0) + fd
+                f = _cstr(read, fea)
                 if _plausible_file(f):
                     site.file = f
                     site.line, = struct.unpack_from("<H", raw, base + off["line"])
-                    good += 1
+                    # the right base points at string starts (the linker may still merge a name into another's tail)
+                    good += 1 if read(fea - 1, 1) in (b"\0", None) else 0
             if in_text is not None and in_text(site.addr):
                 good += 1
             sites.append(site)
         score = good / max(1, len(sites))
         if best is None or score > best[0]:
-            best = (score, name, sites)
+            best = (score, name + ("" if field_rel else " (entry-relative)"), sites)
     if best is None:
         raise ValueError("bug table size %d fits no known layout" % size)
     return best[1], best[2]

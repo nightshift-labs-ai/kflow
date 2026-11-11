@@ -27,7 +27,7 @@ class Mem:
 class Tables(unittest.TestCase):
     def test_bug_12(self):
         m = Mem()
-        m.put(BASE + 0x2000, b"mm/slub.c\0")
+        m.put(BASE + 0x1FFF, b"\0mm/slub.c\0")
         tab = BASE + 0x1000
         # entry 0: WARN at BASE+0x100, line 77, taint 9; entry 1: BUG at BASE+0x200 line 5
         for k, (addr, line, flags) in enumerate([(BASE + 0x100, 77, 0x901), (BASE + 0x200, 5, 0)]):
@@ -38,9 +38,21 @@ class Tables(unittest.TestCase):
         self.assertEqual([(s.addr, s.where(), s.warn, s.taint) for s in sites],
                          [(BASE + 0x100, "mm/slub.c:77", True, 9), (BASE + 0x200, "mm/slub.c:5", False, 0)])
 
+    def test_bug_12_entry_relative_before_5_19(self):
+        # before Linux 5.19 file_disp counts from the start of the entry, not from the field
+        m = Mem()
+        m.put(BASE + 0x1FFF, b"\0kernel/workqueue.c\0")
+        tab = BASE + 0x1000
+        for k in range(3):
+            ea = tab + 12 * k
+            m.put(ea, struct.pack("<iiHH", BASE + 0x100 + k - ea, BASE + 0x2000 - ea, 10 + k, 1))
+        layout, sites = decode_bug_table(m.read, tab, tab + 36)
+        self.assertEqual(layout, "addr,file,line,flags (entry-relative)")
+        self.assertEqual([s.where() for s in sites], ["kernel/workqueue.c:%d" % (10 + k) for k in range(3)])
+
     def test_bug_16_format_layout(self):
         m = Mem()
-        m.put(BASE + 0x2000, b"kernel/fork.c\0")
+        m.put(BASE + 0x1FFF, b"\0kernel/fork.c\0")
         tab = BASE + 0x1000
         ea = tab
         m.put(ea, struct.pack("<iiiHH", BASE + 0x300 - ea, 0, BASE + 0x2000 - (ea + 8), 42, 1))
