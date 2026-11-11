@@ -71,9 +71,13 @@ class ExSite:
 
     @property
     def type(self):
-        return self.data & 0xFF
+        return None if self.data is None else self.data & 0xFF
 
-    def type_name(self):
+    def type_name(self, arch="x86_64"):
+        if self.data is None:
+            return "-"
+        if arch != "x86_64":
+            return "type %d" % self.type
         return EX_TYPE_NAMES.get(self.type, str(self.type))
 
 
@@ -154,22 +158,42 @@ def decode_jump_table(read, start, stop):
     return out
 
 
-def decode_ex_table(read, start, stop):
+EX_LAYOUTS = {"insn,fixup,data": 12, "insn,fixup": 8}  # x86_64 4.x+ and arm64 5.16+: 12; arm64 before 5.16: 8
+
+
+def decode_ex_table(read, start, stop, layout=None, in_text=None):
+    """Return (layout name, [ExSite]). With layout=None the layout with the most
+    entries whose instruction and fixup both lie in text wins (in_text optional;
+    without it, the 12-byte layout is assumed when the size allows)."""
     size = stop - start
     if size <= 0:
-        return []
-    if size % 12:
-        raise ValueError("exception table size %d is not a multiple of 12" % size)
+        return None, []
     raw = read(start, size)
     if raw is None or len(raw) < size:
         raise ValueError("exception table not readable at 0x%x" % start)
-    out = []
-    for k in range(size // 12):
-        ea = start + 12 * k
-        i, f, d = struct.unpack_from("<iii", raw, 12 * k)
-        out.append(ExSite(insn=ea + i, fixup=ea + 4 + f, data=d, entry=ea))
-    return out
-
+    best = None
+    for name in ([layout] if layout else list(EX_LAYOUTS)):
+        es = EX_LAYOUTS[name]
+        if size % es:
+            continue
+        out, good = [], 0
+        for k in range(size // es):
+            ea = start + es * k
+            i, f = struct.unpack_from("<ii", raw, es * k)
+            d = struct.unpack_from("<i", raw, es * k + 8)[0] if es == 12 else None
+            x = ExSite(insn=ea + i, fixup=ea + 4 + f, data=d, entry=ea)
+            if in_text is not None and in_text(x.insn) and in_text(x.fixup):
+                good += 1
+            out.append(x)
+        # the build sorts __ex_table by instruction address (scripts/sorttable), so the
+        # right layout gives an ascending list; in-text counts break ties
+        ordered = sum(1 for a, b in zip(out, out[1:]) if b.insn >= a.insn)
+        score = (ordered / max(1, len(out) - 1), good / max(1, len(out)))
+        if best is None or score > best[0]:
+            best = (score, name, out)
+    if best is None:
+        raise ValueError("exception table size %d fits no known layout" % size)
+    return best[1], best[2]
 
 TABLES = {
     "bug": ("__start___bug_table", "__stop___bug_table"),

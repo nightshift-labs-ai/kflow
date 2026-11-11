@@ -63,8 +63,20 @@ class Tables(unittest.TestCase):
         m = Mem()
         tab = BASE + 0x1000
         m.put(tab, struct.pack("<iii", BASE + 0x100 - tab, BASE + 0x110 - (tab + 4), 3))
-        (x,) = decode_ex_table(m.read, tab, tab + 12)
-        self.assertEqual((x.insn, x.fixup, x.type_name()), (BASE + 0x100, BASE + 0x110, "UACCESS"))
+        layout, (x,) = decode_ex_table(m.read, tab, tab + 12)
+        self.assertEqual((layout, x.insn, x.fixup, x.type_name()), ("insn,fixup,data", BASE + 0x100, BASE + 0x110, "UACCESS"))
+
+    def test_ex_8_byte_layout_by_sort_order(self):
+        # arm64 before 5.16: {int insn, fixup}; 6 entries = 48 bytes also fit 4 x 12
+        m = Mem()
+        tab = BASE + 0x1000
+        for k in range(6):
+            ea = tab + 8 * k
+            m.put(ea, struct.pack("<ii", BASE + 0x100 + 0x40 * k - ea, BASE + 0x800 + 8 * k - (ea + 4)))
+        layout, xs = decode_ex_table(m.read, tab, tab + 48)
+        self.assertEqual(layout, "insn,fixup")
+        self.assertEqual([x.insn for x in xs], [BASE + 0x100 + 0x40 * k for k in range(6)])
+        self.assertEqual(xs[0].type_name(), "-")
 
     def test_bad_sizes(self):
         m = Mem()

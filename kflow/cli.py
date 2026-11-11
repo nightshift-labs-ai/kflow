@@ -26,11 +26,22 @@ class Elf:
         if d[4] != 2 or d[5] != 1:
             raise InputError("only 64-bit little-endian ELF is supported")
         shoff, = struct.unpack_from("<Q", d, 0x28)
-        shentsize, shnum = struct.unpack_from("<HH", d, 0x3A)
-        self.secs = []
+        shentsize, shnum, shstrndx = struct.unpack_from("<HHH", d, 0x3A)
+        machine, = struct.unpack_from("<H", d, 0x12)
+        self.arch = {62: "x86_64", 183: "aarch64"}.get(machine, "machine %d" % machine)
+        self.secs, names = [], []
         for i in range(shnum):
             name, typ, flags, addr, off, size, link = struct.unpack_from("<IIQQQQI", d, shoff + i * shentsize)
             self.secs.append((typ, flags, addr, off, size, link))
+            names.append(name)
+        self.sections = {}
+        if shstrndx < len(self.secs):
+            so = self.secs[shstrndx][3]
+            for i, n in enumerate(names):
+                nm = d[so + n:d.index(b"\0", so + n)].decode("utf-8", "replace")
+                t, f, a, o, s, l = self.secs[i]
+                if nm and a and s:
+                    self.sections.setdefault(nm, (a, a + s))
         self.loaded = sorted((a, a + s, o) for t, f, a, o, s, l in self.secs if t == 1 and a and s)
         self._starts = [x[0] for x in self.loaded]
         self.text = [(a, a + s) for t, f, a, o, s, l in self.secs if t == 1 and f & 4 and a and s]
@@ -46,9 +57,14 @@ class Elf:
                 name = d[stro + st_name:end].decode("utf-8", "replace")
                 if name and name not in self.symbols:
                     self.symbols[name] = value
-                if st_info & 0xF == 2 and size:
+                if st_info & 0xF == 2 and value:
                     funcs.append((value, value + size, name))
         funcs.sort()
+        # kallsyms-derived ELFs (vmlinux-to-elf) give every function size 0: end it at the next function
+        for k, (a, e, n) in enumerate(funcs):
+            if e == a:
+                nxt = funcs[k + 1][0] if k + 1 < len(funcs) else a + 1
+                funcs[k] = (a, min(nxt, a + 0x100000), n)
         self.funcs = funcs
         self._fstarts = [f[0] for f in funcs]
         self.by_addr = {}
@@ -77,19 +93,27 @@ class Elf:
 
 def load(elf):
     """Decode every table that has __start_/__stop_ symbols. Returns dict."""
-    out = {"missing": []}
+    out = {"missing": [], "found_by": {}}
     for kind, (s, e) in TABLES.items():
-        if s not in elf.symbols or e not in elf.symbols:
+        if s in elf.symbols and e in elf.symbols:
+            start, stop = elf.symbols[s], elf.symbols[e]
+            out["found_by"][kind] = "symbols"
+        elif s[len("__start_"):] in elf.sections:  # stripped vmlinux keeps __bug_table / __ex_table as sections
+            start, stop = elf.sections[s[len("__start_"):]]
+            out["found_by"][kind] = "section"
+        else:
             out["missing"].append(kind)
             continue
-        start, stop = elf.symbols[s], elf.symbols[e]
         if kind == "bug":
             out["bug_layout"], out["bug"] = decode_bug_table(elf.read, start, stop, in_text=elf.in_text)
         elif kind == "jump":
             out["jump"] = decode_jump_table(elf.read, start, stop)
         else:
-            out["ex"] = decode_ex_table(elf.read, start, stop)
+            out["ex_layout"], out["ex"] = decode_ex_table(elf.read, start, stop, in_text=elf.in_text)
     return out
+
+
+TRAPS = {"x86_64": (b"\x0f\x0b", "ud2"), "aarch64": (b"\x00\x00\x21\xd4", "brk #0x800")}
 
 
 def summary(elf, t):
@@ -98,12 +122,13 @@ def summary(elf, t):
     if bugs is not None:
         warn = [b for b in bugs if b.warn]
         files = collections.Counter(b.file for b in bugs if b.file)
-        ud2 = sum(1 for b in warn if elf.read(b.addr, 2) == b"\x0f\x0b")
+        trap, tname = TRAPS.get(elf.arch, (None, "?"))
+        ud2 = sum(1 for b in warn if trap and elf.read(b.addr, len(trap)) == trap)
         lines.append("__bug_table (%s): %d sites, %d WARN (resume after the trap), %d BUG; %d with file:line in %d source files"
                      % (t["bug_layout"], len(bugs), len(warn), len(bugs) - len(warn),
                         sum(1 for b in bugs if b.file), len(files)))
-        lines.append("  WARN sites that are ud2 (0f 0b) here: %d; sites inside a function symbol: %d"
-                     % (ud2, sum(1 for b in bugs if elf.func(b.addr))))
+        lines.append("  WARN sites that are %s here: %d; sites inside a function symbol: %d"
+                     % (tname, ud2, sum(1 for b in bugs if elf.func(b.addr))))
     jumps = t.get("jump")
     if jumps is not None:
         named = sum(1 for j in jumps if j.key in elf.by_addr)
@@ -112,11 +137,15 @@ def summary(elf, t):
                      % (len(jumps), named, same))
     exs = t.get("ex")
     if exs is not None:
-        types = collections.Counter(x.type_name() for x in exs)
-        lines.append("__ex_table: %d faulting instructions with a fixup; types %s"
-                     % (len(exs), ", ".join("%s %d" % kv for kv in types.most_common(6))))
+        types = collections.Counter(x.type_name(elf.arch) for x in exs)
+        same = sum(1 for x in exs if elf.func(x.insn) and elf.func(x.insn) == elf.func(x.fixup))
+        lines.append("__ex_table (%s): %d faulting instructions with a fixup, %d fixups in the same function; types %s"
+                     % (t["ex_layout"], len(exs), same, ", ".join("%s %d" % kv for kv in types.most_common(6))))
     if t["missing"]:
-        lines.append("no __start_/__stop_ symbols for: %s" % ", ".join(t["missing"]))
+        lines.append("not found (no __start_/__stop_ symbols or section): %s" % ", ".join(t["missing"]))
+    by_section = [k for k, v in t["found_by"].items() if v == "section"]
+    if by_section:
+        lines.append("found by section name (no symbols): %s" % ", ".join(by_section))
     return lines
 
 
@@ -149,7 +178,7 @@ def main(argv=None):
                             elf.by_addr.get(j.key, "%#x" % j.key), " (likely)" if j.branch else ""))
         else:
             for x in t.get("ex", []):
-                rows.append("%#x -> %#x  %-40s %s" % (x.insn, x.fixup, elf.func(x.insn) or "?", x.type_name()))
+                rows.append("%#x -> %#x  %-40s %s" % (x.insn, x.fixup, elf.func(x.insn) or "?", x.type_name(elf.arch)))
         for r in rows[:a.limit]:
             print(r)
         if len(rows) > a.limit:
@@ -159,5 +188,6 @@ def main(argv=None):
             json.dump({"bug_layout": t.get("bug_layout"),
                        "bug": [[b.addr, b.flags, b.file, b.line] for b in t.get("bug", [])],
                        "jump": [[j.code, j.target, j.key, int(j.branch), int(j.init)] for j in t.get("jump", [])],
+                       "ex_layout": t.get("ex_layout"),
                        "ex": [[x.insn, x.fixup, x.data] for x in t.get("ex", [])]}, fh)
     return 0
