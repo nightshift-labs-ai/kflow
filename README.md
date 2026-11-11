@@ -10,7 +10,7 @@ kflow reads these tables from the database and, in IDA, comments every site and 
 
 ## Status: read this first
 
-**kflow has not yet been run inside real IDA.** It was built without access to an IDA installation. The table decoders are checked against the instruction bytes of four real kernels (below); the IDA layer is small, uses 51 IDAPython names and object members, all present in the official stubs (`tests/check_ida_api.py`), and has only been exercised with fake `ida_*` modules. Bug reports are very welcome.
+**kflow has not yet been run inside real IDA.** It was built without access to an IDA installation. The table decoders are checked on four real kernels (below): trap bytes, branch targets and source-file names; the IDA layer is small, uses 51 IDAPython names and object members, all present in the official stubs (`tests/check_ida_api.py`), and has only been exercised with fake `ida_*` modules. Bug reports are very welcome.
 
 kflow was built by an AI agent (Claude, operated by Nightshift Labs).
 
@@ -75,12 +75,12 @@ The comments kflow writes in IDA, for three of the sites above (text produced by
 
 `tests/test_demo.py <kernel ELF>` checks the decoded tables against the instruction bytes; `tests/test_ida_stub.py <kernel ELF>` runs the IDA layer on fake `ida_*` modules backed by the same file (annotate, then remove, with IDA's own references and a user comment in place); `tests/test_headless_stub.py <kernel ELF>` does the same through the headless runner, and `tests/test_entry_stub.py <kernel ELF>` loads the plugin itself and runs its three menu actions; `python3 tests/test_core.py` covers the layouts on synthetic tables.
 
-| Kernel | BUG/WARN sites | static-key sites | exception-table sites | byte checks |
+| Kernel (banner) | BUG/WARN sites | static-key sites | exception-table entries | what the tests check |
 |---|---|---|---|---|
-| Debian 13 6.12.115 x86_64 (MemLens demo, memory image) | 9,850 (7,831 WARN) | 9,237 | 671 (12-byte entries) | every enabled site (663 `jmp`) lands on the decoded target; the rest are 2/5-byte NOPs |
-| Debian `vmlinux` x86_64, stripped (`extract-vmlinux`) | 9,993 (7,615 WARN, all `ud2`) | needs symbols | 630 | tables found by section name |
-| Android 13 GKI 5.10 arm64 (vmlinux-to-elf) | 24,386 (17,374 WARN, all `brk #0x800`) | 75,316 | 1,488 (8-byte entries) | all 55,053 enabled sites are `b` to the decoded target; the rest are `nop` |
-| Android GKI 6.1 arm64 (vmlinux-to-elf) | 12,223 (8,792 WARN, all `brk #0x800`) | 10,629 | 1,043 (12-byte entries: 1,022 UACCESS_ERR_ZERO, 12 LOAD_UNALIGNED_ZEROPAD, 9 KACCESS_ERR_ZERO) | all 1,128 enabled sites are `b` to the decoded target; the rest are `nop` |
+| 6.12.115+deb13.1-amd64, x86_64 (MemLens demo, memory image) | 9,850 (7,831 WARN) | 9,237 | 671 (12-byte, type field) | the 663 sites that are a `jmp` now branch to the decoded target; the other sites outside init code are 2/5-byte NOPs (225 sites in freed init memory are skipped); WARN/BUG sites in functions are `ud2`; >=95% of file names are kernel paths |
+| 6.12.115+deb13.1-cloud-amd64, x86_64, stripped `vmlinux` | 9,993 (7,615 WARN) | needs symbols | 630 | tables found by section name; file names are kernel paths (the trap-byte check needs function symbols, so the CLI's "7,615 WARN sites are ud2" is not a test) |
+| 5.10.198-android12-9, arm64 (vmlinux-to-elf) | 24,386 (17,374 WARN, all `brk #0x800`) | 75,316 | 1,488 (8-byte, no type) | the 54,896 sites outside init code compiled as a `b` branch to the decoded target (most are `static_branch_likely` sites, not keys switched on); the rest are `nop`; file pointers here are entry-relative (before Linux 5.19) |
+| 6.1.57-android14-11, arm64 (vmlinux-to-elf) | 12,223 (8,792 WARN, all `brk #0x800`) | 10,629 | 1,043 (12-byte: 1,022 UACCESS_ERR_ZERO, 12 LOAD_UNALIGNED_ZEROPAD, 9 KACCESS_ERR_ZERO) | the 1,099 `b` sites outside init code branch to the decoded target; the rest are `nop` |
 
 The entry layout is chosen from the data: for `__bug_table` the layout whose entries name source files, for `__ex_table` the layout that gives the address-sorted list the kernel build produces (arm64 before 5.16 has 8-byte entries).
 
