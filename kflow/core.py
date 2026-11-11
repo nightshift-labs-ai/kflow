@@ -1,0 +1,178 @@
+"""Decoders for the Linux kernel's own site tables. No IDA imports here.
+
+Every decoder takes `read(ea, size) -> bytes | None` (kernel virtual addresses)
+and the table's [start, stop) range, as given by the __start_/__stop_ symbols.
+Supported: 64-bit little-endian kernels with relative table entries
+(x86_64 since about 4.x for __ex_table, CONFIG_GENERIC_BUG_RELATIVE_POINTERS
+for __bug_table, CONFIG_HAVE_ARCH_JUMP_LABEL_RELATIVE for __jump_table).
+"""
+import struct
+from dataclasses import dataclass
+
+BUGFLAG_WARNING = 1 << 0
+BUGFLAG_ONCE = 1 << 1
+BUGFLAG_DONE = 1 << 2
+BUGFLAG_NO_CUT_HERE = 1 << 3
+
+# include/asm-generic/bug.h, struct bug_entry with relative pointers.
+# name: (entry size, field offsets) ; None = field absent.
+BUG_LAYOUTS = {
+    "addr,file,line,flags": (12, {"addr": 0, "file": 4, "line": 8, "flags": 10, "format": None}),
+    "addr,format,file,line,flags": (16, {"addr": 0, "format": 4, "file": 8, "line": 12, "flags": 14}),
+    "addr,flags": (8, {"addr": 0, "file": None, "line": None, "flags": 4, "format": None}),
+}
+
+EX_TYPE_NAMES = {
+    0: "NONE", 1: "DEFAULT", 2: "FAULT", 3: "UACCESS", 5: "CLEAR_FS",
+    6: "FPU_RESTORE", 7: "BPF", 8: "WRMSR", 9: "RDMSR", 10: "WRMSR_SAFE",
+    11: "RDMSR_SAFE", 12: "WRMSR_IN_MCE", 13: "RDMSR_IN_MCE", 14: "DEFAULT_MCE_SAFE",
+    15: "FAULT_MCE_SAFE", 16: "POP_REG", 17: "IMM_REG", 18: "FAULT_SGX",
+    19: "UCOPY_LEN", 20: "ZEROPAD", 21: "ERETU",
+}  # low byte of the data word; values from Linux v6.12 arch/x86/include/asm/extable_fixup_types.h
+# (the immediate sits in the upper bits: EFAULT_REG = IMM_REG with imm -EFAULT). Older kernels number differently.
+
+
+@dataclass
+class BugSite:
+    addr: int
+    file: str = None
+    line: int = None
+    flags: int = 0
+    entry: int = 0  # address of the table entry
+
+    @property
+    def warn(self):
+        return bool(self.flags & BUGFLAG_WARNING)
+
+    @property
+    def taint(self):
+        return self.flags >> 8
+
+    def where(self):
+        return "%s:%d" % (self.file, self.line) if self.file else None
+
+
+@dataclass
+class JumpSite:
+    code: int
+    target: int
+    key: int
+    branch: bool  # bit 0 of the key field: jump_entry_is_branch (static_branch_likely)
+    init: bool  # bit 1: site in init text
+    entry: int = 0
+
+
+@dataclass
+class ExSite:
+    insn: int
+    fixup: int
+    data: int
+    entry: int = 0
+
+    @property
+    def type(self):
+        return self.data & 0xFF
+
+    def type_name(self):
+        return EX_TYPE_NAMES.get(self.type, str(self.type))
+
+
+def _cstr(read, ea, limit=256):
+    raw = read(ea, limit)
+    if not raw:
+        return None
+    end = raw.find(b"\0")
+    if end <= 0:
+        return None
+    try:
+        s = raw[:end].decode("ascii")
+    except UnicodeDecodeError:
+        return None
+    return s if s.isprintable() else None
+
+
+def _plausible_file(s):
+    return bool(s) and s.endswith((".c", ".h", ".S", ".rs")) and " " not in s
+
+
+def decode_bug_table(read, start, stop, layout=None, in_text=None):
+    """Return (layout name, [BugSite]). With layout=None the layout whose entries
+    decode best wins: most entries with a source-file string, then most bug
+    addresses inside text (in_text(ea) -> bool, optional)."""
+    size = stop - start
+    if size <= 0:
+        return None, []
+    raw = read(start, size)
+    if raw is None or len(raw) < size:
+        raise ValueError("bug table not readable at 0x%x" % start)
+    names = [layout] if layout else list(BUG_LAYOUTS)
+    best = None
+    for name in names:
+        es, off = BUG_LAYOUTS[name]
+        if size % es:
+            continue
+        sites, good = [], 0
+        for k in range(size // es):
+            base = k * es
+            ea = start + base
+            disp, = struct.unpack_from("<i", raw, base + off["addr"])
+            site = BugSite(addr=ea + off["addr"] + disp, entry=ea)
+            site.flags, = struct.unpack_from("<H", raw, base + off["flags"])
+            if off["file"] is not None:
+                fd, = struct.unpack_from("<i", raw, base + off["file"])
+                f = _cstr(read, ea + off["file"] + fd)
+                if _plausible_file(f):
+                    site.file = f
+                    site.line, = struct.unpack_from("<H", raw, base + off["line"])
+                    good += 1
+            if in_text is not None and in_text(site.addr):
+                good += 1
+            sites.append(site)
+        score = good / max(1, len(sites))
+        if best is None or score > best[0]:
+            best = (score, name, sites)
+    if best is None:
+        raise ValueError("bug table size %d fits no known layout" % size)
+    return best[1], best[2]
+
+
+def decode_jump_table(read, start, stop):
+    size = stop - start
+    if size <= 0:
+        return []
+    if size % 16:
+        raise ValueError("jump table size %d is not a multiple of 16 (absolute layout?)" % size)
+    raw = read(start, size)
+    if raw is None or len(raw) < size:
+        raise ValueError("jump table not readable at 0x%x" % start)
+    out = []
+    for k in range(size // 16):
+        ea = start + 16 * k
+        c, t, kr = struct.unpack_from("<iiq", raw, 16 * k)
+        out.append(JumpSite(code=ea + c, target=ea + 4 + t, key=ea + 8 + (kr & ~3),
+                            branch=bool(kr & 1), init=bool(kr & 2), entry=ea))
+    return out
+
+
+def decode_ex_table(read, start, stop):
+    size = stop - start
+    if size <= 0:
+        return []
+    if size % 12:
+        raise ValueError("exception table size %d is not a multiple of 12" % size)
+    raw = read(start, size)
+    if raw is None or len(raw) < size:
+        raise ValueError("exception table not readable at 0x%x" % start)
+    out = []
+    for k in range(size // 12):
+        ea = start + 12 * k
+        i, f, d = struct.unpack_from("<iii", raw, 12 * k)
+        out.append(ExSite(insn=ea + i, fixup=ea + 4 + f, data=d, entry=ea))
+    return out
+
+
+TABLES = {
+    "bug": ("__start___bug_table", "__stop___bug_table"),
+    "jump": ("__start___jump_table", "__stop___jump_table"),
+    "ex": ("__start___ex_table", "__stop___ex_table"),
+}
