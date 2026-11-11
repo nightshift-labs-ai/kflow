@@ -64,5 +64,17 @@ for x in exs:
     code = e.read(x.insn, 2)
     if x.type_name() == "WRMSR" and code != b"\x0f\x30":
         assert not e.func(x.insn) or code[:1] != b"\x0f", hex(x.insn)
+# x86_64 before 5.16: the third field is a handler function; with symbols, they are the kernel's ex_handler_*
+hs = [x for x in exs if x.handler is not None]
+if e.arch == "x86_64" and "ex_handler_default" in e.symbols:  # handler-pointer kernel: the layout must be detected
+    assert exs and len(hs) == len(exs), (len(hs), len(exs))
+if hs and e.by_addr:
+    names = [e.by_addr.get(x.handler, "") for x in hs]
+    assert sum(n.startswith("ex_handler_") for n in names) >= 0.95 * len(hs), sorted(set(names))[:5]
+    for x, n in zip(hs, names):
+        if "msr" in n and e.func(x.insn):  # ex_handler_{rd,wr}msr_{unsafe,fault}
+            assert e.read(x.insn, 2) == (b"\x0f\x30" if "wrmsr" in n else b"\x0f\x32"), (hex(x.insn), n)
+    print("  handler entries: %d of %d point at an ex_handler_* function (%s)"
+          % (sum(n.startswith("ex_handler_") for n in names), len(hs), ", ".join(sorted(set(names)))))
 print("OK: %d bug sites (%d WARN), %d jump sites (%d enabled checked), %d ex sites"
       % (len(bugs), sum(b.warn for b in bugs), len(jumps), checked, len(exs)))
