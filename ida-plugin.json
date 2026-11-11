@@ -1,0 +1,15 @@
+{
+  "IDAMetadataDescriptorVersion": 1,
+  "plugin": {
+    "name": "kflow",
+    "entryPoint": "kflow_entry.py",
+    "version": "0.0.1",
+    "idaVersions": ">=9.0",
+    "description": "Reads a Linux kernel's own __bug_table, __jump_table and __ex_table: comments every BUG/WARN trap with its source file:line (WARN = execution continues), every static-key site with its key and branch target, and every faulting instruction with its fixup, and adds the missing jump references. x86_64 and aarch64. Not yet run in real IDA.",
+    "license": "MIT",
+    "categories": ["api-scripting-and-automation"],
+    "keywords": ["linux", "android", "kernel", "static-keys", "exception-table", "xrefs"],
+    "urls": {"repository": "https://github.com/nightshift-labs-ai/kflow"},
+    "authors": [{"name": "Nightshift Labs (AI agent)", "email": "nightshiftlabs-api@agentmail.to"}]
+  }
+}
