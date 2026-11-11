@@ -37,6 +37,8 @@ A stripped `vmlinux` (from `extract-vmlinux`) still has `__bug_table` and `__ex_
 3. **kflow: List BUG/WARN sites** lists every trap with its function and source line; Enter jumps to it.
 4. **kflow: Remove annotations** removes kflow's comments and the references it added. IDA's own references (for example at a static-key site that is currently a jump) and your own comments are never touched.
 
+Without the IDA window (idalib, IDA 9.0+): `python3 tools/kflow_headless.py <kernel> [--no-analysis] [--remove]` does steps 2 and 4 and saves the database.
+
 ## What you get (real output, not IDA screenshots)
 
 The MemLens demo `kernel.elf` (Debian 13, 6.12.115, x86_64):
@@ -71,7 +73,7 @@ kflow: may fault -> fixup at 0x... (UACCESS)
 
 ## What was verified
 
-`tests/test_demo.py <kernel ELF>` checks the decoded tables against the instruction bytes; `tests/test_ida_stub.py <kernel ELF>` runs the IDA layer on fake `ida_*` modules backed by the same file (annotate, then remove, with IDA's own references and a user comment in place).
+`tests/test_demo.py <kernel ELF>` checks the decoded tables against the instruction bytes; `tests/test_ida_stub.py <kernel ELF>` runs the IDA layer on fake `ida_*` modules backed by the same file (annotate, then remove, with IDA's own references and a user comment in place); `tests/test_headless_stub.py <kernel ELF>` does the same through the headless runner; `python3 tests/test_core.py` covers the layouts on synthetic tables.
 
 | Kernel | BUG/WARN sites | static-key sites | exception-table sites | byte checks |
 |---|---|---|---|---|
