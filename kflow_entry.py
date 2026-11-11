@@ -105,7 +105,7 @@ class SitesChooser(ida_kernwin.Choose):
 class ListAction(ida_kernwin.action_handler_t):
     @guarded
     def activate(self, ctx):
-        t = STATE["tables"] or scan_or_warn()
+        t = scan_or_warn()  # rescan: cheap, and right after a rebase or a database switch
         if t is None:
             return 0
         rows = [(b.addr, "0x%X" % b.addr, "WARN" if b.warn else "BUG",
@@ -120,7 +120,7 @@ class ListAction(ida_kernwin.action_handler_t):
 class RemoveAction(ida_kernwin.action_handler_t):
     @guarded
     def activate(self, ctx):
-        t = STATE["tables"] or scan_or_warn()
+        t = scan_or_warn()  # rescan: cheap, and right after a rebase or a database switch
         if t is None:
             return 0
         ida_kernwin.show_wait_box("kflow: removing comments and references")

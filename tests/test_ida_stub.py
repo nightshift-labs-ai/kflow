@@ -118,8 +118,13 @@ def run(path):
     note = next((b.addr for b in t["bug"] if il.in_text(b.addr)), None)
     if note is not None:
         w["cmts"][note] = "my note"
+    other = next((b.addr for b in t["bug"] if il.in_text(b.addr) and b.addr != note), None)
+    if other is not None:
+        w["cmts"][other] = "kflow-like note by the user"  # starts with "kflow" but is not ours
     res = il.annotate(t, il.current_arch())
-    assert res["kept_user_comments"] == (1 if note is not None else 0), res
+    if other is not None:
+        assert w["cmts"][other] == "kflow-like note by the user"
+    assert res["kept_user_comments"] == (1 if note is not None else 0) + (1 if other is not None else 0), res
     if note is not None:
         assert w["cmts"][note] == "my note"
     ours = [c for c in w["cmts"].values() if c.startswith("kflow: ")]
@@ -129,7 +134,9 @@ def run(path):
     removed = il.remove_annotations(t)
     assert removed == res["xrefs"], (removed, res)
     assert sum(1 for u in w["xrefs"].values() if not u) == own  # IDA's own references stay
-    assert not any(c.startswith("kflow") for c in w["cmts"].values())
+    assert not any(c.startswith("kflow: ") for c in w["cmts"].values())
+    if other is not None:
+        assert w["cmts"][other] == "kflow-like note by the user"
     assert il.remove_annotations(t) == 0
     print("OK %s: found by %s; %d comments, %d user xrefs added and removed, %d IDA xrefs kept, %d user comment kept"
           % (os.path.basename(path), t["found_by"], res["comments"], res["xrefs"], own, res["kept_user_comments"]))

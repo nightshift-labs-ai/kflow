@@ -121,7 +121,7 @@ def ex_comment(x, arch):
 
 def _set(ea, text, res):
     old = ida_bytes.get_cmt(ea, False)
-    if old and not old.startswith(TAG):
+    if old and not old.startswith(TAG + ": "):
         res["kept_user_comments"] += 1
         return
     ida_bytes.set_cmt(ea, text, False)
@@ -170,7 +170,7 @@ def remove_annotations(t):
     pairs = [(j.code, j.target) for j in t["jump"]] + [(x.insn, x.fixup) for x in t["ex"]]
     for ea in [b.addr for b in t["bug"]] + [p[0] for p in pairs]:
         old = ida_bytes.get_cmt(ea, False)
-        if old and old.startswith(TAG):
+        if old and old.startswith(TAG + ": "):
             ida_bytes.set_cmt(ea, "", False)
     for f, to in pairs:
         if code_refs_from(f).get(to):  # only user references: IDA's own (an enabled jmp) stay
