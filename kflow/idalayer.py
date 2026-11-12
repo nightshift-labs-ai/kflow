@@ -111,10 +111,14 @@ def bug_comment(b):
     return "%s: BUG%s (does not return)" % (TAG, where)
 
 
+def key_name(ea):
+    return core.key_label(ida_name.get_name, ea, read) or "0x%X" % ea
+
+
 def jump_comment(j):
     kind = "static_branch_likely" if j.branch else "static_branch_unlikely"
     return ("%s: static key %s (%s): runtime-patched NOP/branch; branch target 0x%X"
-            % (TAG, name_or_hex(j.key), kind, j.target))
+            % (TAG, key_name(j.key), kind, j.target))
 
 
 def ex_comment(x, arch):

@@ -10,7 +10,7 @@ import struct
 import sys
 
 from . import __version__
-from .core import TABLES, decode_bug_table, decode_ex_table, decode_jump_table
+from .core import TABLES, decode_bug_table, decode_ex_table, decode_jump_table, key_label
 
 
 class InputError(Exception):
@@ -188,6 +188,9 @@ class Elf:
         size = min(size, e - ea)
         return self.data[o + ea - a:o + ea - a + size]
 
+    def key_name(self, ea):
+        return key_label(lambda a: self.by_addr.get(a, ""), ea, self.read)
+
     def in_text(self, ea):
         return any(a <= ea < e for a, e in self.text)
 
@@ -238,10 +241,14 @@ def summary(elf, t):
                      % (tname, ud2, sum(1 for b in bugs if elf.func(b.addr))))
     jumps = t.get("jump")
     if jumps is not None:
-        named = sum(1 for j in jumps if j.key in elf.by_addr)
+        labels = [elf.key_name(j.key) or "" for j in jumps]
+        named = sum(1 for n in labels if n)
+        tps = sum(1 for n in labels if n.startswith("tracepoint "))
+        dds = sum(1 for n in labels if n.startswith("pr_debug "))
+        offs = sum(1 for n in labels if n and not n.startswith(("tracepoint ", "pr_debug ")) and "+0x" in n)
         same = sum(1 for j in jumps if elf.func(j.code) and elf.func(j.code) == elf.func(j.target))
-        lines.append("__jump_table: %d static-key sites, %d keys named by a symbol, %d targets in the same function"
-                     % (len(jumps), named, same))
+        lines.append("__jump_table: %d static-key sites, %d keys named (%d tracepoints, %d pr_debug sites, "
+                     "%d as symbol+offset), %d targets in the same function" % (len(jumps), named, tps, dds, offs, same))
     exs = t.get("ex")
     if exs is not None:
         types = collections.Counter(("handler " + elf.by_addr.get(x.handler, hex(x.handler))) if x.handler is not None
@@ -283,7 +290,7 @@ def main(argv=None):
         elif a.list == "jump":
             for j in t.get("jump", []):
                 rows.append("%#x -> %#x  %-40s key %s%s" % (j.code, j.target, elf.func(j.code) or "?",
-                            elf.by_addr.get(j.key, "%#x" % j.key), " (likely)" if j.branch else ""))
+                            elf.key_name(j.key) or "%#x" % j.key, " (likely)" if j.branch else ""))
         else:
             for x in t.get("ex", []):
                 rows.append("%#x -> %#x  %-40s %s" % (x.insn, x.fixup, elf.func(x.insn) or "?",

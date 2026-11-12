@@ -112,6 +112,25 @@ class Tables(unittest.TestCase):
             decode_ex_table(m.read, BASE, BASE + 13)
 
 
+class Keys(unittest.TestCase):
+    def test_key_labels(self):
+        from kflow.core import key_label
+        m = Mem()
+        names = {BASE + 0x100: "__tracepoint_sched_switch", BASE + 0x200: "__UNIQUE_ID_ddebug12.3",
+                 BASE + 0x300: "my_keys", BASE + 0x400: "plain_key"}
+        m.put(BASE + 0x200, struct.pack("<QQQQI", 0, 0, BASE + 0x1000, BASE + 0x1100, 1329 | (5 << 18)))
+        m.put(BASE + 0x1000, b"init/main.c\0")
+        m.put(BASE + 0x1100, b"  with \"arguments\":\nnext\n\0")
+        at = lambda ea: names.get(ea, "")  # noqa: E731
+        self.assertEqual(key_label(at, BASE + 0x400, m.read), "plain_key")
+        self.assertEqual(key_label(at, BASE + 0x108, m.read), "tracepoint sched_switch")
+        self.assertEqual(key_label(at, BASE + 0x228, m.read), "pr_debug init/main.c:1329 \"with 'arguments':\\nnext\"")
+        self.assertEqual(key_label(at, BASE + 0x228, None), "__UNIQUE_ID_ddebug12.3+0x28")  # no reader: plain offset
+        self.assertEqual(key_label(at, BASE + 0x110, m.read), "__tracepoint_sched_switch+0x10")
+        self.assertEqual(key_label(at, BASE + 0x330, m.read), "my_keys+0x30")
+        self.assertIsNone(key_label(at, BASE + 0x500, m.read))  # nothing named within 64 bytes
+
+
 def module_elf(path):
     """A minimal x86_64 relocatable ELF (.ko) with one BUG entry and one static-key entry, both only meaningful
     after relocation: .text = ud2 + 2-byte NOP, .rodata.str = "\\0a/b.c\\0", the key is an undefined symbol."""

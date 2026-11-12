@@ -148,6 +148,49 @@ def decode_bug_table(read, start, stop, layout=None, in_text=None):
     return best[1], best[2]
 
 
+KEY_SEARCH = 64  # how far back from an unnamed key address to look for the symbol that contains it
+TRACEPOINT_KEY_OFFSET = 8  # struct tracepoint { const char *name; struct static_key(_false) key; ... }
+
+
+DDEBUG_KEY_OFFSET = 0x28  # struct _ddebug { 4 pointers; lineno:18 ...; key } (Linux 4.x to 6.x, 64-bit)
+
+
+def ddebug_label(read, ea):
+    """'pr_debug file:line "format"' for the struct _ddebug at ea, or None if it does not read as one."""
+    raw = read(ea, 0x24) if read else None
+    if not raw or len(raw) < 0x24:
+        return None
+    _mod, _func, filename, fmt = struct.unpack_from("<QQQQ", raw)
+    line = struct.unpack_from("<I", raw, 0x20)[0] & 0x3FFFF
+    f, raw = _cstr(read, filename), read(fmt, 512) or b""
+    if not f or not line:
+        return None
+    m = raw.split(b"\0", 1)[0].decode("utf-8", "replace").strip()
+    m = "".join(c if c.isprintable() else "\\n" if c == "\n" else " " for c in m).replace('"', "'")
+    return 'pr_debug %s:%d "%s"' % (f, line, m if len(m) <= 48 else m[:45] + "...")
+
+
+def key_label(name_at, ea, read=None):
+    """Readable name for a static key. name_at(ea) -> symbol name exactly at ea, or "".
+    A tracepoint's key is the member at offset 8 of struct tracepoint __tracepoint_<event>: 'tracepoint <event>';
+    a dynamic-debug key sits at offset 0x28 of a struct _ddebug (__UNIQUE_ID_ddebug*): 'pr_debug file:line "fmt"'.
+    Otherwise the symbol at or up to 64 bytes before the key ('sym+0x10'), else None."""
+    n = name_at(ea)
+    if n:
+        return n
+    for off in range(1, KEY_SEARCH + 1):
+        n = name_at(ea - off)
+        if n:
+            if n.startswith("__tracepoint_") and off == TRACEPOINT_KEY_OFFSET:
+                return "tracepoint " + n[len("__tracepoint_"):]
+            if n.startswith("__UNIQUE_ID_ddebug") and off == DDEBUG_KEY_OFFSET:
+                d = ddebug_label(read, ea - off)
+                if d:
+                    return d
+            return "%s+%#x" % (n, off)
+    return None
+
+
 def decode_jump_table(read, start, stop):
     size = stop - start
     if size <= 0:

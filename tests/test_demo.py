@@ -47,7 +47,10 @@ for j in jumps:
         checked += 1
     else:
         assert b in (bytes.fromhex("0f1f440000"), bytes(5)) or b[:2] == b"\x66\x90", (hex(j.code), b.hex())
-assert checked > 0 or not jumps
+# a module's sites are often all NOPs on disk (tracepoints are static_branch_unlikely): then every target must lie in
+# the same function as its site
+assert checked > 0 or not jumps or (e.relocatable and all(e.func(j.code) and e.func(j.code) == e.func(j.target)
+                                                          for j in jumps)), checked
 # file names are real kernel paths (a wrong pointer base gives cut names such as "el/workqueue.c")
 TOP = ("arch/", "kernel/", "mm/", "fs/", "net/", "drivers/", "include/", "lib/", "block/", "crypto/", "security/",
        "sound/", "virt/", "init/", "ipc/", "io_uring/", "certs/", "rust/", "usr/", "samples/", "./", "/")
