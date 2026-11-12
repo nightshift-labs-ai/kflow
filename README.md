@@ -25,7 +25,7 @@ ffffffff8e200029  wrmsr          ; kflow: may fault -> fixup at 0xFFFFFFFF8E2000
 - [**Kernel modules**](docs/modules.md) (`.ko`, `.ko.xz`, `.ko.gz`): the command line applies the module's relocations; in IDA, a key inside an imported symbol (`nf_hooks_needed+0x270` in `bridge.ko`) is named from kflow's own decode of the `.ko` when the file is still where IDA loaded it from and both decodes line up (IDA's extern-segment layout is not verified; tested only with fake `ida_*` modules).
 - [**Clean removal**](#step-by-step): **kflow: Remove annotations** takes out only the comments and references kflow added (also after a rebase); IDA's and yours stay.
 - [**WARN fall-through**](docs/warnflow.md) (experimental, off by default, x86_64 only, not yet run in real IDA): **kflow: Let WARN sites fall through (experimental)** adds ordinary flow after exactly the WARN `ud2` traps the kernel's `__bug_table` lists, so that IDA can reach the code after them; **kflow: Remove WARN fall-through** undoes it.
-- [**Headless runner**](#headless-idalib): `python3 tools/kflow_headless.py <kernel>` annotates (or with `--remove` removes) and saves the database without the IDA window (idalib, IDA 9.0+).
+- [**Headless runner**](#headless-idalib): `python3 tools/kflow_headless.py <kernel>` annotates (or with `--remove` removes) and saves the database without the IDA window (idalib, IDA 9.0+); `--json` exports every site with IDA's function names.
 - [**Command-line decoder, no IDA needed**](#what-you-get-real-output-not-ida-screenshots): `python3 -m kflow <kernel ELF>` needs only Python 3.8+ and no packages; `--list warn`, `bug`, `jump` or `ex` lists the sites.
 - [**One-command tests**](#what-was-verified): `sh tests/run_all.sh` runs every test in about two seconds on a pinned Debian arm64 `ext4.ko` (sha256 checked) or on your own files.
 
@@ -88,7 +88,17 @@ A stripped `vmlinux` (from `extract-vmlinux`) still has `__bug_table` and `__ex_
 
 ### Headless (idalib)
 
-Without the IDA window (idalib, IDA 9.0+): `python3 tools/kflow_headless.py <kernel> [--no-analysis] [--remove]` does steps 2 and 5 and saves the database.
+Without the IDA window (idalib, IDA 9.0+): `python3 tools/kflow_headless.py <kernel> [--no-analysis] [--remove] [--json sites.json]` does steps 2 and 5 and saves the database. Not yet run with a real idalib (tested on fake `idapro` / `ida_*` modules).
+
+`--json sites.json` also writes every decoded site with IDA's function names, for scripts (for example to match `file:line` across kernel versions when patch diffing). Addresses are hex strings. Three records from the MemLens demo kernel (fake-IDA test output; function names there come from the ELF symbols):
+
+```
+{"addr": "0xFFFFFFFF8E629BC4", "kind": "WARN", "function": "mfill_atomic_copy", "file": "mm/userfaultfd.c", "line": 755}
+{"addr": "0xFFFFFFFF8E391DE7", "key": "randomize_kstack_offset", "kind": "likely", "now": "no jump", "target": "0xFFFFFFFF8E391DFC", "function": "arch_exit_to_user_mode_prepare.isra.0"}
+{"addr": "0xFFFFFFFF8E200029", "fixup": "0xFFFFFFFF8E20002B", "type": "WRMSR", "handler": null, "function": "sev_es_terminate"}
+```
+
+The file has the lists `bug`, `jump` and `ex` of such records, plus `input`, `bug_layout` and `missing` (tables not found).
 
 ### Try a real module (one minute, 377 KB download)
 

@@ -4,6 +4,7 @@ Taken from the GitHub release notes. Newest first.
 
 ## Unreleased
 
+- `tools/kflow_headless.py --json PATH`: writes every decoded BUG/WARN, static-key and exception-table site with IDA's function names (addresses as hex strings; static-key records say `likely`/`unlikely` and whether the site is a jump now), read before Annotate or Remove change anything. Tested on fake `idapro` / `ida_*` modules only.
 - README: a Features section up front (each feature links to where it is described); the WARN fall-through details moved to `docs/warnflow.md`, the kernel-module details to `docs/modules.md` and the full Limits text to `docs/limits.md`; Limits shortened to one line per limit, and long lines split into bullets (no facts changed).
 - Annotate (menu and `tools/kflow_headless.py`) reports its counts in words, including the static-key site -> key references: `comments: 18999, jump references added: 9006, static-key site -> key references: 9012, user comments kept: 0` on the MemLens demo kernel (fake `ida_*` modules); the headless runner printed a Python dict before.
 - `tests/run_all.sh`: every test in one command, on the pinned Debian arm64 `ext4.ko` package (377 KB download, sha256 checked) or on files you give it.

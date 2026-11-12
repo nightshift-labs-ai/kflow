@@ -23,6 +23,12 @@ idapro.open_database = lambda path, analyse: calls.append(("open", analyse)) or 
 idapro.close_database = lambda save: calls.append(("close", save))
 sys.modules["idapro"] = idapro
 import kflow_headless as H  # noqa: E402
+import json  # noqa: E402
+import tempfile  # noqa: E402
+
+if "ida_funcs" not in sys.modules or not hasattr(sys.modules["ida_funcs"], "get_func_name"):
+    sys.modules["ida_funcs"] = types.ModuleType("ida_funcs")
+    sys.modules["ida_funcs"].get_func_name = lambda ea: elf.func(ea) or ""
 
 import contextlib, io  # noqa: E402
 out = io.StringIO()
@@ -35,4 +41,21 @@ assert H.main([sys.argv[1], "--remove", "--no-analysis"]) == 0
 assert calls == [("open", True), ("close", True), ("open", False), ("close", True)], calls
 assert not any(c.startswith("kflow") for c in w["cmts"].values())
 assert not any(w["xrefs"].values())  # no user references left
+# --json: every decoded site, with IDA's function names, written before anything changes
+with tempfile.TemporaryDirectory() as d:
+    out = os.path.join(d, "sites.json")
+    with contextlib.redirect_stdout(io.StringIO()):
+        assert H.main([sys.argv[1], "--json", out, "--remove", "--no-analysis"]) == 0
+    js = json.load(open(out))
+ref = T.load(elf)
+assert [len(js[k]) for k in ("bug", "jump", "ex")] == [len(ref.get(k, [])) for k in ("bug", "jump", "ex")], js["missing"]
+for k, key in (("bug", "addr"), ("jump", "addr"), ("ex", "addr")):
+    assert all(r[key].startswith("0x") and int(r[key], 16) >= 0 for r in js[k])
+b0 = next((b for b in ref.get("bug", []) if b.file), None)
+if b0 is not None:
+    r = next(r for r in js["bug"] if int(r["addr"], 16) == b0.addr)
+    assert r["file"] == b0.file and r["line"] == b0.line and r["kind"] == ("WARN" if b0.warn else "BUG")
+    assert r["function"] == (elf.func(b0.addr) or None), r
+assert all(r["kind"] in ("likely", "unlikely") and r["now"] in ("jump", "no jump") and r["key"] for r in js["jump"])
+print("OK headless --json: %d BUG/WARN, %d static-key, %d exception-table records" % (len(js["bug"]), len(js["jump"]), len(js["ex"])))
 print("OK headless: annotate + remove, database saved both times")
