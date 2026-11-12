@@ -18,7 +18,8 @@ if len(sys.argv) < 2:
 import test_ida_stub as T  # noqa: E402
 from kflow.cli import Elf  # noqa: E402
 
-elf = Elf(sys.argv[1])
+cli_elf = Elf(sys.argv[1])
+elf = T.PackedElf(sys.argv[1]) if cli_elf.relocatable else cli_elf  # a module as IDA lays it out: imports packed
 w = T.world_from(elf)
 T.install(w)
 log = []
@@ -107,6 +108,11 @@ if jumps:
     assert rows[0][0] == j.code and rows[0][3] == ("likely" if j.branch else "unlikely") and rows[0][4] in ("jump", "no jump")
     nj = sum(r[4] == "jump" for r in rows)
     assert 0 < nj < len(rows) or len(rows) < 50 or elf.relocatable, nj  # kernels have both states; a module on disk is all NOPs
+    if elf.relocatable:  # the list names each module key as the command line does, although IDA packs the imports
+        want = [cli_elf.key_name(c.key) or "0x%X" % c.key for c in T.load(cli_elf).get("jump", [])]
+        bad = [(r[1], r[2], x) for r, x in zip(rows, want) if r[2] != x]
+        assert len(want) == len(rows) and not bad, bad[:5]
+        print("  static-key list on the packed module: %d rows, every key named as on the command line" % len(rows))
 else:
     assert keys == 0
 assert m.RemoveAction().activate(None) == 1
