@@ -14,6 +14,7 @@ Taken from the GitHub release notes. Newest first.
 - README opens with who it is for and a before/after of three real sites (objdump instruction vs kflow's comment). Found by a judge-style review.
 - New action **kflow: List static-key sites**: every static-key site with its key, likely/unlikely, whether its bytes are a jump to the target now, the target and the function (the chooser's filter finds all sites of one key). Suggested by a judge-style review. Fake-IDA test on the demo, GKI 5.10, nf_tables.ko and a stripped vmlinux (no jump table: one warning).
 - Keys inside an array of keys are named after the array: when nothing is named within 64 bytes before a key, the nearest name up to 4 KB before it is used (`cpu_hwcap_keys+0x50`: 24,470 sites on Android GKI 5.10 that showed only an address; also `nf_hooks_needed`, `sched_feat_keys`, `cgroup_bpf_enabled_key`). Every key on the seven test kernels now has a name (demo kernel: 9,237 of 9,237, was 8,898). In IDA the name comes from IDA's name list (`get_nlist_idx` and its neighbour); the fake-IDA test checks that IDA and the command line give every key the same name. Found by a judge-style review.
+- Annotate also adds a user data reference from each static-key site to its key, so the key's cross references (X) list every site it patches; Remove deletes only the ones kflow added (recorded in the database, also after a rebase), and a reference you made yourself stays. Suggested by a judge-style review; fake-IDA tests only.
 
 ## v0.0.1 (2026-11-12)
 

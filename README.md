@@ -45,7 +45,7 @@ You need a 64-bit kernel ELF that still has the kernel's symbol names, for examp
 A stripped `vmlinux` (from `extract-vmlinux`) still has `__bug_table` and `__ex_table` as sections, and kflow uses them; the static-key table has no section of its own and needs the `__start___jump_table` symbol.
 
 1. Outside IDA, see what is there: `python3 -m kflow kernel.elf` (output below).
-2. In IDA, open the kernel and run **Edit > Plugins > kflow: Annotate kernel sites**.
+2. In IDA, open the kernel and run **Edit > Plugins > kflow: Annotate kernel sites** (comments, the missing jump references, and a data reference from each static-key site to its key, so X on a key lists its sites).
 3. **kflow: List BUG/WARN sites** lists every trap with its function and source line; Enter jumps to it.
 4. **kflow: List static-key sites** lists every static-key site with its key, `likely`/`unlikely`, whether the bytes there are a jump to the target now (`jump` / `no jump`), the target and the function; the chooser's filter finds every site of one key.
 5. **kflow: Remove annotations** removes kflow's comments and the references it added (Annotate records each one in the database, so Remove works after a rebase too). References that were there before, IDA's own (for example at a static-key site that is currently a jump) or yours, and your own comments are never touched.
