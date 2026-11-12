@@ -295,7 +295,9 @@ class KeySitesAction(ida_kernwin.action_handler_t):
             return 0
         if not t["jump"]:
             ida_kernwin.warning("kflow: no static-key sites in this database (%s)." % (
-                "no __jump_table found" if "jump" in t["missing"] else "the table is empty"))
+                "no __jump_table found" if "jump" in t["missing"] else
+                "the __jump_table could not be decoded: %s" % t["errors"]["jump"] if "jump" in t.get("errors", {}) else
+                "the table is empty"))
             return 0
         SitesChooser(key_site_rows(t), "kflow: static-key sites", KEY_COLUMNS).Show()
         return 1
