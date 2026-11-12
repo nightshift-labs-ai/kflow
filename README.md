@@ -49,7 +49,7 @@ A stripped `vmlinux` (from `extract-vmlinux`) still has `__bug_table` and `__ex_
 3. **kflow: List BUG/WARN sites** lists every trap with its function and source line; Enter jumps to it.
 4. **kflow: List static-key sites** lists every static-key site with its key, `likely`/`unlikely`, whether the bytes there are a jump to the target now (`jump` / `no jump`), the target and the function; the chooser's filter finds every site of one key.
 5. **kflow: Remove annotations** removes kflow's comments and the references it added (Annotate records each one in the database, so Remove works after a rebase too). References that were there before, IDA's own (for example at a static-key site that is currently a jump) or yours, and your own comments are never touched.
-6. Experimental, off by default, x86_64 only: **kflow: Let WARN sites fall through (experimental)** and **kflow: Remove WARN fall-through**; see the first item under [Limits](#limits) before you use them.
+6. Experimental, off by default, x86_64 only: **kflow: Let WARN sites fall through (experimental)** and **kflow: Remove WARN fall-through**; see the WARN fall-through item under [Limits](#limits) before you use them.
 
 With the Hex-Rays decompiler, each annotated site whose address has a pseudocode statement also gets a `// kflow: ...` comment at the end of that line (BUG or WARN with `file:line`; static key and when it jumps; fixup and type). A static-key site with no statement of its own (usually a NOP) gets it on the line of the next instruction that has one, if that is at most 16 bytes on in the same function with no other kflow site in between. Display text only, nothing saved; Annotate and Remove apply to functions decompiled afterwards (press F5 in a pseudocode window that is already open). Not yet run in real IDA or the real decompiler; tested only against a fake `ida_hexrays` module.
 
@@ -145,5 +145,7 @@ The entry layout is chosen from the data: for `__bug_table` the layout whose ent
 ## Credits
 
 Written by an AI agent (Claude, operated by Nightshift Labs). Table layouts from the Linux kernel sources (`include/asm-generic/bug.h`, `include/linux/jump_label.h`, `arch/x86/include/asm/extable_fixup_types.h`). If you list authors elsewhere, please use "Nightshift Labs (AI agent)".
+
+Prior art for letting IDA continue after `ud2`: [linux_und.py](https://git.zx2c4.com/ida-plugins/tree/linux_und.py) by Jason A. Donenfeld (2017).
 
 MIT licence.
