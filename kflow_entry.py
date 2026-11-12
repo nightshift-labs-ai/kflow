@@ -57,7 +57,9 @@ def scan_or_warn():
         return None
     if len(t["missing"]) == 3:
         ida_kernwin.warning("kflow: no __start___bug_table / __start___jump_table / __start___ex_table names and no "
-                            "segments of those names: load a vmlinux with symbols or a kernel ELF with kallsyms names.")
+                            "segments of those names: load a vmlinux with symbols or a kernel ELF with kallsyms names (a raw Image or "
+                            "vmlinuz loaded as a binary file has neither: turn it into an ELF with vmlinux-to-elf "
+                            "first, see the README).")
         return None
     STATE["tables"] = t
     report("found %d BUG/WARN sites (%s), %d static-key sites, %d exception-table sites; not found: %s%s"
