@@ -262,10 +262,11 @@ def parse(text):
             segs.append([])
             started.append(True)
             ended.append(False)
-            in_trace = others = nmi = False
+            in_trace = False
         elif _START.search(s) or _PANIC.search(s):
             started[-1] = True
-        if header or _START.search(s):  # a report's first line (not 'Kernel panic -': panic()'s dump follows)
+        # a report's first line, so also every new segment (not 'Kernel panic -': panic()'s dump follows)
+        if header or _START.search(s):
             others = nmi = False
         if found is None:
             continue

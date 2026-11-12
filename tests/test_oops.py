@@ -66,6 +66,10 @@ FUNCS["pad_dup"] = [oops.Func(0xFFFFFFFF81001000, 0x40, 0x50, "pad_dup"), oops.F
 FUNCS["task_tick_stop"] = [oops.Func(0xFFFFFFFF81003000, 0x8, 0x8, "task_tick_stop")]
 FUNCS["switched_to_stop"] = [oops.Func(0xFFFFFFFF81003008, 0x8, 0x8, "switched_to_stop")]
 SITES += [BugSite(0xFFFFFFFF81003008, "kernel/sched/stop_task.c", 101, 0)]
+# the same after padding: pb_prev's code is 0x20 bytes, kallsyms prints 0x30 (to pb_next), and pb_next has a BUG at +0x0
+FUNCS["pb_prev"] = [oops.Func(0xFFFFFFFF81003100, 0x20, 0x30, "pb_prev")]
+FUNCS["pb_next"] = [oops.Func(0xFFFFFFFF81003130, 0x18, 0x20, "pb_next")]
+SITES += [BugSite(0xFFFFFFFF81003130, "kernel/pb.c", 7, 0)]
 
 
 def symbols(name, suffixed=False):
@@ -799,6 +803,34 @@ class Parse(unittest.TestCase):
             self.assertIn(("folio_unlock", 0x70) if "folio_unlock+0x70" in text else ("mfill_atomic_copy", 0x674) if
                           "mfill" in text else ("refcount_warn_saturate", 0xBE),
                           [(x.function, x.offset) for x in rep.locations if x.source == "regs"], text)
+
+    def test_trap_rule_resets(self):
+        """review s163 NIT 1: where 'after the call trace began' ends. A cut-here / end marker, a report's first line
+        and a new report start fresh, so the trap RIP after them counts; a register dump that is not a trap ('regs')
+        still lets the next report's first line cut."""
+        # the bottom of an x86 oops (from 'Call Trace:'): the executive summary after the end marker is the trap
+        rep, m = find(X86_BUG_REST)
+        self.assertEqual((rep.reports, rep.primary.source, m.status, m.address), (1, "rip", "exact", 0xFFFFFFFF81000110))
+        # a hung task's call trace, then an oops (no cut-here): its 'BUG:' line starts it, its RIP is its trap
+        hung_then_oops = ("INFO: task kworker/u8:3:5123 blocked for more than 143 seconds.\nCall Trace:\n <TASK>\n"
+                          " __schedule+0x3f0/0xb40\n schedule+0x27/0xf0\n </TASK>\n"
+                          "BUG: kernel NULL pointer dereference, address: 0000000000000008\n"
+                          "Oops: 0000 [#1] PREEMPT SMP NOPTI\nRIP: 0010:folio_unlock+0x10/0xd0\n")
+        rep, m = find(hung_then_oops)
+        self.assertEqual((rep.primary.source, rep.primary.function, m.status, m.address),
+                         ("rip", "folio_unlock", "near", 0xFFFFFFFF810000B0))
+        # a KASAN report from an interrupt (its RIP is an interrupted context's), then an oops: two reports, the oops is
+        # used with its own call trace only
+        rep, m = find(KASAN_IRQ + "BUG: unable to handle page fault for address: 0000000000000008\n"
+                                  "Oops: 0000 [#1] PREEMPT SMP NOPTI\nRIP: 0010:folio_unlock+0x70/0xd0\n")
+        self.assertEqual((rep.reports, rep.primary.function, rep.frames, m.status, m.address),
+                         (2, "folio_unlock", [], "exact", 0xFFFFFFFF81000110))
+        # 'Kernel BUG at %pB' for a BUG at a function's first byte after padding: the previous symbol + its printed
+        # size (kallsyms measures to the next symbol), not its code size (review s161 MINOR 1, ae14dc0)
+        for text in ("Kernel BUG at pb_prev+0x30/0x30 [verbose debug info unavailable]",
+                     "Kernel BUG at pb_prev+0x30/0x30 [verbose debug info unavailable]\nRIP: 0010:pb_next+0x0/0x20"):
+            rep, m = find(text)
+            self.assertEqual((m.status, m.address), ("exact", 0xFFFFFFFF81003130), text)
 
     def test_details(self):
         """Parser details the review's mutants found untested (review s157 m7)."""
