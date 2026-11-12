@@ -44,7 +44,7 @@ def scan_or_warn():
     if idalayer.current_arch() is None:
         ida_kernwin.warning("kflow: this database is not a 64-bit x86_64 or aarch64 kernel.")
         return None
-    ida_kernwin.show_wait_box("kflow: reading the kernel's site tables")
+    ida_kernwin.show_wait_box("HIDECANCEL\nkflow: reading the kernel's site tables")
     try:
         t = idalayer.scan()
     except ValueError as e:
@@ -72,7 +72,7 @@ class AnnotateAction(ida_kernwin.action_handler_t):
         t = scan_or_warn()
         if t is None:
             return 0
-        ida_kernwin.show_wait_box("kflow: writing comments and references")
+        ida_kernwin.show_wait_box("HIDECANCEL\nkflow: writing comments and references")
         try:
             res = idalayer.annotate(t, idalayer.current_arch())
         finally:
@@ -124,7 +124,7 @@ class RemoveAction(ida_kernwin.action_handler_t):
         t = scan_or_warn()  # rescan: cheap, and right after a rebase or a database switch
         if t is None:
             return 0
-        ida_kernwin.show_wait_box("kflow: removing comments and references")
+        ida_kernwin.show_wait_box("HIDECANCEL\nkflow: removing comments and references")
         try:
             removed = idalayer.remove_annotations(t)
         finally:

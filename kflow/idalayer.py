@@ -152,10 +152,30 @@ def _created():
     return ida_netnode.netnode(NODE, 0, True)
 
 
-def _add(src, dst, node):
-    """Add a user jump reference unless one (IDA's own, e.g. an enabled jmp, or the user's) already exists.
-    Every reference added is recorded in the database, so Remove deletes only these."""
-    if not in_text(dst) or dst in code_refs_from(src):
+def branches_to(src, dst, arch):
+    """True if the instruction at src is a direct jmp/b to dst: IDA makes that reference itself (perhaps only once
+    auto-analysis reaches it), so kflow must not add or record one there."""
+    b = read(src, 5)
+    if not b:
+        return False
+    if arch == "x86_64":
+        if b[0] == 0xE9 and len(b) >= 5:
+            return src + 5 + int.from_bytes(b[1:5], "little", signed=True) == dst
+        if b[0] == 0xEB and len(b) >= 2:
+            return src + 2 + int.from_bytes(b[1:2], "little", signed=True) == dst
+    elif arch == "aarch64" and len(b) >= 4:
+        w = int.from_bytes(b[:4], "little")
+        if w >> 26 == 0b000101:
+            imm = w & 0x3FFFFFF
+            imm -= (1 << 26) if imm & (1 << 25) else 0
+            return src + 4 * imm == dst
+    return False
+
+
+def _add(src, dst, node, arch=None):
+    """Add a user jump reference unless one (IDA's own, e.g. an enabled jmp, or the user's) already exists or the
+    instruction itself branches there. Every reference added is recorded in the database, so Remove deletes only these."""
+    if not in_text(dst) or dst in code_refs_from(src) or branches_to(src, dst, arch):
         return 0
     if not ida_xref.add_cref(src, dst, ida_xref.fl_JN | ida_xref.XREF_USER):
         return 0
@@ -168,17 +188,18 @@ def annotate(t, arch=None):
     """Comment every site; add jump references site -> static-key target and faulting insn -> fixup."""
     res = {"comments": 0, "xrefs": 0, "kept_user_comments": 0}
     node = _created()
+    arch = arch or current_arch()
     for b in t["bug"]:
         if in_text(b.addr):
             _set(b.addr, bug_comment(b), res)
     for j in t["jump"]:
         if in_text(j.code):
             _set(j.code, jump_comment(j), res)
-            res["xrefs"] += _add(j.code, j.target, node)
+            res["xrefs"] += _add(j.code, j.target, node, arch)
     for x in t["ex"]:
         if in_text(x.insn):
             _set(x.insn, ex_comment(x, arch), res)
-            res["xrefs"] += _add(x.insn, x.fixup, node)
+            res["xrefs"] += _add(x.insn, x.fixup, node, arch)
     return res
 
 
