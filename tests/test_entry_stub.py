@@ -93,7 +93,7 @@ reg, trace = {"x86_64": ("RIP: 0010:", "Call Trace:"), "aarch64": ("pc : ", "Cal
 
 def only_function(b):  # (name, start, size) of the function IDA has under that name, if the site is in it
     f, name = get_func(b.addr), ui.fn.get_func_name(b.addr)
-    if f is None or not name or m.function_starts(name) != [(f.start_ea, f.end_ea - f.start_ea)]:
+    if f is None or not name or [c[:2] for c in m.function_starts(name)] != [(f.start_ea, f.end_ea - f.start_ea)]:
         return None
     return name, f.start_ea, f.end_ea - f.start_ea
 
@@ -138,6 +138,22 @@ if any(b.addr == 0xFFFFFFFF8E629BC4 and b.where() == "mm/userfaultfd.c:755" for 
     assert [ui.fn.get_func_name(row[0]) for row in w["shown"].rows] == [
         "mfill_atomic_copy", "mfill_atomic_zeropage", "mfill_atomic_continue", "mfill_atomic_poison"], new
     oops_done.append("demo kernel: mfill_atomic_copy+0x674 -> 0xFFFFFFFF8E629BC4, mm/userfaultfd.c:755 -> 4 rows")
+# the size the kernel prints is measured to the next symbol (padding included): IDA's next name gives it, so a log of this
+# build whose size is larger than the function's code gets no "size in the log" note
+padded = None
+for a, e, name in elf.funcs:
+    c = m.function_starts(name)
+    if len(c) == 1 and c[0][0] == a and c[0][1] and c[0][2] and c[0][2] != c[0][1] and a not in at_addr:
+        padded = (name, c[0])
+        break
+if padded is not None:
+    name, (a, size, printed, _) = padded
+    assert printed == cli_elf.printed_size(a) or cli_elf.relocatable, (name, printed, cli_elf.printed_size(a))
+    r, new = ask("%s%s+0x0/%#x%s" % (reg, name, printed, modtag))
+    assert r == 1 and went(new) == [a] and not said(new, "size in the log"), new
+    r, new = ask("%s%s+0x0/%#x%s" % (reg, name, printed + 8, modtag))
+    assert said(new, "size in the log %#x, here %#x" % (printed + 8, printed)), new
+    oops_done.append("printed size %#x of %s (code %#x): no size note" % (printed, name, size))
 # a name the log prints without the suffix the database has (Linux 6.1 Clang LTO cuts names at the first dot)
 cut = next((b for b in bugs if at_addr[b.addr] == 1 and "." in ui.fn.get_func_name(b.addr)
             and get_func(b.addr) is not None and get_func(b.addr).start_ea == elf.symbols.get(ui.fn.get_func_name(b.addr))

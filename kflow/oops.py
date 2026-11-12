@@ -256,14 +256,39 @@ class Match:
     label: str = None
 
 
+@dataclass(frozen=True)
+class Func:
+    """A function of the file being looked at. size: its code size (ELF st_size, IDA's function), None if not known
+    (a symbol that is not a function). printed: the size the kernel prints after the '/' for it, None if not known:
+    kallsyms measures to the next symbol, so alignment padding (and a __pfx_ symbol after it) counts, and on real logs
+    it is often larger than size. name: its full name, None if not known."""
+    start: int
+    size: int = None
+    printed: int = None
+    name: str = None
+
+
+def _func(c):
+    """A Func from what symbols() returns: a Func, or a tuple (start, size[, printed[, name]]). A size of 0 (a label
+    the symbol table calls a function, sharing its address with the next one) is not known."""
+    f = c if isinstance(c, Func) else Func(*c)
+    return f if f.size != 0 else Func(f.start, None, f.printed, f.name)
+
+
+def _same_size(f, size):
+    """The log's size is this function's: the size the kernel prints for it, or its code size."""
+    return size is not None and size in (f.printed, f.size)
+
+
 def _starts(loc, symbols):
-    """[(start, size or None)] for loc's function: the exact name first; names with a suffix the log leaves out
+    """[Func] for loc's function: the exact name first; names with a suffix the log leaves out
     (name.cfi, name.llvm.123, an LTO number) only when no exact-name function contains the offset."""
-    exact = symbols(loc.function) or []
-    inside = [c for c in exact if c[1] is None or loc.offset < c[1]]
+    exact = [_func(c) for c in symbols(loc.function) or []]
+    inside = [c for c in exact if c.size is None or loc.offset < c.size]
     if inside:
         return inside, False
-    more = [c for c in (symbols(loc.function, True) or []) if c not in exact and (c[1] is None or loc.offset < c[1])]
+    more = [c for c in map(_func, symbols(loc.function, True) or []) if c.start not in {e.start for e in exact}
+            and (c.size is None or loc.offset < c.size)]
     return (more, True) if more else (exact, False)
 
 
@@ -271,8 +296,9 @@ def resolve(report, sites, symbols, module=None, is_module=False):
     """Find the BUG/WARN site the report names.
 
     sites: kflow's BugSite list (addr, file, line, warn) or a SiteIndex of it.
-    symbols(name, suffixed=False) -> [(start, size or None)]: the functions of that name in the file being looked at
-    (several for static functions that share a name); with suffixed=True the ones named name.<suffix>.
+    symbols(name, suffixed=False) -> [Func, or a tuple (start, size[, printed size[, name]])]: the functions of that
+    name in the file being looked at (several for static functions that share a name); with suffixed=True the ones
+    named name.<suffix>.
     module: the module name of that file (module_name()), is_module: the file is a module (else vmlinux); both only
     for the notes."""
     loc = report.primary
@@ -297,21 +323,22 @@ def resolve(report, sites, symbols, module=None, is_module=False):
             if not starts:
                 notes.append("no function %s in this file" % cur.function)
                 continue
-            hits = [(st + cur.offset, st, sz) for st, sz in starts if st + cur.offset in by_addr]
+            hits = [f for f in starts if f.start + cur.offset in by_addr]
             if len(hits) > 1:  # static functions of the same name, each with a site at this offset
-                hits = [h for h in hits if cur.size is not None and h[2] == cur.size] or hits
+                hits = [f for f in hits if _same_size(f, cur.size)] or hits
             if len(hits) > 1 and want_file:
-                hits = [h for h in hits if by_addr[h[0]].line == want_line and same_file(by_addr[h[0]].file, want_file)] or hits
+                hits = [f for f in hits if by_addr[f.start + cur.offset].line == want_line
+                        and same_file(by_addr[f.start + cur.offset].file, want_file)] or hits
             if suffixed and hits:
                 notes.append("matched a function named %s.<suffix> (the log prints the name without it)" % cur.function)
             if len(hits) > 1:
-                return Match("ambiguous", None, None, [by_addr[h[0]] for h in hits], cur, None, notes,
+                return Match("ambiguous", None, None, [by_addr[f.start + cur.offset] for f in hits], cur, None, notes,
                              "%s+%#x" % (cur.function, cur.offset))
             if hits:
-                a, st, sz = hits[0]
-                return Match("exact", a, by_addr[a], [by_addr[a]], cur, st, notes)
+                a = hits[0].start + cur.offset
+                return Match("exact", a, by_addr[a], [by_addr[a]], cur, hits[0].start, notes)
             if found_fn is None:
-                pick = [c for c in starts if cur.size is not None and c[1] == cur.size] or starts
+                pick = [f for f in starts if _same_size(f, cur.size)] or starts
                 found_fn = (cur, pick[0], suffixed, len(starts))
         elif cur.address is not None:
             if cur.address in by_addr:
@@ -319,14 +346,15 @@ def resolve(report, sites, symbols, module=None, is_module=False):
             notes.append("the log has only the address 0x%x (no symbol), and no BUG/WARN site is there (with KASLR "
                          "the running kernel's addresses differ from the file's)" % cur.address)
     if found_fn is not None:
-        cur, (st, sz), suffixed, count = found_fn
+        cur, f, suffixed, count = found_fn
+        st, sz = f.start, f.size
         a = st + cur.offset
         if count > 1:
             notes.append("%d functions are named %s; the one%s is used" % (
-                count, cur.function, " whose size matches the log's" if cur.size is not None and sz == cur.size else
-                " found first"))
-        if cur.size is not None and sz is not None and sz != cur.size:
-            notes.append("size in the log %#x, here %#x: another build, or another function of that name" % (cur.size, sz))
+                count, cur.function, " whose size matches the log's" if _same_size(f, cur.size) else " found first"))
+        if cur.size is not None and sz is not None and not _same_size(f, cur.size):
+            notes.append("size in the log %#x, here %#x: another build, or another function of that name" % (
+                cur.size, f.printed or sz))
         # the function as this file has it (the log's size is another build's when they differ)
         span = sz or cur.size
         at_line = lambda s: s.line == want_line and same_file(s.file, want_file)

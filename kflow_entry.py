@@ -24,6 +24,7 @@ import ida_kernwin
 import ida_lines
 import ida_nalt
 import ida_name
+import ida_segment
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
@@ -288,20 +289,32 @@ def bug_site_rows(sites):
 
 
 def function_starts(name, suffixed=False):
-    """[(start, size or None)] of the function IDA has under this name (ida_name.get_name_ea, as kflow looks up the
-    table names). suffixed=True: the functions in IDA's name list called name.<suffix> (Linux 6.1 with Clang LTO prints
-    a name like foo.llvm.123 cut at the first dot)."""
+    """[(start, size or None, printed size or None, name)] of the function IDA has under this name
+    (ida_name.get_name_ea, as kflow looks up the table names). suffixed=True: the functions in IDA's name list called
+    name.<suffix> (Linux 6.1 with Clang LTO prints a name like foo.llvm.123 cut at the first dot). printed size: what
+    the kernel prints after the '/' (kallsyms measures to the next symbol): here the distance to the next name in
+    IDA's name list in the same segment."""
     def size(ea):
         f = ida_funcs.get_func(ea)
         return f.end_ea - f.start_ea if f is not None and f.start_ea == ea else None
+
+    def printed(ea):
+        n, i = ida_name.get_nlist_size(), ida_name.get_nlist_idx(ea)
+        while 0 <= i < n and (ida_name.get_nlist_ea(i) <= ea or ida_name.get_nlist_name(i).startswith("$")):
+            i += 1
+        if not 0 <= i < n:
+            return None
+        nxt, seg = ida_name.get_nlist_ea(i), ida_segment.getseg(ea)
+        return nxt - ea if seg is not None and nxt < seg.end_ea else None
     if not suffixed:
         ea = ida_name.get_name_ea(ida_idaapi.BADADDR, name)
-        return [] if ea == ida_idaapi.BADADDR else [(ea, size(ea))]
+        return [] if ea == ida_idaapi.BADADDR else [(ea, size(ea), printed(ea), name)]
     out = []
     for i in range(ida_name.get_nlist_size()):
-        if ida_name.get_nlist_name(i).startswith(name + "."):
+        full = ida_name.get_nlist_name(i)
+        if full.startswith(name + "."):
             ea = ida_name.get_nlist_ea(i)
-            out.append((ea, size(ea)))
+            out.append((ea, size(ea), printed(ea), full))
     return out
 
 

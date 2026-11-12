@@ -42,6 +42,10 @@ FUNCS.update({"folio_unlock": [(0xFFFFFFFF810000A0, 0xD0)],
               "no_sites_fn": [(0xFFFFFFFF81000800, 0x100)],
               "nft_do_chain": [(0x10600, 0x6D0)]})
 SUFFIXED = {"lto_fn": [(0xFFFFFFFF81000400, 0x100)]}  # lto_fn.cfi
+# the size the kernel prints is measured to the next symbol: padding after the code counts (st_size 0x9c3, prints 0x9d0)
+FUNCS["padded_fn"] = [oops.Func(0xFFFFFFFF81000900, 0x9C3, 0x9D0, "padded_fn")]
+# two static functions named pad_dup, code sizes 0x40 and 0x48, both printed as 0x50: the code size still picks
+FUNCS["pad_dup"] = [oops.Func(0xFFFFFFFF81001000, 0x40, 0x50, "pad_dup"), oops.Func(0xFFFFFFFF81001100, 0x48, 0x50, "pad_dup")]
 
 
 def symbols(name, suffixed=False):
@@ -298,6 +302,18 @@ class Resolve(unittest.TestCase):
         self.assertIn("size in the log 0x9c0, here 0x9d0: another build, or another function of that name", m.notes)
         self.assertIsNone(oops.match_record(rep, m, lambda ea: "")["site"])  # near: no site claimed, only candidates
 
+    def test_printed_size(self):
+        """The log's size is compared with the size the kernel prints (to the next symbol), not only the code size."""
+        rep, m = find("RIP: 0010:padded_fn+0x10/0x9d0")
+        self.assertEqual((m.status, m.address, m.notes), ("function", 0xFFFFFFFF81000910, []))
+        rep, m = find("RIP: 0010:padded_fn+0x10/0x9c3")  # the ELF size, as a log built from the symbol table has it
+        self.assertEqual(m.notes, [])
+        rep, m = find("RIP: 0010:padded_fn+0x10/0x9e0")
+        self.assertEqual(m.notes, ["size in the log 0x9e0, here 0x9d0: another build, or another function of that name"])
+        rep, m = find("RIP: 0010:pad_dup+0x10/0x48")
+        self.assertEqual((m.function_start, m.notes[0]), (0xFFFFFFFF81001100, "2 functions are named pad_dup; the one "
+                                                                               "whose size matches the log's is used"))
+
     def test_function_size_from_the_file(self):
         """The function's sites are those inside it as this file has it, whatever size the log prints."""
         copy = [0xFFFFFFFF8E629BC4, 0xFFFFFFFF8E629BA9]  # mfill_atomic_copy's two sites, the one at :755 first
@@ -394,8 +410,9 @@ def whole_kernel(path):
         name = elf.func(b.addr)
         if not name or first_at[b.addr] is not b:
             continue
-        start, size = next((a, s) for a, s in elf.function_starts(name) if a <= b.addr < a + s)
-        rep = oops.parse("%s%s+%#x/%#x%s" % (reg, name, b.addr - start, size, tag))
+        # the size as the kernel prints it (to the next symbol), as a real log from this build has it
+        start, size, printed, _ = next(c for c in elf.function_starts(name) if c[0] <= b.addr < c[0] + c[1])
+        rep = oops.parse("%s%s+%#x/%#x%s" % (reg, name, b.addr - start, printed or size, tag))
         m = oops.resolve(rep, index, elf.function_starts, mod, elf.relocatable)
         if m.status == "ambiguous":  # functions of the same name and size, each with a site at this offset
             assert b in m.candidates and m.label == "%s+%#x" % (name, b.addr - start), (hex(b.addr), m)
@@ -405,6 +422,16 @@ def whole_kernel(path):
             assert not m.notes or (elf.relocatable and not tag and len(m.notes) == 1
                                    and "in the kernel image (no [module] after it)" in m.notes[0]), m.notes
         done += 1
+    # a log line at an offset with no site, in functions whose printed size (to the next symbol) is not their ELF size:
+    # no size note, as the log of this build prints that size
+    padded = 0
+    for a, e, name in elf.funcs:
+        c = next((c for c in elf.function_starts(name) if c[0] == a), None)
+        if padded == 200 or c is None or c[2] is None or c[2] == c[1] or a in index.by_addr or len(elf.function_starts(name)) > 1:
+            continue
+        m = oops.resolve(oops.parse("%s%s+0x0/%#x%s" % (reg, name, c[2], tag)), index, elf.function_starts, mod, elf.relocatable)
+        assert m.status in ("near", "function") and not [n for n in m.notes if "size in the log" in n], (name, m)
+        padded += 1
     per_line = {}
     for b in bugs:
         if b.file:
@@ -420,9 +447,9 @@ def whole_kernel(path):
                          index, elf.function_starts)
         assert (m.status, m.address, m.site.where()) == ("exact", 0xFFFFFFFF8E629BC4, "mm/userfaultfd.c:755"), m
     print("OK oops on %s: %d of %d BUG/WARN sites in functions found from their %sfunc+0xoff/0xsize line (%d of them "
-          "among same-named functions: listed as candidates); file:line checked for %d lines; --oops exit status, "
-          "output and --json checked"
-          % (os.path.basename(path), done, len(bugs), reg, same_name, len(lines)))
+          "among same-named functions: listed as candidates); %d functions whose printed size is not their ELF size: no "
+          "size note; file:line checked for %d lines; --oops exit status, output and --json checked"
+          % (os.path.basename(path), done, len(bugs), reg, same_name, padded, len(lines)))
 
 
 def cli_check(path, elf, bugs, reg, tag):
@@ -444,7 +471,7 @@ def cli_check(path, elf, bugs, reg, tag):
             return code, buf.getvalue()
         if site is not None:
             name = elf.func(site.addr)
-            start, size = next((a, n) for a, n in elf.function_starts(name) if a <= site.addr < a + n)
+            start, _, size, _ = next(c for c in elf.function_starts(name) if c[0] <= site.addr < c[0] + c[1])
             text = "[  152.334201] WARNING: CPU: 1 PID: 9 at %s:%d %s+%#x/%#x%s\n" % (site.file, site.line, name,
                                                                               site.addr - start, size, tag)
             code, got = run(text, "--json", out)

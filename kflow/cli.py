@@ -279,19 +279,37 @@ class Elf:
         return None
 
     def function_starts(self, name, suffixed=False):
-        """[(start, size)] of the functions called name (static functions can share one), or with suffixed=True
-        of those called name.<suffix> (name.cfi, name.llvm.123...). A symbol that is not a function: size None."""
+        """[(start, size, printed size, name)] of the functions called name (static functions can share one), or with
+        suffixed=True of those called name.<suffix> (name.cfi, name.llvm.123...). printed size: see printed_size. A
+        symbol that is not a function: size None."""
         if not hasattr(self, "_by_name"):
             self._by_name, self._by_base = {}, {}
             for a, e, n in self.funcs:
-                self._by_name.setdefault(n, []).append((a, e - a))
+                self._by_name.setdefault(n, []).append((a, e - a, n))
                 if "." in n:
-                    self._by_base.setdefault(n.split(".", 1)[0], []).append((a, e - a))
+                    self._by_base.setdefault(n.split(".", 1)[0], []).append((a, e - a, n))
         if suffixed:
-            return [c for c in self._by_base.get(name, []) if c not in self._by_name.get(name, [])]
-        if name in self._by_name:
-            return list(self._by_name[name])
-        return [(self.symbols[name], None)] if self.symbols.get(name) else []
+            out = [c for c in self._by_base.get(name, []) if c not in self._by_name.get(name, [])]
+        elif name in self._by_name:
+            out = self._by_name[name]
+        else:
+            return [(self.symbols[name], None, self.printed_size(self.symbols[name]), name)] if self.symbols.get(name) else []
+        return [(a, n, self.printed_size(a), full) for a, n, full in out]
+
+    def printed_size(self, ea):
+        """The size the kernel prints for the symbol at ea ('func+0x10/0x40'): kallsyms measures from it to the next
+        symbol (alignment padding and a __pfx_ symbol included), so it can be larger than the ELF size. Mapping
+        symbols ($x, $d) and .L labels are not kallsyms symbols. In a module the next symbol must be in the same
+        section (the kernel lays the sections out differently). None if there is none."""
+        if not hasattr(self, "_sym_addrs"):
+            self._sym_addrs = sorted(a for a, n in self.by_addr.items() if not n.startswith(("$", ".L")))
+        i = bisect.bisect_right(self._sym_addrs, ea)
+        if i == len(self._sym_addrs):
+            return None
+        nxt = self._sym_addrs[i]
+        if self.relocatable and not any(a <= ea < e and nxt < e for a, e in self.sections.values()):
+            return None
+        return nxt - ea
 
 
 def load(elf):
