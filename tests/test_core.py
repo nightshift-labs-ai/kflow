@@ -112,6 +112,21 @@ class Tables(unittest.TestCase):
             decode_ex_table(m.read, BASE, BASE + 13)
 
 
+class BugFormat(unittest.TestCase):
+    def test_619_without_bugverbose(self):
+        # {int addr, int format, u16 flags, pad}: field-relative; formats are messages, not file names
+        m = Mem()
+        start, text = BASE + 0x2000, lambda ea: BASE <= ea < BASE + 0x1000  # noqa: E731
+        m.put(BASE + 0x2FFF, b"\0bad value %d\n\0")
+        for k in range(4):
+            ea = start + 12 * k
+            m.put(ea, struct.pack("<iiHH", BASE + 0x100 + 4 * k - ea, BASE + 0x3000 - (ea + 4), 0x11, 0))
+        layout, sites = decode_bug_table(m.read, start, start + 48, in_text=text)
+        self.assertEqual(layout, "addr,format,flags")
+        self.assertEqual([(s.addr, s.warn, s.args, s.file) for s in sites[:2]],
+                         [(BASE + 0x100, True, True, None), (BASE + 0x104, True, True, None)])
+
+
 class Flags(unittest.TestCase):
     def test_warn_with_message_flag(self):
         from kflow.core import BugSite

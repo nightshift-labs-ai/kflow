@@ -21,6 +21,8 @@ BUG_LAYOUTS = {
     "addr,file,line,flags": (12, {"addr": 0, "file": 4, "line": 8, "flags": 10, "format": None}),
     "addr,format,file,line,flags": (16, {"addr": 0, "format": 4, "file": 8, "line": 12, "flags": 14}),
     "addr,flags": (8, {"addr": 0, "file": None, "line": None, "flags": 4, "format": None}),
+    # Linux 6.19+ x86_64 without CONFIG_DEBUG_BUGVERBOSE: a format string but no file and line
+    "addr,format,flags": (12, {"addr": 0, "format": 4, "file": None, "line": None, "flags": 8}),
 }
 
 EX_TYPE_NAMES = {
@@ -142,6 +144,14 @@ def decode_bug_table(read, start, stop, layout=None, in_text=None):
                     site.line, = struct.unpack_from("<H", raw, base + off["line"])
                     # the right base points at string starts (the linker may still merge a name into another's tail)
                     good += 1 if read(fea - 1, 1) in (b"\0", None) else 0
+            elif off["format"] is not None:
+                # a layout without file names scores on format strings that are not file names, so on kernels
+                # whose entries do name files the file layouts keep winning
+                fd, = struct.unpack_from("<i", raw, base + off["format"])
+                fea = ea + (off["format"] if field_rel else 0) + fd
+                head = read(fea - 1, 2)
+                if head and len(head) == 2 and head[0] == 0 and head[1] and not _plausible_file(_cstr(read, fea)):
+                    good += 1
             if in_text is not None and in_text(site.addr):
                 good += 1
             sites.append(site)
