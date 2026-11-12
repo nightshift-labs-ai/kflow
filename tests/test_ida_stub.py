@@ -221,8 +221,10 @@ def run(path):
     assert len(w["netnodes"].get(il.NODE, {})) == res["xrefs"] and (res["xrefs"] > 0 or not (t["jump"] or t["ex"]))
     assert len(w["netnodes"].get(il.KEY_NODE, {})) == res["key_refs"] == len(w["drefs"]) - (pre is not None)
     assert res["key_refs"] > 0 or not t["jump"] or pre and len(t["jump"]) == 1, res
-    removed = il.remove_annotations(t)
+    rres = {}
+    removed = il.remove_annotations(t, rres)
     assert removed == res["xrefs"], (removed, res)
+    assert rres["key_refs"] == res["key_refs"], (rres, res)  # every key reference kflow added is counted as removed
     assert list(w["drefs"]) == ([pre] if pre else []) and il.KEY_NODE not in w["netnodes"]  # only the user's own stays
     assert sum(1 for u in w["xrefs"].values() if not u) == own  # IDA's own references stay
     assert [k for k, u in w["xrefs"].items() if u] == ([mine] if mine else []), "only the user's own reference stays"

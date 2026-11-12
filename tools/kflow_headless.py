@@ -52,7 +52,10 @@ def main(argv=None):
               % (len(t["bug"]), t.get("bug_layout") or "-", len(t["jump"]), len(t["ex"]), ", ".join(t["missing"]) or "none",
                  idalayer.not_decoded(t)))
         if args.remove:
-            print("[kflow] references removed: %d" % idalayer.remove_annotations(t))
+            res = {}
+            removed = idalayer.remove_annotations(t, res)
+            print("[kflow] references removed: %d jump references, %d static-key site -> key references"
+                  % (removed, res["key_refs"]))
         else:
             print("[kflow] %s" % idalayer.annotate(t, arch))
         return 0

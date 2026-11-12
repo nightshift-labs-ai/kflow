@@ -315,14 +315,16 @@ def code_refs_from(ea):
     return out
 
 
-def remove_annotations(t):
+def remove_annotations(t, res=None):
     """Remove our comments and the references kflow added (as recorded by annotate; references that existed
-    before, IDA's own or the user's, stay). Returns how many references were removed."""
+    before, IDA's own or the user's, stay). Returns how many jump references were removed; if res is a dict,
+    res["key_refs"] is set to how many site -> key data references were removed."""
     for ea in [b.addr for b in t["bug"]] + [j.code for j in t["jump"]] + [x.insn for x in t["ex"]]:
         old = ida_bytes.get_cmt(ea, False)
         if old and old.startswith(TAG + ": "):
             ida_bytes.set_cmt(ea, "", False)
     base = ida_nalt.get_imagebase()  # offsets survive a rebase of the database
+    key_refs = 0
     knode = ida_netnode.netnode(KEY_NODE, 0, False)
     if knode.index() != ida_netnode.BADNODE:
         off = knode.altfirst()
@@ -330,8 +332,11 @@ def remove_annotations(t):
             f, to = (off + base) & MASK, (knode.altval(off) + base) & MASK
             if data_refs_from(f).get(to):  # still there and still a user reference
                 ida_xref.del_dref(f, to)
+                key_refs += 1
             off = knode.altnext(off)
         knode.kill()
+    if res is not None:
+        res["key_refs"] = key_refs
     node = ida_netnode.netnode(NODE, 0, False)
     if node.index() == ida_netnode.BADNODE:  # never annotated
         return 0

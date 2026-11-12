@@ -314,10 +314,11 @@ class RemoveAction(ida_kernwin.action_handler_t):
             return 0
         ida_kernwin.show_wait_box("HIDECANCEL\nkflow: removing comments and references")
         try:
-            removed = idalayer.remove_annotations(t)
+            res = {}
+            removed = idalayer.remove_annotations(t, res)
         finally:
             ida_kernwin.hide_wait_box()
-        report("references removed: %d" % removed)
+        report("references removed: %d jump references, %d static-key site -> key references" % (removed, res.get("key_refs", 0)))
         STATE["pseudo"] = None
         flush_pseudocode()
         return 1
