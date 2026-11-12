@@ -386,6 +386,10 @@ def _contradicts(report, site, loc, func=None):
             _kind(site), at, site.where(), "WARNING" if report.kind == "WARN" else "kernel BUG", h.file, h.line)
     if report.kind in ("WARN", "BUG") and report.kind != _kind(site):
         return "the site at %s is a %s, but the log reports a %s" % (at, _kind(site), report.kind)
+    if h is not None and not h.file and h is not loc and h.function is not None and h.offset is not None and loc.function is not None \
+            and (h.function, h.offset) != (loc.function, loc.offset):  # review s159 MINOR 1: header without file:line
+        return "the site at %s is not the log's %s line's %s+%#x" % (
+            at, "WARNING" if report.kind == "WARN" else "kernel BUG", h.function, h.offset)
     if func is not None and loc.size is not None and func.size is not None and not _same_size(func, loc.size) \
             and not confirms(report, site):
         return "the log prints %s's size as %#x, this file has %#x" % (loc.function, loc.size, func.printed or func.size)

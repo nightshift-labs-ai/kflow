@@ -500,6 +500,13 @@ class Resolve(unittest.TestCase):
         rep, m = find("WARNING: CPU: 1 PID: 9 at mm/userfaultfd.c:755 mfill_atomic_copy+0x659/0x9d0")
         self.assertEqual((m.status, m.label, [s.addr for s in m.candidates]),
                          ("mismatch", "mm/userfaultfd.c:755", [a for a, _, _, _ in UFFD]))
+        # review s159 MINOR 1: a WARNING line without file:line (no CONFIG_DEBUG_BUGVERBOSE) naming another function+offset
+        # than the RIP line (a hand-mixed paste): never exact, no jump
+        rep, m = find("WARNING: CPU: 1 PID: 9 at do_one_initcall+0x27c/0x310\nRIP: 0010:mfill_atomic_copy+0x674/0x9d0")
+        self.assertEqual((m.status, m.address, m.site), ("mismatch", None, None), (m.status, m.reason))
+        self.assertIn("is not the log's WARNING line's do_one_initcall+0x27c", m.reason)
+        rep, m = find("WARNING: CPU: 1 PID: 9 at do_one_initcall+0x27c/0x310\nRIP: 0010:do_one_initcall+0x27c/0x310")
+        self.assertNotEqual(m.status, "mismatch", m.reason)  # header and RIP agree: unchanged
         rep, m = find("WARNING: CPU: 1 PID: 9 at mm/userfaultfd.c:755 mfill_atomic_poison+0x10/0x850")  # on :900
         self.assertEqual((m.status, [s.addr for s in m.candidates]),
                          ("mismatch", [0xFFFFFFFF8E62B164, 0xFFFFFFFF8E629BC4, 0xFFFFFFFF8E62A489, 0xFFFFFFFF8E62AB60]))
