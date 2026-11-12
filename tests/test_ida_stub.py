@@ -171,6 +171,8 @@ def run(path):
     if other is not None:
         w["cmts"][other] = "kflow-like note by the user"  # starts with "kflow" but is not ours
     res = il.annotate(t, il.current_arch())
+    for a in filter(None, os.environ.get("KFLOW_SHOW", "").split(",")):  # print the comments at these addresses
+        print("%s:  %s" % (a, w["cmts"].get(int(a, 16), "(none)")))
     if nxt is not None:
         assert nxt not in w["xrefs"], "no reference to the next instruction"
     if other is not None:

@@ -153,9 +153,10 @@ def key_name(ea):
 
 
 def jump_comment(j):
+    # the kernel makes the site a jump when (key enabled) XOR (branch bit): jump_label_type() in kernel/jump_label.c
     kind = "static_branch_likely" if j.branch else "static_branch_unlikely"
-    return ("%s: static key %s (%s): runtime-patched NOP/branch; branch target 0x%X"
-            % (TAG, key_name(j.key), kind, j.target))
+    return ("%s: static key %s (%s): runtime-patched NOP/branch; jumps to 0x%X when the key is %s"
+            % (TAG, key_name(j.key), kind, j.target, "off" if j.branch else "on"))
 
 
 def ex_comment(x, arch):

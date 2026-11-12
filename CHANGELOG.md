@@ -9,6 +9,8 @@ Taken from the GitHub release notes. Newest first.
 - A raw arm64 kernel `Image` (also gzip-compressed, as Ubuntu's arm64 `vmlinuz`) or an x86 `bzImage` / `vmlinuz` now gets a message naming the tool that turns it into an ELF (vmlinux-to-elf, or extract-vmlinux on x86), not just "is not an ELF file"; in IDA, the warning for a database with none of the three tables says the same for a raw `Image` / `vmlinuz` loaded as a binary file.
 - Checked on two more kernels, Ubuntu 24.04's 6.8.0-149-generic for x86_64 and for arm64 (each `vmlinuz` through vmlinux-to-elf): x86_64 11,027 BUG/WARN sites (8,259 WARN), 8,304 static-key sites (8,189 keys named), 632 exception-table entries (the 45 WRMSR and 41 RDMSR entries all sit on `wrmsr`/`rdmsr`); arm64 10,803 BUG/WARN sites (8,085 WARN, all `brk #0x800`), 31,250 static-key sites (31,126 keys named, 22,918 of them tracepoints), 935 exception-table entries. README table rows added.
 - README "Try it": the quickest sample is the `vmlinuz` your own Linux machine boots, through vmlinux-to-elf (with the copy step for a root-only `/boot`).
+- Static-key comments say when the site jumps: "jumps to X when the key is off" (`static_branch_likely` sites) or "... is on" (`static_branch_unlikely`), from the kernel's rule that a site is a jump when the key's state XOR the entry's branch bit is set (`jump_label_type()`). Found by a judge-style review.
+- Modules: a static key inside an imported array was named after the NEXT import (Debian 13 `bridge.ko`: `sprintf+0x40` for `nf_hooks_needed + 0x270`): each import now gets a 64 KB slot and a key in it is named from that import, exactly (checked against `readelf -r`). Found by a judge-style review.
 
 ## v0.0.1 (2026-11-12)
 

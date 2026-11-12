@@ -10,7 +10,7 @@ import struct
 import sys
 
 from . import __version__
-from .core import TABLES, decode_bug_table, decode_ex_table, decode_jump_table, key_label
+from .core import TABLES, TRACEPOINT_KEY_OFFSET, decode_bug_table, decode_ex_table, decode_jump_table, key_label
 
 
 class InputError(Exception):
@@ -146,7 +146,8 @@ class Elf:
     # --- kernel modules (ET_REL): lay the allocated sections out from BASE in section-header order, give undefined
     # symbols their own slots after them (like a disassembler's extern segment), then apply the relocations.
     BASE = 0x10000
-    EXTERN_SLOT = 0x100  # room for "symbol + member offset" (a tracepoint's key is __tracepoint_X + 8)
+    EXTERN_SLOT = 0x10000  # room for "symbol + offset": a tracepoint's key is __tracepoint_X + 8, an array of keys
+    # (nf_hooks_needed[13][8], 16 bytes each) reaches past 0x600
     REL = {  # type: (size, pc-relative, signed)
         "x86_64": {1: (8, False, False), 2: (4, True, True), 4: (4, True, True), 10: (4, False, False),
                    11: (4, False, True), 24: (8, True, True)},
@@ -238,6 +239,18 @@ class Elf:
         return bytes(self.data[o + ea - a:o + ea - a + size])
 
     def key_name(self, ea):
+        if self.externs:  # a module's key in an imported symbol: name it from its slot, exactly
+            if not hasattr(self, "_ext_sorted"):
+                self._ext_sorted = sorted((a, n) for n, a in self.externs.items())
+            i = bisect.bisect_right(self._ext_sorted, (ea, "\uffff")) - 1
+            if i >= 0 and ea - self._ext_sorted[i][0] < self.EXTERN_SLOT:
+                base, name = self._ext_sorted[i]
+                off = ea - base
+                if off == 0:
+                    return name
+                if name.startswith("__tracepoint_") and off == TRACEPOINT_KEY_OFFSET:
+                    return "tracepoint " + name[len("__tracepoint_"):]
+                return "%s+%#x" % (name, off)
         return key_label(lambda a: self.by_addr.get(a, ""), ea, self.read)
 
     def in_text(self, ea):

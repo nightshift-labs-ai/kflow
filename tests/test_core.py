@@ -237,6 +237,9 @@ class Module(unittest.TestCase):
         self.assertNotIn("my_key", e.symbols)  # imports never count as __start_/__stop_ table bounds
         self.assertEqual(e.key_name(j2.key), "tracepoint foo")  # PC64 key: also checks 8-byte relocations
         self.assertEqual(e.by_addr[j.key], "my_key")
+        # a key inside an imported array (nf_hooks_needed + 272 in bridge.ko) keeps its own symbol's name
+        self.assertEqual(e.key_name(e.externs["my_key"] + 272), "my_key+0x110")
+        self.assertEqual(e.key_name(e.externs["__tracepoint_foo"] + 0x600), "__tracepoint_foo+0x600")
         self.assertGreater(j.key, max(end for a, end in e.sections.values()))  # extern slot after the sections
 
     def test_extended_section_numbering(self):

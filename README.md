@@ -30,7 +30,7 @@ You need a 64-bit kernel ELF that still has the kernel's symbol names, for examp
 - the `kernel.elf` of the [MemLens demo data](https://github.com/nightshift-labs-ai/memlens/releases/tag/demo-data) (22 MB zip; a Debian 13 6.12 kernel exported from a memory image, so freed init code reads as other bytes);
 - the `vmlinuz` your Linux machine boots, or an Android GKI `Image`, turned into an ELF with kallsyms names by [vmlinux-to-elf](https://github.com/marin-m/vmlinux-to-elf) (checked on Ubuntu 24.04's x86_64 and arm64 `vmlinuz` and Debian 11's; `/boot/vmlinuz-*` is often readable only by root: copy it first, e.g. `sudo cp /boot/vmlinuz-$(uname -r) . && sudo chown $USER vmlinuz-*`, then `vmlinux-to-elf vmlinuz-<version> kernel.elf`).
 
-- a kernel module (`.ko`, or `.ko.xz` / `.ko.gz` as distributions ship them; unpack `.ko.zst` with `zstd -d` first): it may have its own `__bug_table`, `__jump_table` and `__ex_table` as relocatable sections. The command line lays the sections out from 0x10000 in section-header order, gives each undefined symbol its own 256-byte slot after them (so `__tracepoint_X + 8` still names that tracepoint) and applies the relocations, so file names, keys and targets come out right; IDA relocates a `.ko` itself, and kflow then finds the tables by segment name. Addresses printed for a module are those of this layout, not necessarily IDA's.
+- a kernel module (`.ko`, or `.ko.xz` / `.ko.gz` as distributions ship them; unpack `.ko.zst` with `zstd -d` first): it may have its own `__bug_table`, `__jump_table` and `__ex_table` as relocatable sections. The command line lays the sections out from 0x10000 in section-header order, gives each undefined symbol its own 64 KB slot after them (so `__tracepoint_X + 8` still names that tracepoint and a key inside an imported array, such as `nf_hooks_needed+0x270` in `bridge.ko`, keeps its own name) and applies the relocations, so file names, keys and targets come out right; IDA relocates a `.ko` itself, and kflow then finds the tables by segment name. Addresses printed for a module are those of this layout, not necessarily IDA's.
 
 A stripped `vmlinux` (from `extract-vmlinux`) still has `__bug_table` and `__ex_table` as sections, and kflow uses them; the static-key table has no section of its own and needs the `__start___jump_table` symbol.
 
@@ -96,7 +96,7 @@ The comments kflow writes in IDA, for three of the sites above (text produced by
 
 ```
 0xffffffff8e629bc4 (mfill_atomic_copy):  kflow: WARN at mm/userfaultfd.c:755 (the kernel reports and continues after this trap)
-0xffffffff8e391de7 (arch_exit_to_user_mode_prepare.isra.0):  kflow: static key randomize_kstack_offset (static_branch_likely): runtime-patched NOP/branch; branch target 0xFFFFFFFF8E391DFC
+0xffffffff8e391de7 (arch_exit_to_user_mode_prepare.isra.0):  kflow: static key randomize_kstack_offset (static_branch_likely): runtime-patched NOP/branch; jumps to 0xFFFFFFFF8E391DFC when the key is off
 0xffffffff8e200029 (sev_es_terminate):  kflow: may fault -> fixup at 0xFFFFFFFF8E20002B (WRMSR)
 ```
 
