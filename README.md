@@ -116,7 +116,7 @@ The comments kflow writes in IDA, for three of the sites above (text produced by
 
 ## What was verified
 
-`tests/test_demo.py <kernel ELF>` checks the decoded tables against the instruction bytes; `tests/test_ida_stub.py <kernel ELF>` runs the IDA layer on fake `ida_*` modules backed by the same file (annotate, then remove, with IDA's own references, a reference you added and user comments in place; again after a rebase); `tests/test_headless_stub.py <kernel ELF>` does the same through the headless runner, and `tests/test_entry_stub.py <kernel ELF>` loads the plugin itself and runs its four menu actions; `python3 tests/test_core.py` covers the layouts on synthetic tables and the relocation of a synthetic module.
+`sh tests/run_all.sh` runs every test below in about two seconds on Debian's arm64 `ext4.ko` (it downloads the 377 KB package from the module example above and checks its sha256), or on your own files: `sh tests/run_all.sh vmlinux mod.ko`; `IDA_STUBS=<folder with ida_*.pyi>` adds the IDA API name check. `tests/test_demo.py <kernel ELF>` checks the decoded tables against the instruction bytes; `tests/test_ida_stub.py <kernel ELF>` runs the IDA layer on fake `ida_*` modules backed by the same file (annotate, then remove, with IDA's own references, a reference you added and user comments in place; again after a rebase); `tests/test_headless_stub.py <kernel ELF>` does the same through the headless runner, and `tests/test_entry_stub.py <kernel ELF>` loads the plugin itself and runs its four menu actions; `python3 tests/test_core.py` covers the layouts on synthetic tables and the relocation of a synthetic module.
 
 | Kernel (banner) | BUG/WARN sites | static-key sites | exception-table entries | what the tests check |
 |---|---|---|---|---|
