@@ -2,7 +2,8 @@
 
     python3 tests/test_oops.py                # log samples built from the kernel's printk formats, synthetic sites
     python3 tests/test_oops.py <kernel ELF>   # also: a RIP / pc line made for every BUG/WARN site in a function
-                                              # resolves to that site, and file:line gives every site at that line
+                                              # resolves to that site, file:line gives every site at that line, and
+                                              # python3 -m kflow <ELF> --oops <log> [--json] prints / writes the match
 
 The samples follow the format strings of kernel/panic.c (__warn, up to 6.18 and from 6.19), lib/bug.c (report_bug),
 arch/x86/kernel/dumpstack.c (show_ip, call-trace entries; 4.9 forms), arch/x86/mm/fault.c 4.9 ('IP:'),
@@ -385,13 +386,53 @@ def whole_kernel(path):
         m = oops.resolve(oops.parse("%s:%d" % (f, ln)), index, elf.function_starts)
         want = sorted(set(addrs))
         assert sorted({s.addr for s in m.candidates}) == want and m.status == ("line" if len(addrs) == 1 else "ambiguous"), (f, ln, m.status)
+    cli_check(path, elf, bugs, reg, tag)
     if any(b.addr == 0xFFFFFFFF8E629BC4 for b in bugs):  # the MemLens demo kernel: the review's example
         m = oops.resolve(oops.parse("WARNING: CPU: 1 PID: 9 at mm/userfaultfd.c:755 mfill_atomic_copy+0x674/0x..."),
                          index, elf.function_starts)
         assert (m.status, m.address, m.site.where()) == ("exact", 0xFFFFFFFF8E629BC4, "mm/userfaultfd.c:755"), m
     print("OK oops on %s: %d of %d BUG/WARN sites in functions found from their %sfunc+0xoff/0xsize line (%d of them "
-          "among same-named functions: listed as candidates); file:line checked for %d lines"
+          "among same-named functions: listed as candidates); file:line checked for %d lines; --oops exit status, "
+          "output and --json checked"
           % (os.path.basename(path), done, len(bugs), reg, same_name, len(lines)))
+
+
+def cli_check(path, elf, bugs, reg, tag):
+    """python3 -m kflow <file> --oops <log> [--json]: exit status 0 / 1 / 2, the printed match, the JSON record."""
+    import contextlib
+    import io
+    import tempfile
+    from kflow import cli
+    site = next((b for b in bugs if elf.func(b.addr) and b.file), None)
+    with tempfile.TemporaryDirectory() as d:
+        log, out = os.path.join(d, "oops.txt"), os.path.join(d, "oops.json")
+
+        def run(text, *more):
+            with open(log, "w") as fh:
+                fh.write(text)
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
+                code = cli.main([path, "--oops", log] + list(more))
+            return code, buf.getvalue()
+        if site is not None:
+            name = elf.func(site.addr)
+            start, size = next((a, n) for a, n in elf.function_starts(name) if a <= site.addr < a + n)
+            text = "[  152.334201] WARNING: CPU: 1 PID: 9 at %s:%d %s+%#x/%#x%s\n" % (site.file, site.line, name,
+                                                                              site.addr - start, size, tag)
+            code, got = run(text, "--json", out)
+            rec = json.load(open(out))["oops"]
+            if rec["status"] == "exact":
+                assert code == 0 and "%#x" % site.addr in got.splitlines()[2] and got.splitlines()[1].startswith("exact:"), got
+                assert rec["address"] == "0x%X" % site.addr and rec["site"]["line"] == site.line, rec
+            else:  # same-named functions with a site at this offset
+                assert code == 0 and rec["status"] == "ambiguous" and "0x%X" % site.addr in [c["addr"] for c in rec["candidates"]]
+        code, got = run("hello, world\n")
+        assert code == 1 and "no match" in got, got
+        code, got = run("%skflow_no_such_function+0x10/0x20\n" % reg)
+        assert code == 1 and "note: no function kflow_no_such_function in this file" in got, got
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            code = cli.main([path, "--oops", os.path.join(d, "missing.txt")])
+        assert code == 2 and "missing.txt" in err.getvalue(), err.getvalue()
 
 
 if __name__ == "__main__":

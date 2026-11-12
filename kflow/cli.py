@@ -1,6 +1,7 @@
 """kflow command line: decode the site tables of a kernel ELF (vmlinux, a MemLens kernel.elf, or a module .ko).
 
     python3 -m kflow <kernel.elf> [--list bug|warn|jump|ex] [--limit N] [--json out.json]
+    python3 -m kflow <kernel.elf> --oops <log file, or - for stdin> [--json out.json]
 """
 import argparse
 import bisect
@@ -293,7 +294,6 @@ class Elf:
         return [(self.symbols[name], None)] if self.symbols.get(name) else []
 
 
-
 def load(elf):
     """Decode every table that has __start_/__stop_ symbols. Returns dict."""
     out = {"missing": [], "found_by": {}, "errors": {}}
@@ -374,14 +374,24 @@ def main(argv=None):
     ap.add_argument("--list", choices=["bug", "warn", "jump", "ex"])
     ap.add_argument("--limit", type=int, default=20)
     ap.add_argument("--json")
+    ap.add_argument("--oops", metavar="LOG", help="a kernel log (a WARNING / kernel BUG / RIP / pc line or a whole "
+                    "report; - reads stdin): print the BUG/WARN site it names")
     ap.add_argument("--version", action="version", version="kflow " + __version__)
     a = ap.parse_args(argv)
     try:
+        if a.oops is not None:
+            if a.oops == "-":
+                log_text = sys.stdin.read()
+            else:
+                with open(a.oops, encoding="utf-8", errors="replace") as fh:
+                    log_text = fh.read()
         elf = Elf(a.kernel)
         t = load(elf)
     except (InputError, ValueError, OSError) as e:
         print("kflow: %s" % e, file=sys.stderr)
         return 2
+    if a.oops is not None:
+        return oops_main(elf, t, log_text, a.json)
     for line in summary(elf, t):
         print(line)
     if a.list:
@@ -411,3 +421,23 @@ def main(argv=None):
                        "ex_layout": t.get("ex_layout"),
                        "ex": [[x.insn, x.fixup, x.data] for x in t.get("ex", [])]}, fh)
     return 0
+
+
+def oops_main(elf, t, log_text, json_path=None):
+    """--oops: the BUG/WARN site a kernel log names. Exit status 0 when something was found (the site, the function,
+    or the candidates for a file:line), 1 when not."""
+    from . import oops
+    for kind, error in t.get("errors", {}).items():
+        if kind == "bug":
+            print("not decoded: bug (%s)" % error)
+    if "bug" in t["missing"]:
+        print("no __bug_table in this file: only function+offset can be looked up")
+    report = oops.parse(log_text)
+    mod = oops.module_name(elf.path)
+    match = oops.resolve(report, t.get("bug", []), elf.function_starts, mod, elf.relocatable)
+    for line in oops.describe(report, match, elf.func):
+        print(line)
+    if json_path:
+        with open(json_path, "w") as fh:
+            json.dump({"input": elf.path, "oops": oops.match_record(report, match, elf.func)}, fh, indent=1)
+    return 1 if match.status == "none" else 0
