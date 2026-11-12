@@ -6,7 +6,9 @@ Edit > Plugins > kflow actions:
     jump references to static-key targets and fixups where IDA has none.
   * List BUG/WARN sites: a list with function and source file:line; Enter jumps to the site.
   * Remove annotations.
+With the Hex-Rays decompiler, annotated sites also get a comment in pseudocode (display only, nothing saved).
 """
+import bisect
 import os
 import sys
 import traceback
@@ -14,6 +16,7 @@ import traceback
 import ida_funcs
 import ida_idaapi
 import ida_kernwin
+import ida_lines
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
@@ -22,7 +25,9 @@ if HERE not in sys.path:
 from kflow import __version__, idalayer  # noqa: E402
 
 ISSUES_URL = "https://github.com/nightshift-labs-ai/kflow/issues"
-STATE = {"tables": None}
+# pseudo: the sites by address for the pseudocode hook (built by Annotate, rebuilt after a rebase); hx: the hook.
+STATE = {"tables": None, "pseudo": None, "hx": None, "hx_error": False}
+NOP_WINDOW = 16  # bytes: how far a static-key site without a statement of its own may be from the next one that has one
 
 
 def report(text):
@@ -68,6 +73,145 @@ def scan_or_warn():
     return t
 
 
+def pseudo_index(t, arch, layout):
+    """The decoded sites by address, for the pseudocode hook; texts are made when a function is printed."""
+    sites = {}
+    for kind, items, ea in (("bug", t["bug"], "addr"), ("jump", t["jump"], "code"), ("ex", t["ex"], "insn")):
+        for site in items:
+            sites.setdefault(getattr(site, ea), []).append((kind, site))
+    return {"layout": layout, "arch": arch, "sites": sites, "eas": sorted(sites), "names": {}}
+
+
+def pseudo_map():
+    """The map for the hook, or None if the database has no kflow annotations (never annotated, or removed). Built
+    again from the kernel's tables when the segments moved since it was made (rebase), so no stale address shows;
+    also on the first function printed in a database annotated in an earlier session."""
+    if not idalayer.annotated():
+        STATE["pseudo"] = None
+        return None
+    now = idalayer.layout()
+    p = STATE["pseudo"]
+    if p is not None and p["layout"] == now:
+        return p
+    arch = idalayer.current_arch()
+    if arch is None:
+        STATE["pseudo"] = None
+        return None
+    report("reading the site tables again for pseudocode comments (%s)"
+           % ("segments changed since they were read: rebase?" if p is not None else "database annotated earlier"))
+    STATE["pseudo"] = pseudo_index({"bug": [], "jump": [], "ex": []}, arch, now)  # a failing scan is not retried per function
+    STATE["pseudo"] = pseudo_index(idalayer.scan(), arch, now)
+    return STATE["pseudo"]
+
+
+def pseudo_text(p, kind, site, before=False):
+    if kind == "bug":
+        return idalayer.bug_comment(site)
+    if kind == "ex":
+        return idalayer.ex_comment(site, p["arch"])
+    if site.key not in p["names"]:
+        p["names"][site.key] = idalayer.key_name(site.key)
+    return idalayer.jump_pseudo_text(site, p["names"][site.key], before)
+
+
+def pseudocode_lines(cfunc):
+    """{line index: [comment, ...]} for the kflow sites in this decompiled function. A site whose address has a
+    statement gets its comment on that statement's line. A static-key site without one (a NOP usually leaves no
+    statement) gets it on the line of the next address that has one, if that is at most NOP_WINDOW bytes on, no
+    other kflow site lies in between and the site is in this function; otherwise it gets none."""
+    p = pseudo_map()
+    if not p or not p["eas"]:
+        return {}
+    eamap = cfunc.get_eamap()
+    keys = sorted(eamap)
+    eas, sites = p["eas"], p["sites"]
+    at = {}  # address with statements -> texts
+    prev = None
+    for ea in keys:
+        for kind, site in sites.get(ea, ()):
+            at.setdefault(ea, []).append(pseudo_text(p, kind, site))
+        i = bisect.bisect_left(eas, ea) - 1  # the closest site before ea: no other site between them
+        if i >= 0 and ea - eas[i] <= NOP_WINDOW and (prev is None or eas[i] > prev):
+            near = [s for kind, s in sites[eas[i]] if kind == "jump"]
+            f = ida_funcs.get_func(eas[i]) if near else None
+            if f is not None and f.start_ea == cfunc.entry_ea:
+                at.setdefault(ea, []).extend(pseudo_text(p, "jump", s, before=True) for s in near)
+        prev = ea
+    lines = {}
+    for ea, texts in at.items():
+        for insn in eamap[ea]:
+            coords = cfunc.find_item_coords(insn)  # (x, y), or (None, None) if the item is not in the text
+            if isinstance(coords, (tuple, list)) and len(coords) == 2 and isinstance(coords[1], int):
+                have = lines.setdefault(coords[1], [])
+                have.extend(text for text in texts if text not in have)
+    return lines
+
+
+def add_pseudocode_comments(cfunc):
+    """Display-only text appended to the printed lines; nothing is stored in the database."""
+    lines = pseudocode_lines(cfunc)
+    if not lines:
+        return 0
+    sv = cfunc.get_pseudocode()
+    done = 0
+    for y, texts in sorted(lines.items()):
+        if 0 <= y < len(sv):
+            sv[y].line += ida_lines.COLSTR("  // " + "; ".join(texts), ida_lines.SCOLOR_AUTOCMT)
+            done += 1
+    return done
+
+
+def hook_pseudocode():
+    """Install the decompiler hook once, if Hex-Rays is there. Without it kflow works as before."""
+    if STATE["hx"] is not None:
+        return True
+    try:
+        import ida_hexrays
+        if not ida_hexrays.init_hexrays_plugin():
+            return False
+
+        class PseudocodeHooks(ida_hexrays.Hexrays_Hooks):
+            def func_printed(self, cfunc):
+                try:
+                    add_pseudocode_comments(cfunc)
+                except Exception:  # noqa: BLE001  a hook must never break the decompiler
+                    try:
+                        if not STATE["hx_error"]:
+                            STATE["hx_error"] = True
+                            report("pseudocode comment failed (shown once):\n%s" % traceback.format_exc())
+                    except Exception:  # noqa: BLE001
+                        pass
+                return 0
+
+        hooks = PseudocodeHooks()
+        if hooks.hook():
+            STATE["hx"] = hooks
+    except Exception:  # noqa: BLE001  no decompiler, or an unexpected one: carry on without the hook
+        STATE["hx"] = None
+    return STATE["hx"] is not None
+
+
+def unhook_pseudocode():
+    hooks, STATE["hx"] = STATE["hx"], None
+    STATE["pseudo"] = None
+    if hooks is not None:
+        try:
+            hooks.unhook()
+        except Exception:  # noqa: BLE001
+            traceback.print_exc()
+
+
+def flush_pseudocode():
+    """Drop cached decompilations so the next decompile prints (or stops printing) our comments."""
+    if STATE["hx"] is None:
+        return
+    try:
+        import ida_hexrays
+        ida_hexrays.clear_cached_cfuncs()
+    except Exception:  # noqa: BLE001
+        pass
+
+
 class AnnotateAction(ida_kernwin.action_handler_t):
     @guarded
     def activate(self, ctx):
@@ -81,6 +225,10 @@ class AnnotateAction(ida_kernwin.action_handler_t):
             ida_kernwin.hide_wait_box()
         report("comments: %d, references added: %d, user comments kept: %d"
                % (res["comments"], res["xrefs"], res["kept_user_comments"]))
+        if hook_pseudocode():
+            STATE["pseudo"] = pseudo_index(t, idalayer.current_arch(), idalayer.layout())
+            flush_pseudocode()
+            report("pseudocode comments on: functions decompiled from now on show the sites (display only)")
         return 1
 
     def update(self, ctx):
@@ -167,6 +315,8 @@ class RemoveAction(ida_kernwin.action_handler_t):
         finally:
             ida_kernwin.hide_wait_box()
         report("references removed: %d" % removed)
+        STATE["pseudo"] = None
+        flush_pseudocode()
         return 1
 
     def update(self, ctx):
@@ -192,6 +342,7 @@ class KflowPlugin(ida_idaapi.plugin_t):
         for name, label, handler in ACTIONS:
             ida_kernwin.register_action(ida_kernwin.action_desc_t(name, label, handler()))
             ida_kernwin.attach_action_to_menu("Edit/Plugins/", name, ida_kernwin.SETMENU_APP)
+        hook_pseudocode()
         report("%s loaded" % __version__)
         return ida_idaapi.PLUGIN_KEEP
 
@@ -199,6 +350,7 @@ class KflowPlugin(ida_idaapi.plugin_t):
         ida_kernwin.process_ui_action("kflow:annotate")
 
     def term(self):
+        unhook_pseudocode()
         for name, _, _ in ACTIONS:
             ida_kernwin.unregister_action(name)
 

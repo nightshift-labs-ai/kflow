@@ -173,11 +173,22 @@ def key_name(ea):
     return core.key_label(real_name, ea, read, nearest_name) or "0x%X" % ea
 
 
-def jump_comment(j):
+def jump_when(j):
     # the kernel makes the site a jump when (key enabled) XOR (branch bit): jump_label_type() in kernel/jump_label.c
+    return "jumps to 0x%X when the key is %s" % (j.target, "off" if j.branch else "on")
+
+
+def jump_comment(j):
     kind = "static_branch_likely" if j.branch else "static_branch_unlikely"
-    return ("%s: static key %s (%s): runtime-patched NOP/branch; jumps to 0x%X when the key is %s"
-            % (TAG, key_name(j.key), kind, j.target, "off" if j.branch else "on"))
+    return "%s: static key %s (%s): runtime-patched NOP/branch; %s" % (TAG, key_name(j.key), kind, jump_when(j))
+
+
+def jump_pseudo_text(j, name=None, before=False):
+    """The pseudocode version of jump_comment: key, likely/unlikely, when the site jumps. before: the site has no
+    statement of its own, so the text sits on the line of the next address that has one."""
+    at = " at 0x%X, just before this line" % j.code if before else ""
+    return "%s: static key %s (%s)%s: %s" % (TAG, name or key_name(j.key), "likely" if j.branch else "unlikely", at,
+                                             jump_when(j))
 
 
 def ex_comment(x, arch):
@@ -278,6 +289,18 @@ def annotate(t, arch=None):
             _set(x.insn, ex_comment(x, arch), res)
             res["xrefs"] += _add(x.insn, x.fixup, node, arch)
     return res
+
+
+def annotated():
+    """True when the database carries kflow's annotations: Annotate creates the record of added references (even
+    if it adds none), Remove deletes it."""
+    return ida_netnode.netnode(NODE, 0, False).index() != ida_netnode.BADNODE
+
+
+def layout():
+    """Segment bounds; they change when the database is rebased (Edit > Segments > Rebase program)."""
+    segs = (ida_segment.getnseg(i) for i in range(ida_segment.get_segm_qty()))
+    return tuple((s.start_ea, s.end_ea) for s in segs if s is not None)
 
 
 def code_refs_from(ea):

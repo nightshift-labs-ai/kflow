@@ -42,6 +42,8 @@ def install(w, names=True):
     m["ida_segment"].getseg = getseg
     m["ida_segment"].get_segm_by_name = lambda n: next((s for s in w["segs"] if s.name == n), None)
     m["ida_segment"].SEGPERM_EXEC, m["ida_segment"].SEG_CODE = 1, 2
+    m["ida_segment"].get_segm_qty = lambda: len(w["segs"])
+    m["ida_segment"].getnseg = lambda n: w["segs"][n] if 0 <= n < len(w["segs"]) else None
     m["ida_bytes"].get_bytes = lambda ea, n: elf.read(ea, n)
     m["ida_bytes"].is_loaded = lambda ea: elf.read(ea, 1) is not None
     m["ida_bytes"].get_cmt = lambda ea, rep: w["cmts"].get(ea)
