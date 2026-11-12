@@ -40,13 +40,28 @@ def _unpack(path, d):
     return d
 
 
+VMLINUX_TO_ELF = "https://github.com/marin-m/vmlinux-to-elf"
+
+
+def _not_elf_hint(path, d):
+    """The message for a file that is not an ELF; the two kernel formats people try first get the tool to convert them."""
+    if d[0x38:0x3C] == b"ARM\x64":
+        return ("%s is a raw arm64 kernel Image, not an ELF: turn it into one with vmlinux-to-elf (%s), which also "
+                "restores the kallsyms names" % (path, VMLINUX_TO_ELF))
+    if d[0x202:0x206] == b"HdrS":
+        return ("%s is a compressed x86 kernel (bzImage / vmlinuz), not an ELF: turn it into one with vmlinux-to-elf "
+                "(%s; it also restores the kallsyms names), or unpack it with the kernel's scripts/extract-vmlinux"
+                % (path, VMLINUX_TO_ELF))
+    return "%s is not an ELF file" % path
+
+
 class Elf:
     def __init__(self, path):
         self.path = path
         with open(path, "rb") as fh:
             d = _unpack(path, fh.read())
         if d[:4] != b"\x7fELF":
-            raise InputError("%s is not an ELF file" % path)
+            raise InputError(_not_elf_hint(path, d))
         if d[4] != 2 or d[5] != 1:
             raise InputError("only 64-bit little-endian ELF is supported")
         self.data = d

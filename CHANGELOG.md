@@ -6,6 +6,7 @@ Taken from the GitHub release notes. Newest first.
 
 - ELF files with extended section numbering (0xff00 or more sections: `e_shnum` 0, `e_shstrndx` `SHN_XINDEX`, symbol section indexes in `.symtab_shndx`) are read; before, kflow saw no sections in them. Synthetic test.
 - A kernel module's relocations are applied in place instead of in a second copy of the file (output unchanged on nf_tables.ko, ext4.ko and a Debian 5.10 kernel).
+- A raw arm64 kernel `Image` (also gzip-compressed, as Ubuntu's arm64 `vmlinuz`) or an x86 `bzImage` / `vmlinuz` now gets a message naming the tool that turns it into an ELF (vmlinux-to-elf, or extract-vmlinux on x86), not just "is not an ELF file".
 
 ## v0.0.1 (2026-11-12)
 

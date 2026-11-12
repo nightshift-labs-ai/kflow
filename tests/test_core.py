@@ -254,6 +254,27 @@ class Module(unittest.TestCase):
         self.assertEqual([(b.addr, b.file, b.line) for b in tq["bug"]], [(b.addr, b.file, b.line) for b in tp["bug"]])
         self.assertEqual([(j.code, j.target) for j in tq["jump"]], [(j.code, j.target) for j in tp["jump"]])
 
+    def test_kernel_images_get_a_hint(self):
+        import gzip
+        import tempfile
+        from kflow.cli import Elf, InputError
+        image = bytearray(0x400)
+        image[0x38:0x3C] = b"ARM\x64"  # arm64 Image header magic
+        bz = bytearray(0x400)
+        bz[0x202:0x206] = b"HdrS"  # x86 boot protocol header
+        cases = [("Image", bytes(image), "raw arm64 kernel Image"), ("vmlinuz", gzip.compress(bytes(image)), "raw arm64"),
+                 ("bzImage", bytes(bz), "compressed x86 kernel"), ("other", bytes(0x400), "is not an ELF file")]
+        with tempfile.TemporaryDirectory() as d:
+            for name, blob, expected in cases:
+                p = os.path.join(d, name)
+                with open(p, "wb") as fh:
+                    fh.write(blob)
+                with self.assertRaises(InputError) as cm:
+                    Elf(p)
+                self.assertIn(expected, str(cm.exception), name)
+                if name != "other":
+                    self.assertIn("vmlinux-to-elf", str(cm.exception))
+
     def test_debug_only_file(self):
         import tempfile
         from kflow.cli import Elf, load
