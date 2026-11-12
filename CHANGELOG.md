@@ -8,7 +8,7 @@ First release.
 
 kflow reads three tables that every Linux kernel carries and IDA does not decode:
 
-- `__bug_table`: every `BUG()` / `WARN()` trap (`ud2` on x86_64, `brk #0x800` on arm64) with its source file and line, and whether the kernel continues after it (WARN) or not (BUG).
+- `__bug_table`: every `BUG()` / `WARN()` trap (`ud2` on x86_64, `brk #0x800` on arm64; on x86_64 from Linux 6.19 a WARN with a message is a call, and kflow says so) with its source file and line, and whether the kernel continues after it (WARN) or not (BUG).
 - `__jump_table`: every static-key site (a NOP or branch the kernel patches at runtime), its key and its branch target.
 - `__ex_table`: every instruction allowed to fault and its fixup.
 
