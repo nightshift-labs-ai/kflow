@@ -194,6 +194,7 @@ def hook_pseudocode():
 def unhook_pseudocode():
     hooks, STATE["hx"] = STATE["hx"], None
     STATE["pseudo"] = None
+    STATE["hx_error"] = False  # a later session reports its own first error
     if hooks is not None:
         try:
             hooks.unhook()

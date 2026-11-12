@@ -195,7 +195,9 @@ def decompile(eas, entry=0, extra=()):
         eamap[eas[0]].append(item)
     coords["far"] = (0, 99)
     cf = FakeCfunc(lines, eamap, coords, entry)
+    m.STATE["hx_error"] = False  # a crash inside the hook must not pass as "no comment"
     assert m.STATE["hx"].func_printed(cf) == 0
+    assert not m.STATE["hx_error"], "the pseudocode hook raised (see the Output messages)"
     out = {}
     for i, ea in enumerate(eas):
         line = cf.sv[2 + i].line
