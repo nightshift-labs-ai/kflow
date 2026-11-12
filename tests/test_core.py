@@ -340,5 +340,21 @@ class Versions(unittest.TestCase):
         self.assertEqual(manifest, code)
         self.assertEqual(newest, "v" + manifest)
 
+class CliArgs(unittest.TestCase):
+    def test_negative_limit_is_refused(self):
+        """--limit -1 used to print all rows but the last, then '... 9 more' for an 8-row table (judge s160 item 5):
+        a negative count is an argument error (exit 2), before any file is read."""
+        import contextlib
+        import io
+        from kflow import cli
+        for bad in ("-1", "-20"):
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err), self.assertRaises(SystemExit) as caught:
+                cli.main(["no-such-kernel.elf", "--list", "jump", "--limit", bad])
+            self.assertEqual(caught.exception.code, 2)
+            self.assertIn("--limit", err.getvalue())
+            self.assertIn("0 or more", err.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -392,11 +392,19 @@ def summary(elf, t):
     return lines
 
 
+def row_count(text):
+    """--limit: a whole number of rows, 0 or more (0 prints only the '... N more' line)."""
+    value = int(text)
+    if value < 0:
+        raise argparse.ArgumentTypeError("must be 0 or more, not %s" % text)
+    return value
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="kflow", description=__doc__.splitlines()[0])
     ap.add_argument("kernel")
     ap.add_argument("--list", choices=["bug", "warn", "jump", "ex"])
-    ap.add_argument("--limit", type=int, help="rows for --list (default 20)")
+    ap.add_argument("--limit", type=row_count, help="rows for --list, 0 or more (default 20)")
     ap.add_argument("--json")
     ap.add_argument("--oops", metavar="LOG", help="a kernel log (a WARNING / kernel BUG / RIP / pc line or a whole "
                     "report; - reads stdin): print the BUG/WARN site it names")

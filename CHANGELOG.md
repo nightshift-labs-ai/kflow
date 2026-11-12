@@ -2,6 +2,11 @@
 
 Taken from the GitHub release notes. Newest first.
 
+## Unreleased
+
+- `--limit` refuses a negative number (exit 2, `must be 0 or more`); `--limit -1` used to print all rows but the last and then a wrong `... N more` count.
+- README Features: Go to oops/WARN line says that a KASAN, UBSAN or lockdep report gives no match (it names no BUG/WARN trap).
+
 ## v0.0.4 (2026-11-15)
 
 - Annotate run while IDA's auto-analysis is still going no longer adds references from sites that are not instructions yet. The IDA SDK says the source of a cross-reference must be an item head and that `get_item_end()` counts unexplored bytes as 1-byte items, so on a freshly loaded kernel kflow's "the fixup is the next instruction" test could not match: such exception-table entries (common on arm64 from 5.16 and at x86's plain `rdmsr`/`wrmsr`, `EX_TYPE_RDMSR`/`WRMSR`) got a user jump reference that a later Annotate kept. Now a site that is not code (`ida_bytes.is_code(ida_bytes.get_flags(ea))`) gets its comment but no jump, data or static-key reference, and Annotate reports how many such sites there are and says to run it again after auto-analysis (also `tools/kflow_headless.py --no-analysis`). A later Annotate deletes a reference to the next instruction that an earlier one recorded (also one added by an older kflow), and reports it. This follows from reading the IDA SDK (`ida_xref`, `ida_bytes` stubs), not from a run in IDA; tested with fake `ida_*` modules only, which now model instruction heads (`get_flags`/`is_code`), real instruction ends where known and no functions while analysis runs. Found by a pre-release review of the IDA calls. `tests/check_ida_api.py` also checks `ida_bytes.get_flags` and `is_code`. When that later Annotate (or Remove) deletes such a reference and IDA's ordinary flow to the next instruction is gone afterwards (the SDK does not say whether `del_cref()` clears it), kflow puts the ordinary flow back (`fl_F`). On a database whose auto-analysis has finished, sites that are still not code are reported as "not code in IDA" with a hint to press C there, instead of "run Annotate again when auto-analysis has finished".
