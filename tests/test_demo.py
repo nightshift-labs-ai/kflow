@@ -14,6 +14,7 @@ t = load(e)
 # stripped vmlinux: no jump table symbols; a module (.ko) has only the tables its code needs
 assert not t["missing"] or t["missing"] == ["jump"] or (e.relocatable and set(t["missing"]) < {"bug", "jump", "ex"}), \
     t["missing"]
+assert not t.get("errors"), t["errors"]
 bugs, jumps, exs = t.get("bug", []), t.get("jump", []), t.get("ex", [])
 # every enabled jump-label site (x86 jmp rel8/rel32, arm64 b) must land on the decoded target
 checked = 0

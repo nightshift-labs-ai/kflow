@@ -60,8 +60,9 @@ def scan_or_warn():
                             "segments of those names: load a vmlinux with symbols or a kernel ELF with kallsyms names.")
         return None
     STATE["tables"] = t
-    report("found %d BUG/WARN sites (%s), %d static-key sites, %d exception-table sites; not found: %s"
-           % (len(t["bug"]), t.get("bug_layout") or "-", len(t["jump"]), len(t["ex"]), ", ".join(t["missing"]) or "none"))
+    report("found %d BUG/WARN sites (%s), %d static-key sites, %d exception-table sites; not found: %s%s"
+           % (len(t["bug"]), t.get("bug_layout") or "-", len(t["jump"]), len(t["ex"]), ", ".join(t["missing"]) or "none",
+              idalayer.not_decoded(t)))
     return t
 
 

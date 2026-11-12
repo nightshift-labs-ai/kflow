@@ -83,7 +83,7 @@ def table_range(kind):
 
 def scan():
     """Decode every table found. Returns dict: bug/jump/ex lists, layouts, missing kinds, where each was found."""
-    out = {"missing": [], "found_by": {}, "bug": [], "jump": [], "ex": []}
+    out = {"missing": [], "found_by": {}, "errors": {}, "bug": [], "jump": [], "ex": []}
     for kind in core.TABLES:
         r = table_range(kind)
         if r is None:
@@ -91,13 +91,21 @@ def scan():
             continue
         start, stop, how = r
         out["found_by"][kind] = how
-        if kind == "bug":
-            out["bug_layout"], out["bug"] = core.decode_bug_table(read, start, stop, in_text=in_text)
-        elif kind == "jump":
-            out["jump"] = core.decode_jump_table(read, start, stop)
-        else:
-            out["ex_layout"], out["ex"] = core.decode_ex_table(read, start, stop, in_text=in_text)
+        try:  # one table in a layout kflow does not know must not hide the others
+            if kind == "bug":
+                out["bug_layout"], out["bug"] = core.decode_bug_table(read, start, stop, in_text=in_text)
+            elif kind == "jump":
+                out["jump"] = core.decode_jump_table(read, start, stop, in_text=in_text)
+            else:
+                out["ex_layout"], out["ex"] = core.decode_ex_table(read, start, stop, in_text=in_text)
+        except ValueError as error:
+            out["errors"][kind] = str(error)
     return out
+
+
+def not_decoded(t):
+    """'; not decoded: jump (reason)' for the tables whose layout kflow could not read, else ''."""
+    return "".join("; not decoded: %s (%s)" % (k, e) for k, e in t.get("errors", {}).items())
 
 
 def name_or_hex(ea):

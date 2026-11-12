@@ -203,7 +203,7 @@ class Elf:
 
 def load(elf):
     """Decode every table that has __start_/__stop_ symbols. Returns dict."""
-    out = {"missing": [], "found_by": {}}
+    out = {"missing": [], "found_by": {}, "errors": {}}
     for kind, (s, e) in TABLES.items():
         if s in elf.symbols and e in elf.symbols:
             start, stop = elf.symbols[s], elf.symbols[e]
@@ -214,12 +214,15 @@ def load(elf):
         else:
             out["missing"].append(kind)
             continue
-        if kind == "bug":
-            out["bug_layout"], out["bug"] = decode_bug_table(elf.read, start, stop, in_text=elf.in_text)
-        elif kind == "jump":
-            out["jump"] = decode_jump_table(elf.read, start, stop)
-        else:
-            out["ex_layout"], out["ex"] = decode_ex_table(elf.read, start, stop, in_text=elf.in_text)
+        try:  # one table in a layout kflow does not know must not hide the others
+            if kind == "bug":
+                out["bug_layout"], out["bug"] = decode_bug_table(elf.read, start, stop, in_text=elf.in_text)
+            elif kind == "jump":
+                out["jump"] = decode_jump_table(elf.read, start, stop, in_text=elf.in_text)
+            else:
+                out["ex_layout"], out["ex"] = decode_ex_table(elf.read, start, stop, in_text=elf.in_text)
+        except ValueError as error:
+            out["errors"][kind] = str(error)
     return out
 
 
@@ -258,6 +261,8 @@ def summary(elf, t):
                      % (t["ex_layout"], len(exs), same, ", ".join("%s %d" % kv for kv in types.most_common(6))))
     if t["missing"]:
         lines.append("not found (no __start_/__stop_ symbols or section): %s" % ", ".join(t["missing"]))
+    for kind, error in t.get("errors", {}).items():
+        lines.append("not decoded: %s (%s)" % (kind, error))
     by_section = [k for k, v in t["found_by"].items() if v == "section"]
     if by_section:
         lines.append("found by section name (no symbols): %s" % ", ".join(by_section))

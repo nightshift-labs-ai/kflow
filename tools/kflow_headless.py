@@ -48,8 +48,9 @@ def main(argv=None):
         except ValueError as error:
             print("kflow_headless: %s" % error, file=sys.stderr)
             return 3
-        print("[kflow] BUG/WARN %d (%s), static-key %d, exception-table %d; not found: %s"
-              % (len(t["bug"]), t.get("bug_layout") or "-", len(t["jump"]), len(t["ex"]), ", ".join(t["missing"]) or "none"))
+        print("[kflow] BUG/WARN %d (%s), static-key %d, exception-table %d; not found: %s%s"
+              % (len(t["bug"]), t.get("bug_layout") or "-", len(t["jump"]), len(t["ex"]), ", ".join(t["missing"]) or "none",
+                 idalayer.not_decoded(t)))
         if args.remove:
             print("[kflow] references removed: %d" % idalayer.remove_annotations(t))
         else:

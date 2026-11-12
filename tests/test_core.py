@@ -112,6 +112,20 @@ class Tables(unittest.TestCase):
             decode_ex_table(m.read, BASE, BASE + 13)
 
 
+class OldJump(unittest.TestCase):
+    def test_absolute_24_byte_entries_rejected(self):
+        # Linux before 5.0: {u64 code, u64 target, u64 key} absolute. 2 entries = 48 bytes, a multiple of 16.
+        m = Mem()
+        start = BASE + 0x800
+        for k in range(2):
+            m.put(start + 24 * k, struct.pack("<QQQ", BASE + 0x100 + k, BASE + 0x180, BASE + 0x3000))
+        text = lambda ea: BASE <= ea < BASE + 0x400  # noqa: E731
+        with self.assertRaises(ValueError):
+            decode_jump_table(m.read, start, start + 48, in_text=text)
+        # the same bytes without a code check decode to garbage silently: in_text is what catches it
+        self.assertEqual(len(decode_jump_table(m.read, start, start + 48)), 3)
+
+
 class Keys(unittest.TestCase):
     def test_key_labels(self):
         from kflow.core import key_label
