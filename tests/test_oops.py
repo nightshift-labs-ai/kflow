@@ -843,6 +843,15 @@ class Resolve(unittest.TestCase):
         self.assertEqual((m.status, m.address), ("near", 0xFFFFFFFF8E629F1F))
         rep, m = find("RIP: 0010:no_sites_fn+0x100/0x200")  # past the end of a function without sites: nothing
         self.assertEqual((m.status, m.address, m.candidates), ("none", None, []))
+        # review s161 MINOR 2: past the end, on the next function's site (lib/pad.c:1 right after padded_fn's code, the
+        # BUG at switched_to_stop+0x0 right after task_tick_stop): not that site, whatever the line, with or without size
+        for text in ("RIP: 0010:padded_fn+0x9c3", "RIP: 0010:padded_fn+0x9c3/0x9d0", "padded_fn+0x9c3/0x...",
+                     "WARNING: CPU: 1 PID: 9 at padded_fn+0x9c3/0x9d0", "pc : task_tick_stop+0x8/0x8"):
+            rep, m = find(text)
+            self.assertEqual((m.status, m.address, m.site), ("none", None, None), (text, m.status))
+            p = rep.primary
+            self.assertEqual(m.notes, ["%s+%#x is past the end of %s here (%#x bytes): a log from another build?" % (
+                p.function, p.offset, p.function, FUNCS[p.function][0].size)])
 
     def test_mismatch(self):
         """A site at the log's address that the log itself contradicts (its WARNING / kernel BUG line names another

@@ -513,7 +513,10 @@ def _resolve(report, sites, symbols, module=None, is_module=False):
             if not starts:
                 notes.append("no function %s in this file" % cur.function)
                 continue
-            hits = [f for f in starts if f.start + cur.offset in by_addr]
+            # inside the function as this file has it, not on the next one's site (review s161 MINOR 2); a lone 'Kernel
+            # BUG at %pB' names a trap at a function's first byte as the previous symbol + its size (see _contradicts)
+            hits = [f for f in starts if f.start + cur.offset in by_addr and (
+                f.size is None or cur.offset < f.size or (cur.source == "bug" and cur.offset in (f.size, f.printed)))]
             if len(hits) > 1 and want_file:  # static functions of the same name, each with a site at this offset
                 hits = [f for f in hits if by_addr[f.start + cur.offset].line == want_line
                         and same_file(by_addr[f.start + cur.offset].file, want_file)] or hits
