@@ -11,6 +11,9 @@ if len(sys.argv) < 2:
     sys.exit(0)
 e = Elf(sys.argv[1])
 t = load(e)
+if e.relocatable and len(t["missing"]) == 3:
+    print("SKIP: this module has none of the three tables")
+    sys.exit(0)
 # stripped vmlinux: no jump table symbols; a module (.ko) has only the tables its code needs
 assert not t["missing"] or t["missing"] == ["jump"] or (e.relocatable and set(t["missing"]) < {"bug", "jump", "ex"}), \
     t["missing"]

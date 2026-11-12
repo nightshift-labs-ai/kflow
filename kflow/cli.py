@@ -24,10 +24,17 @@ def _unpack(path, d):
             import lzma
         except ImportError:
             raise InputError("%s is xz-compressed and this Python has no lzma module: run xz -dk on it first" % path)
-        return lzma.decompress(d)
+        try:
+            return lzma.decompress(d)
+        except (lzma.LZMAError, EOFError) as e:
+            raise InputError("%s: cannot decompress (%s)" % (path, e))
     if d[:2] == b"\x1f\x8b":
         import gzip
-        return gzip.decompress(d)
+        import zlib
+        try:
+            return gzip.decompress(d)
+        except (OSError, EOFError, zlib.error) as e:
+            raise InputError("%s: cannot decompress (%s)" % (path, e))
     if d[:4] == b"\x28\xb5\x2f\xfd":
         raise InputError("%s is zstd-compressed: run zstd -d on it first" % path)
     return d
@@ -108,6 +115,7 @@ class Elf:
     # --- kernel modules (ET_REL): lay the allocated sections out from BASE in file order, put undefined symbols in
     # 8-byte slots after them (like a disassembler's extern segment), then apply the relocations the tables need.
     BASE = 0x10000
+    EXTERN_SLOT = 0x100  # room for "symbol + member offset" (a tracepoint's key is __tracepoint_X + 8)
     REL = {  # type: (size, pc-relative, signed)
         "x86_64": {1: (8, False, False), 2: (4, True, True), 4: (4, True, True), 10: (4, False, False),
                    11: (4, False, True), 24: (8, True, True)},
@@ -170,7 +178,7 @@ class Elf:
                 return 0
             if name not in self.externs:
                 self.externs[name] = self._ext_next
-                self._ext_next += 8
+                self._ext_next += self.EXTERN_SLOT
             return self.externs[name]
         if shndx == 0xFFF1:  # absolute
             return value

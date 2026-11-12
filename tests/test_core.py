@@ -171,20 +171,22 @@ def module_elf(path):
     """A minimal x86_64 relocatable ELF (.ko) with one BUG entry and one static-key entry, both only meaningful
     after relocation: .text = ud2 + 2-byte NOP, .rodata.str = "\\0a/b.c\\0", the key is an undefined symbol."""
     text, rodata = b"\x0f\x0b\x66\x90", b"\0a/b.c\0"
-    bug, jump = bytes(12), bytes(16)
+    bug, jump = bytes(12), bytes(32)
     struct_bug = bytearray(bug)
     struct.pack_into("<HH", struct_bug, 8, 42, 1 << 0)  # line 42, BUGFLAG_WARNING
-    strtab = b"\0my_key\0"
+    strtab = b"\0my_key\0__tracepoint_foo\0"
     names = [b"", b".text", b".rodata.str", b"__bug_table", b".rela__bug_table", b"__jump_table",
              b".rela__jump_table", b".symtab", b".strtab", b".shstrtab"]
     shstr = b"\0".join(names) + b"\0"
     off = {n: shstr.index(b"\0" + n + b"\0") + 1 if n else 0 for n in names}
-    # symbols: 0 null, 1 section .text, 2 section .rodata.str, 3 undefined my_key (global)
+    # symbols: 0 null, 1 section .text, 2 section .rodata.str, 3 undefined __tracepoint_foo, 4 undefined my_key
+    # (a core-kernel tracepoint used from a module: its key is __tracepoint_foo + 8, which must not land on my_key)
     sym = bytes(24) + struct.pack("<IBBHQQ", 0, 3, 0, 1, 0, 0) + struct.pack("<IBBHQQ", 0, 3, 0, 2, 0, 0) \
-        + struct.pack("<IBBHQQ", 1, 0x10, 0, 0, 0, 0)
+        + struct.pack("<IBBHQQ", 8, 0x10, 0, 0, 0, 0) + struct.pack("<IBBHQQ", 1, 0x10, 0, 0, 0, 0)
     rela = lambda o, s, t, a: struct.pack("<QQq", o, (s << 32) | t, a)  # noqa: E731
     rbug = rela(0, 1, 2, 0) + rela(4, 2, 2, 1)  # PC32: insn -> .text+0, file -> .rodata.str+1
-    rjump = rela(0, 1, 2, 2) + rela(4, 1, 2, 4) + rela(8, 3, 24, 0)  # code .text+2, target .text+4, key my_key (PC64)
+    rjump = rela(0, 1, 2, 2) + rela(4, 1, 2, 4) + rela(8, 4, 24, 0) \
+        + rela(16, 1, 2, 2) + rela(20, 1, 2, 4) + rela(24, 3, 24, 8)  # keys: my_key; __tracepoint_foo + 8 (PC64)
     blobs = [b"", text, rodata, bytes(struct_bug), rbug, jump, rjump, sym, strtab, shstr]
     body, offs = b"", []
     for b in blobs:
@@ -221,8 +223,9 @@ class Module(unittest.TestCase):
         self.assertEqual(t["missing"], ["ex"])
         (b,) = t["bug"]
         self.assertEqual((b.addr, b.file, b.line, b.warn), (text, "a/b.c", 42, True))
-        (j,) = t["jump"]
-        self.assertEqual((j.code, j.target, j.key), (text + 2, text + 4, e.symbols["my_key"]))  # PC64 key: also checks 8-byte relocations
+        j, j2 = t["jump"]
+        self.assertEqual((j.code, j.target, j.key), (text + 2, text + 4, e.symbols["my_key"]))
+        self.assertEqual(e.key_name(j2.key), "tracepoint foo")  # PC64 key: also checks 8-byte relocations
         self.assertEqual(e.by_addr[j.key], "my_key")
         self.assertGreater(j.key, max(end for a, end in e.sections.values()))  # extern slot after the sections
 
@@ -242,6 +245,7 @@ class Module(unittest.TestCase):
                     fh.write(pack(raw))
                 self.assertEqual(load(Elf(q))["bug"][0].file, ref[0].file)
             for name, data in (("cut.ko", raw[:200]), ("zst.ko.zst", b"\x28\xb5\x2f\xfd" + bytes(20)),
+                               ("cut.ko.xz", lzma.compress(raw)[:60]), ("cut.ko.gz", gzip.compress(raw)[:40]),
                                ("junk.elf", b"\x7fELF\x02\x01" + b"\xff" * 100)):
                 q = os.path.join(d, name)
                 with open(q, "wb") as fh:
