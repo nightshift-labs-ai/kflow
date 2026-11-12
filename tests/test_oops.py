@@ -878,8 +878,16 @@ class Resolve(unittest.TestCase):
         rep, m = find("WARNING: CPU: 1 PID: 9 at do_one_initcall+0x27c/0x310\nRIP: 0010:mfill_atomic_copy+0x674/0x9d0")
         self.assertEqual((m.status, m.address, m.site), ("mismatch", None, None), (m.status, m.reason))
         self.assertIn("is not the log's WARNING line's do_one_initcall+0x27c", m.reason)
-        rep, m = find("WARNING: CPU: 1 PID: 9 at do_one_initcall+0x27c/0x310\nRIP: 0010:do_one_initcall+0x27c/0x310")
-        self.assertNotEqual(m.status, "mismatch", m.reason)  # header and RIP agree: unchanged
+        # header and RIP / pc line agree (the normal report of a kernel without CONFIG_DEBUG_BUGVERBOSE): exact (review
+        # s161 MINOR 3: the old check used a function without sites, so a rule that always fired passed it)
+        for text, want in (("WARNING: CPU: 1 PID: 9 at mfill_atomic_copy+0x674/0x9d0\nRIP: 0010:mfill_atomic_copy+0x674/0x9d0",
+                            0xFFFFFFFF8E629BC4),
+                           ("WARNING: at mfill_atomic_copy+0x674/0x9d0, CPU#1: t/9\npc : mfill_atomic_copy+0x674/0x9d0",
+                            0xFFFFFFFF8E629BC4),
+                           ("Kernel BUG at folio_unlock+0x70/0xd0 [verbose debug info unavailable]\n"
+                            "RIP: 0010:folio_unlock+0x70/0xd0", 0xFFFFFFFF81000110)):
+            rep, m = find(text)
+            self.assertEqual((m.status, m.address, m.reason), ("exact", want, None), text)
         # review s161 MINOR 1: without CONFIG_DEBUG_BUGVERBOSE report_bug() prints 'Kernel BUG at %pB'; %pB looks up
         # addr-1 and prints offset+1, so a BUG at a function's first byte is printed as the previous symbol + its size.
         # It names the same address as the pc / RIP line: exact, also alone
@@ -1021,6 +1029,7 @@ class Resolve(unittest.TestCase):
 def whole_kernel(path):
     """Every BUG/WARN site inside a function of this file: a RIP (x86_64) or pc (arm64) line built from its function
     and offset resolves to it; and each file:line gives exactly the sites at that line."""
+    import bisect
     from kflow.cli import Elf, load
     elf = Elf(path)
     t = load(elf)
@@ -1032,7 +1041,9 @@ def whole_kernel(path):
     first_at = {}
     for b in bugs:
         first_at.setdefault(b.addr, b)
-    done = same_name = headed = contradicted = 0
+    # kallsyms' symbols, for %pB below (mapping symbols and .L labels are not among them; see Elf.printed_size)
+    ksyms = sorted(a for a, n in elf.by_addr.items() if not n.startswith(("$", ".L")))
+    done = same_name = headed = contradicted = unverbose = 0
     for b in bugs:
         name = elf.func(b.addr)
         if not name or first_at[b.addr] is not b:
@@ -1051,6 +1062,27 @@ def whole_kernel(path):
             assert not m.notes or (elf.relocatable and not tag and len(m.notes) == 1
                                    and "in the kernel image (no [module] after it)" in m.notes[0]), m.notes
         done += 1
+        # the report of a kernel without CONFIG_DEBUG_BUGVERBOSE (review s161 MINOR 3): __warn()'s 'WARNING: CPU: %d
+        # PID: %d at %pS', or report_bug()'s 'Kernel BUG at %pB [verbose debug info unavailable]', where %pB names the
+        # kallsyms symbol of addr-1 with offset+1 (for a BUG at a function's first byte: the previous symbol + its size;
+        # the kernel prints a Clang LTO name without its suffix). With the RIP / pc line: exact (among same-named
+        # functions: listed); the line alone: exact, or listed among same-named functions
+        if b.warn:
+            head = "WARNING: CPU: 1 PID: 9 at %s+%#x/%#x%s" % (name, b.addr - start, printed or size, tag)
+        else:
+            k = ksyms[bisect.bisect_right(ksyms, b.addr - 1) - 1]
+            sym = elf.by_addr[k]
+            sym = sym.split(".")[0] if oops.lto_suffix(sym, sym.split(".")[0]) else sym
+            head = "Kernel BUG at %s+%#x/%#x%s [verbose debug info unavailable]" % (
+                sym, b.addr - k, (printed or size) if k == start else elf.printed_size(k) or b.addr - k, tag)
+        for text in (head + "\n" + at, head):
+            m = oops.resolve(oops.parse(text), index, elf.function_starts, mod, elf.relocatable)
+            if several or text == head:
+                assert (m.status, m.address) == ("exact", b.addr) or (m.status == "ambiguous" and b in m.candidates), (
+                    hex(b.addr), text, m.status, m.reason, m.notes)
+            else:
+                assert (m.status, m.address) == ("exact", b.addr), (hex(b.addr), text, m.status, m.reason, m.notes)
+        unverbose += 1
         if not b.file:
             continue
         # the whole report as this build prints it (its WARNING / kernel BUG line names the site's own file:line and
@@ -1136,13 +1168,15 @@ def whole_kernel(path):
         assert m.status != "exact" or (m.site.where().endswith(want) and m.site.warn), (want, m)
         other += m.status == "mismatch"
     print("OK oops on %s: %d of %d BUG/WARN sites in functions found from their %sfunc+0xoff/0xsize line (%d of them "
-          "among same-named functions: listed as candidates); %d of them also with their own WARNING / kernel BUG line, "
+          "among same-named functions: listed as candidates); %d also with the WARNING / Kernel BUG line of a kernel "
+          "without CONFIG_DEBUG_BUGVERBOSE (%%pS / %%pB), and from that line alone; %d of them also with their own "
+          "WARNING / kernel BUG line, "
           "%d with another line or kind: mismatch; %d in functions with a Clang LTO suffix also from the name the kernel "
           "prints (%d of the lookups listed same-named candidates); %d functions whose printed size is not their ELF size: "
           "no size note; "
           "file:line checked for %d lines; %d logs from another build: mismatch; --oops exit status, output and --json "
-          "checked" % (os.path.basename(path), done, len(bugs), reg, same_name, headed, contradicted, cut, cut_listed,
-                       padded, len(lines), other))
+          "checked" % (os.path.basename(path), done, len(bugs), reg, same_name, unverbose, headed, contradicted, cut,
+                       cut_listed, padded, len(lines), other))
 
 
 def cli_check(path, elf, bugs, reg, tag):
