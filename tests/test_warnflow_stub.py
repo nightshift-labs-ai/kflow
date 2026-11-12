@@ -511,6 +511,16 @@ assert snap(m) == on and len(w["listeners"]) == 1 and len(w["filters"]) == 1
 w["auto_ok"] = False  # IDA's auto-analysis still running: refused, nothing changed
 assert m.WarnFlowAction().activate(None) == 0 and snap(m) == on and len(w["listeners"]) == 1
 w["auto_ok"] = True
+# undo of the enable action takes the record away: the hook and the filter follow the database (ev_ending_undo)
+on_offsets = set(m.STATE["wf"].offsets)
+saved = w["netnodes"].pop(il.WARN_NODE)
+for h in list(w["listeners"]):
+    assert h.ev_ending_undo("kflow:warnflow", True) == 0
+assert not m.STATE["wf"].offsets and not m.STATE["wf_filter"].offsets and not m.STATE["wf_filter"].match(cdg(s0))
+w["netnodes"][il.WARN_NODE] = saved  # redo
+for h in list(w["listeners"]):
+    h.ev_ending_undo("kflow:warnflow", False)
+assert m.STATE["wf"].offsets == on_offsets and m.STATE["wf_filter"].match(cdg(s0))
 assert res2["flow"] == res2["sites"] == res["sites"] and res2["tails"] == 0 and res2["other_func"] == res["other_func"]
 
 # ---- 5b. Annotate / Remove give the same results with WARN fall-through on ----

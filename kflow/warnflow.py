@@ -67,6 +67,7 @@ class WarnFlowHook(ida_idp.IDP_Hooks):
     def __init__(self):
         ida_idp.IDP_Hooks.__init__(self, 0, 0)  # not HKCB_GLOBAL: never outlives the database (SDK idp.hpp)
         self.offsets = set()
+        self.on_undo = None  # set by the plugin: also resync the decompiler filter
 
     def ev_emu_insn(self, insn):
         try:
@@ -78,6 +79,17 @@ class WarnFlowHook(ida_idp.IDP_Hooks):
             return 1  # handled (ud2 has no operands); 0 would run IDA's own emulation too (ana_emu_out.py)
         except Exception:  # noqa: BLE001  a processor hook must never break IDA's analysis
             return 0
+
+    def ev_ending_undo(self, action_name, is_undo):
+        """Undo/redo changed the database (the record included): take the sites from it again, as the official
+        sample py_mex1.py advises, so the hook never adds flow the database no longer records."""
+        try:
+            self.offsets = site_offsets(records())
+            if self.on_undo is not None:
+                self.on_undo(self.offsets)
+        except Exception:  # noqa: BLE001
+            pass
+        return 0
 
 
 def records():

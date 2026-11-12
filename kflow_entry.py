@@ -337,9 +337,15 @@ def warnflow_hook(offsets=()):
         hook = warnflow.WarnFlowHook()
         if not hook.hook():
             return None
+        hook.on_undo = _warnflow_resync_filter
         STATE["wf"] = hook
     STATE["wf"].offsets = set(offsets)
     return STATE["wf"]
+
+
+def _warnflow_resync_filter(offsets):
+    if STATE["wf_filter"] is not None:
+        STATE["wf_filter"].offsets = set(offsets)
 
 
 def warnflow_filter(offsets):
@@ -461,6 +467,11 @@ class WarnFlowOffAction(ida_kernwin.action_handler_t):
     @guarded
     def activate(self, ctx):
         if not idalayer.warn_flow_recorded():
+            if STATE["wf"] is not None or STATE["wf_filter"] is not None:  # e.g. the enable action was undone
+                warnflow_stop()
+                report("WARN fall-through: no record in this database (undone?); kflow's processor hook and decompiler "
+                       "filter were still installed and are now removed")
+                return 1
             ida_kernwin.warning("kflow: WARN fall-through is not on in this database.")
             return 0
         from kflow import warnflow
