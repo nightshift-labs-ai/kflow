@@ -207,6 +207,95 @@ Call Trace:
  </TASK>
 """
 
+# registers that are not the report's trap (review s161 MAJOR 2). x86 prints the interrupted context's registers where a
+# call trace crosses an IRQ or exception entry (show_regs_if_on_stack / show_iret_regs: 'RIP: %04x:%pS'), so a KASAN
+# report raised in an interrupt has the RIP of the code it interrupted after 'Call Trace:'; hung-task and RCU-stall
+# reports print other CPUs' registers after 'NMI backtrace for cpu %d' (lib/nmi_backtrace.c; arm64: __show_regs 'pc :').
+# Each RIP / pc here lands on a BUG/WARN site of the synthetic table: taken as the trap, it would be an exact match
+KASAN_IRQ = """\
+[  301.000001] ==================================================================
+[  301.000010] BUG: KASAN: slab-use-after-free in folio_unlock+0x10/0xd0
+[  301.000020] Read of size 8 at addr ffff888012345678 by task swapper/0/0
+[  301.000040] CPU: 0 UID: 0 PID: 0 Comm: swapper/0 Not tainted 6.12.115+deb13.1-amd64 #1  Debian 6.12.115-2
+[  301.000060] Call Trace:
+[  301.000070]  <IRQ>
+[  301.000080]  dump_stack_lvl+0x5d/0x80
+[  301.000090]  print_report+0xcf/0x620
+[  301.000100]  kasan_report+0xb5/0xe0
+[  301.000110]  folio_unlock+0x10/0xd0
+[  301.000120]  __handle_irq_event_percpu+0x4a/0x1a0
+[  301.000140]  </IRQ>
+[  301.000150]  <TASK>
+[  301.000160]  asm_common_interrupt+0x26/0x40
+[  301.000170] RIP: 0010:mfill_atomic_copy+0x674/0x9d0
+[  301.000180] Code: 4c 01 c7 4c 29 c2 e9 72 ff ff ff 90 90 90 90 90 90 90 90 90 90 90 90 90 <fa> c3 cc cc cc cc 66 66 2e 0f
+[  301.000190] RSP: 0018:ffffffff8f803e78 EFLAGS: 00000202
+[  301.000200]  ? mfill_atomic_copy+0x670/0x9d0
+[  301.000210]  userfaultfd_ioctl+0x5d1/0x1e70
+[  301.000230]  </TASK>
+[  301.000240] ==================================================================
+"""
+HUNG_NMI = """\
+INFO: task kworker/u8:3:5123 blocked for more than 143 seconds.
+      Not tainted 6.12.115+deb13.1-amd64 #1
+"echo 0 > /proc/sys/kernel/hung_task_timeout_secs" disables this message.
+task:kworker/u8:3    state:D stack:0     pid:5123  tgid:5123  ppid:2      flags:0x00004000
+Call Trace:
+ <TASK>
+ __schedule+0x3f0/0xb40
+ schedule+0x27/0xf0
+ </TASK>
+NMI backtrace for cpu 1
+CPU: 1 UID: 0 PID: 29 Comm: khungtaskd Not tainted 6.12.115+deb13.1-amd64 #1  Debian 6.12.115-2
+Call Trace:
+ <TASK>
+ dump_stack_lvl+0x5d/0x80
+ nmi_cpu_backtrace+0xd0/0x100
+ </TASK>
+Sending NMI from CPU 1 to CPUs 0:
+NMI backtrace for cpu 0
+CPU: 0 UID: 0 PID: 4410 Comm: stress Not tainted 6.12.115+deb13.1-amd64 #1  Debian 6.12.115-2
+RIP: 0010:mfill_atomic_copy+0x674/0x9d0
+Code: 90 90 90
+RSP: 0018:ffffb37c4a8bfe08 EFLAGS: 00000246
+Call Trace:
+ <NMI>
+ ? nmi_cpu_backtrace+0x9d/0x100
+ </NMI>
+ <TASK>
+ userfaultfd_ioctl+0x5d1/0x1e70
+ </TASK>
+"""
+# an RCU stall: no call trace before the other CPU's registers, only its 'NMI backtrace for cpu' line; and on arm64 the
+# registers alone (a partial paste: arm64 repeats the pc as the first call-trace entry)
+RCU_NMI = """\
+rcu: INFO: rcu_preempt detected stalls on CPUs/tasks:
+rcu:     0-...!: (1 GPs behind) idle=b9c4/1/0x4000000000000000 softirq=8721/8722 fqs=2531
+rcu:     (detected by 1, t=10502 jiffies, g=12345, q=86 ncpus=2)
+Sending NMI from CPU 1 to CPUs 0:
+NMI backtrace for cpu 0
+CPU: 0 UID: 0 PID: 4410 Comm: stress Not tainted 6.12.115+deb13.1-amd64 #1  Debian 6.12.115-2
+RIP: 0010:mfill_atomic_copy+0x674/0x9d0
+Code: 90 90 90
+RSP: 0018:ffffb37c4a8bfe08 EFLAGS: 00000246
+Call Trace:
+ <NMI>
+ ? nmi_cpu_backtrace+0x9d/0x100
+ </NMI>
+ <TASK>
+ userfaultfd_ioctl+0x5d1/0x1e70
+ </TASK>
+"""
+RCU_NMI_ARM64 = """\
+<3>[  412.110000] rcu: INFO: rcu_preempt detected stalls on CPUs/tasks:
+<6>[  412.110030] Sending NMI from CPU 1 to CPUs 3:
+<4>[  412.110040] NMI backtrace for cpu 3
+<4>[  412.110050] CPU: 3 UID: 0 PID: 4021 Comm: nft Not tainted 6.12.94+deb13-arm64 #1  Debian 6.12.94-1
+<4>[  412.110060] pstate: 60400005 (nZCv daif +PAN -UAO -TCO -DIT -SSBS BTYPE=--)
+<4>[  412.110070] pc : nft_do_chain+0x400/0x6d0 [nf_tables]
+<4>[  412.110080] lr : nft_do_chain+0x2a0/0x6d0 [nf_tables]
+"""
+
 # panic_on_warn (kernel/panic.c, 6.12): __warn() prints the WARNING report (show_regs: registers, call trace), then
 # check_panic_on_warn("kernel") calls panic() before the end marker: 'Kernel panic - not syncing: kernel: panic_on_warn
 # set ...', then panic()'s own dump_stack(), which on x86 crosses the exception frame and prints the trap's RIP again.
@@ -504,7 +593,8 @@ class Parse(unittest.TestCase):
                          (1, "WARN", "lib/refcount.c", 28, "rip", "refcount_warn_saturate", 0xBE, 0x110))
         self.assertEqual((m.status, m.address, m.site.where()), ("exact", 0xFFFFFFFF8E8A531E, "lib/refcount.c:28"))
         self.assertFalse([n for n in m.notes if "reports" in n], m.notes)
-        self.assertEqual([x.source for x in rep.locations if x.source != "frame"], ["warning", "rip", "rip"])
+        # panic()'s dump shows the trap's RIP again inside its call trace: kept, but not as a trap line (review s161 MAJOR 2)
+        self.assertEqual([x.source for x in rep.locations if x.source != "frame"], ["warning", "rip", "regs"])
         rep, m = find(POW_ARM64)  # arm64: the panic's dump prints no pc line
         self.assertEqual((rep.reports, rep.primary.source, m.status, m.address), (1, "pc", "exact", 0xFFFFFFFF8E629BC4))
         self.assertFalse([n for n in m.notes if "reports" in n], m.notes)
@@ -548,6 +638,43 @@ class Parse(unittest.TestCase):
         self.assertEqual((m.status, m.address), ("exact", 0xFFFFFFFF8E629BC4))
         rep, m = find("mfill_atomic_copy+0x670")  # one bare line: the function's sites, as asked
         self.assertEqual((m.status, m.address), ("near", 0xFFFFFFFF8E629BC0))
+
+    def test_registers_not_the_trap(self):
+        """review s161 MAJOR 2: a RIP: / pc : line after the report's call trace began (x86 prints an interrupted
+        context's registers where the trace crosses an IRQ or exception entry) or after 'NMI backtrace for cpu N'
+        (another CPU's registers) is not the report's trap: kept as a 'regs' location, never the one to go to."""
+        for text in (KASAN_IRQ, HUNG_NMI, RCU_NMI):
+            rep, m = find(text)
+            self.assertEqual((rep.kind, m.status, m.address, m.candidates), (None, "none", None, []), text[:80])
+            self.assertTrue(m.notes[-1].startswith("no BUG/WARN trap in this report (no WARNING / kernel BUG / RIP / pc "
+                                                   "line), and no BUG/WARN site at its first call-trace entry "), m.notes)
+            self.assertEqual([(x.function, x.offset) for x in rep.locations if x.source == "regs"],
+                             [("mfill_atomic_copy", 0x674)])
+            self.assertEqual(m.notes[-2], "not a trap line: RIP: 0010:mfill_atomic_copy+0x674/0x9d0 (after the report's "
+                                          "call trace began or in an NMI backtrace: the registers of an interrupted "
+                                          "context or of another CPU)")
+        rep, m = find(RCU_NMI_ARM64)
+        self.assertEqual((rep.primary, m.status, [x.source for x in rep.locations]), (None, "none", ["regs", "lr"]))
+        self.assertEqual(m.notes, ["no WARNING / kernel BUG / RIP / pc line, func+0xoff or file:line in the text",
+                                   "not a trap line: pc : nft_do_chain+0x400/0x6d0 [nf_tables] (after the report's call "
+                                   "trace began or in an NMI backtrace: the registers of an interrupted context or of "
+                                   "another CPU)"])
+        # the trap's own RIP comes before the call trace: still used when an interrupt frame's RIP (here on another site)
+        # follows in the trace; with the trap's RIP line left out, the WARNING line, not the interrupted code
+        irq = X86_WARN.replace("[  152.334340]  userfaultfd_ioctl", "[  152.334336]  asm_sysvec_apic_timer_interrupt+0x1a/0x20\n"
+                               "[  152.334337] RIP: 0010:folio_unlock+0x70/0xd0\n"
+                               "[  152.334338] RSP: 0018:ffffc90000d4be00 EFLAGS: 00000246\n[  152.334340]  userfaultfd_ioctl")
+        for text in (irq, irq.replace("[  152.334270] RIP: 0010:mfill_atomic_copy+0x674/0x9d0\n", "")):
+            rep, m = find(text)
+            self.assertEqual((rep.reports, m.status, m.address), (1, "exact", 0xFFFFFFFF8E629BC4), (text, m.reason))
+        # a WARNING report after an NMI backtrace, no cut-here line between them: two reports, the WARNING one's RIP
+        poison = X86_WARN.replace("mfill_atomic_copy", "mfill_atomic_poison").replace("0x674/0x9d0", "0x494/0x850")
+        rep, m = find(HUNG_NMI + poison.split("\n", 1)[1])
+        self.assertEqual((rep.reports, rep.primary.function, m.status, m.address),
+                         (2, "mfill_atomic_poison", "exact", 0xFFFFFFFF8E62B164))
+        # Linux 4.9's executive summary 'RIP  [<%p>] %pS' follows the call trace and is the trap's RIP
+        rep, m = find(OLD_X86.split("\n", 1)[1] + OLD_SUMMARY)
+        self.assertEqual((rep.primary.source, m.status, m.address), ("rip", "exact", 0xFFFFFFFF8E629BC4))
 
     def test_details(self):
         """Parser details the review's mutants found untested (review s157 m7)."""
@@ -968,6 +1095,11 @@ def whole_kernel(path):
         m = oops.resolve(rep, index, elf.function_starts)
         assert (rep.reports, m.status, m.address, m.site.where(), m.notes) == (
             1, "exact", 0xFFFFFFFF8E8A531E, "lib/refcount.c:28", []), (rep.reports, m)
+        # a RIP after the call trace began or in an NMI backtrace is not the trap (review s161 MAJOR 2); each lands on
+        # mfill_atomic_copy's WARN site here
+        for text in (KASAN_IRQ, HUNG_NMI, RCU_NMI):
+            m = oops.resolve(oops.parse(text), index, elf.function_starts)
+            assert (m.status, m.address) == ("none", None), (text[:80], m)
         # syzbot's inline-expanded WARNING / RIP lines (review s161 MAJOR 1): one report, the line with function+offset
         rep = oops.parse(SYZ_SCHED)
         m = oops.resolve(rep, index, elf.function_starts)

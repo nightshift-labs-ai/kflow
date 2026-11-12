@@ -50,9 +50,11 @@ _WARN_NEW = re.compile(r"WARNING: (?:(?P<file>[^\s:]+):(?P<line>\d+) )?at (?P<re
 _WARN_26 = re.compile(r"WARNING: at (?P<file>[^\s:]+):(?P<line>\d+) (?P<rest>.*)$")  # 2.6 / 3.x: 'WARNING: at %s:%d %pS()'
 _BUG_LINE = re.compile(r"[Kk]ernel BUG at (?P<file>[^\s:!]+):(?P<line>\d+)!")
 _BUG_SYM = re.compile(r"[Kk]ernel BUG at (?P<rest>.*?)\s*\[verbose debug info unavailable\]")
-_RIP = re.compile(r"(?:^|\s)(?:RIP:?|IP:)\s+(?:(?P<cs>[0-9a-fA-F]{4}):)?(?P<rest>.*)$")
+_RIP = re.compile(r"(?:^|\s)(?P<tag>RIP:?|IP:)\s+(?:(?P<cs>[0-9a-fA-F]{4}):)?(?P<rest>.*)$")
 _PC = re.compile(r"(?:^|\s)(?:(?P<reg>pc|lr) : |(?P<old>PC|LR) is at )(?P<rest>.*)$")
 _TRACE = re.compile(r"(?:^|\s)Call [Tt]race:")
+# lib/nmi_backtrace.c: another CPU's registers and stack follow (hung task, RCU stall, sysrq-l)
+_NMI = re.compile(r"(?:^|\s)NMI backtrace for cpu \d+")
 _INLINE = re.compile(r"^(?P<fn>[A-Za-z_.$][\w.$]*)\s+(?P<file>[\w./+-]+\.(?:c|h|S|rs)):(?P<line>\d+)\s+\[inline\]$")
 # syzbot prints a line whose %pS lies in inlined code once per inlined frame, innermost first, with 'func file:line
 # [inline]' in place of the symbol (the rest of the line kept), then once with the function+offset: such a WARNING line
@@ -78,8 +80,9 @@ _PANIC = re.compile(r"(?:^|\s)Kernel panic - ")
 
 @dataclass
 class Loc:
-    """One location in the log. source: 'rip', 'pc', 'lr', 'warning', 'bug', 'frame' (call-trace entry) or 'text'
-    (a line that is only func+0xoff or file:line)."""
+    """One location in the log. source: 'rip', 'pc', 'lr', 'warning', 'bug', 'frame' (call-trace entry), 'text'
+    (a line that is only func+0xoff or file:line) or 'regs' (a RIP / pc line that is not the report's trap: after its
+    call trace began, where x86 prints the registers of an interrupted context, or in another CPU's NMI backtrace)."""
     source: str
     function: str = None
     offset: int = None
@@ -164,6 +167,11 @@ def parse(text):
     report's RIP is not mixed with an earlier one's WARNING line)."""
     rep = Report()
     in_trace = False
+    # the report's own RIP / pc line comes before its call trace; one after 'Call Trace:' (x86 show_regs_if_on_stack: the
+    # interrupted context where the trace crosses an IRQ or exception entry; panic()'s dump) or after 'NMI backtrace for
+    # cpu N' (another CPU) is not its trap (review s161 MAJOR 2). Linux 4.9's 'RIP  [<%p>] %pS' after the call trace is
+    # the trap's executive summary. Cleared where a report starts
+    others = False
     segs, closed = [[]], False
     trap = lambda seg: any(x.source in ("warning", "bug", "rip", "pc") for x in seg)
     started = [False]  # per segment: a report's first line was seen
@@ -175,7 +183,7 @@ def parse(text):
             if segs[-1] or started[-1]:
                 segs.append([])
                 started.append(bool(_CUT.search(s)))
-            in_trace = False
+            in_trace = others = False
             continue
         found = None
         m = _WARN_OLD.search(s) or _WARN_26.search(s) or _WARN_NEW.search(s)
@@ -203,13 +211,19 @@ def parse(text):
                 found = _loc("rip", m.group("rest"), s)
                 if found is not None and m.group("cs") and int(m.group("cs"), 16) & 3:
                     found = None  # 'RIP: 0033:0x7f...': user mode
+                if found is not None and others and m.group("tag") != "RIP":  # 'RIP  [<%p>]' (4.9): the summary
+                    found.source = "regs"
         if found is None:
             m = _PC.search(s)
             if m:
                 found = _loc("pc" if (m.group("reg") or m.group("old")).lower() == "pc" else "lr", m.group("rest"), s)
+                if found is not None and others and found.source == "pc":
+                    found.source = "regs"
         if found is None and _TRACE.search(s):
-            in_trace = True
+            in_trace = others = True
             continue
+        if found is None and _NMI.search(s):
+            others = True
         if found is None:
             q = re.match(r"^(?:\[<[0-9a-fA-F]+>\]\s*)*(\?\s+)?(.*)$", s)
             body = q.group(2)
@@ -226,14 +240,17 @@ def parse(text):
             if found is not None and q.group(1):
                 found.reliable = False
         header = found is not None and found.source in ("warning", "bug")
-        # a WARNING line after syzbot's inline-expanded one(s) of the same trap continues that report
-        if (header and any(x.source in ("warning", "bug", "rip", "pc") and not x.inline for x in segs[-1])) or (
-                not header and _START.search(s) and any(x.source in ("rip", "pc") for x in segs[-1])):  # the next one
+        # a WARNING line after syzbot's inline-expanded one(s) of the same trap continues that report; a register dump
+        # that is not a trap ('regs') still ends one
+        if (header and any(x.source in ("warning", "bug", "rip", "pc", "regs") and not x.inline for x in segs[-1])) or (
+                not header and _START.search(s) and any(x.source in ("rip", "pc", "regs") for x in segs[-1])):  # the next
             segs.append([])
             started.append(True)
-            in_trace = False
+            in_trace = others = False
         elif _START.search(s) or _PANIC.search(s):
             started[-1] = True
+        if header or _START.search(s):  # a report's first line (not 'Kernel panic -': panic()'s dump follows)
+            others = False
         if found is None:
             continue
         segs[-1].append(found)
@@ -440,17 +457,28 @@ def resolve(report, sites, symbols, module=None, is_module=False):
     for the notes."""
     loc = report.primary
     if loc is None:
-        return Match("none", notes=["no WARNING / kernel BUG / RIP / pc line, func+0xoff or file:line in the text"])
+        return Match("none", notes=["no WARNING / kernel BUG / RIP / pc line, func+0xoff or file:line in the text"]
+                     + not_traps(report))
     m = _resolve(report, sites, symbols, module, is_module)
     if report.reports > 1:
         m.notes.append("the text holds %d reports; the first one with a WARNING / kernel BUG / RIP / pc line is used "
                        "(paste one report to look up another)" % report.reports)
     if loc.source in ("frame", "text") and len(report.locations) > 1 and m.status not in ("exact", "ambiguous"):
         # a call trace or a list of lines (KASAN, lockdep, hung task...): its first entry is a caller, not a trap
-        return Match("none", loc=loc, notes=m.notes + [
+        return Match("none", loc=loc, notes=m.notes + not_traps(report) + [
             "no BUG/WARN trap in this report (no WARNING / kernel BUG / RIP / pc line), and no BUG/WARN site at its "
             "first %s %s" % ("call-trace entry" if loc.source == "frame" else "line", loc.symbol() or loc.where())])
     return m
+
+
+def not_traps(report):
+    """A note on the report's RIP / pc lines that are not its trap ('regs'), if it has any."""
+    regs = [x for x in report.locations if x.source == "regs"]
+    if not regs:
+        return []
+    return ["not a trap line: %s (after the report's call trace began or in an NMI backtrace: the registers of an "
+            "interrupted context or of another CPU)%s" % (regs[0].text, "; %d more such lines" % (len(regs) - 1)
+                                                          if len(regs) > 1 else "")]
 
 
 def _resolve(report, sites, symbols, module=None, is_module=False):
