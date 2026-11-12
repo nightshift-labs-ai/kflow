@@ -55,6 +55,11 @@ _PC = re.compile(r"(?:^|\s)(?:(?P<reg>pc|lr) : |(?P<old>PC|LR) is at )(?P<rest>.
 _TRACE = re.compile(r"(?:^|\s)Call [Tt]race:")
 # lib/nmi_backtrace.c: another CPU's registers and stack follow (hung task, RCU stall, sysrq-l)
 _NMI = re.compile(r"(?:^|\s)NMI backtrace for cpu \d+")
+# arch/x86/kernel/dumpstack.c __die() 4.10 to 4.16: the executive summary 'RIP: %pS RSP: %016lx' (no CS) after the trace
+_SUMMARY = re.compile(r"\sRSP: [0-9a-fA-F]{8,16}\s*$")
+# the x86 #UD entry (asm_exc_invalid_op from 5.8, invalid_op before): a call trace that crosses it prints the registers
+# of the BUG/WARN ud2 right after it (show_regs_if_on_stack), the trap's own RIP (panic()'s dump under panic_on_warn)
+_UD_ENTRY = ("asm_exc_invalid_op", "exc_invalid_op", "invalid_op")
 _INLINE = re.compile(r"^(?P<fn>[A-Za-z_.$][\w.$]*)\s+(?P<file>[\w./+-]+\.(?:c|h|S|rs)):(?P<line>\d+)\s+\[inline\]$")
 # syzbot prints a line whose %pS lies in inlined code once per inlined frame, innermost first, with 'func file:line
 # [inline]' in place of the symbol (the rest of the line kept), then once with the function+offset: such a WARNING line
@@ -172,6 +177,8 @@ def parse(text):
     # cpu N' (another CPU) is not its trap (review s161 MAJOR 2). Linux 4.9's 'RIP  [<%p>] %pS' after the call trace is
     # the trap's executive summary. Cleared where a report starts
     others = False
+    nmi = False  # in an NMI backtrace (another CPU's registers and stack): no RIP there is this report's trap
+    last = None  # the location on the line before, if that line had one
     segs, closed = [[]], False
     trap = lambda seg: any(x.source in ("warning", "bug", "rip", "pc") for x in seg)
     started = [False]  # per segment: a report's first line was seen
@@ -180,12 +187,14 @@ def parse(text):
         s = strip_prefix(raw)
         if not s:
             continue
+        after_ud = last is not None and last.source == "frame" and last.reliable and last.function in _UD_ENTRY
+        last = None
         if _CUT.search(s) or _END.search(s):
             if segs[-1] or started[-1]:
                 segs.append([])
                 started.append(bool(_CUT.search(s)))
                 ended.append(not _CUT.search(s))
-            in_trace = others = False
+            in_trace = others = nmi = False
             continue
         found = None
         m = _WARN_OLD.search(s) or _WARN_26.search(s) or _WARN_NEW.search(s)
@@ -213,7 +222,11 @@ def parse(text):
                 found = _loc("rip", m.group("rest"), s)
                 if found is not None and m.group("cs") and int(m.group("cs"), 16) & 3:
                     found = None  # 'RIP: 0033:0x7f...': user mode
-                if found is not None and others and m.group("tag") != "RIP":  # 'RIP  [<%p>]' (4.9): the summary
+                # after the trace began: not the trap, except the summary ('RIP  [<%p>]' 4.9, 'RIP: %pS RSP:' 4.10 to
+                # 4.16) and the ud2's registers right after the #UD entry frame, outside an NMI backtrace (review s163
+                # MINOR 2)
+                if found is not None and others and m.group("tag") != "RIP" and not (
+                        m.group("cs") is None and _SUMMARY.search(s)) and not (after_ud and not nmi):
                     found.source = "regs"
         if found is None:
             m = _PC.search(s)
@@ -225,7 +238,7 @@ def parse(text):
             in_trace = others = True
             continue
         if found is None and _NMI.search(s):
-            others = True
+            others = nmi = True
         if found is None:
             q = re.match(r"^(?:\[<[0-9a-fA-F]+>\]\s*)*(\?\s+)?(.*)$", s)
             body = q.group(2)
@@ -249,14 +262,15 @@ def parse(text):
             segs.append([])
             started.append(True)
             ended.append(False)
-            in_trace = others = False
+            in_trace = others = nmi = False
         elif _START.search(s) or _PANIC.search(s):
             started[-1] = True
         if header or _START.search(s):  # a report's first line (not 'Kernel panic -': panic()'s dump follows)
-            others = False
+            others = nmi = False
         if found is None:
             continue
         segs[-1].append(found)
+        last = found
     # x86 oops_end() prints the trap's registers again after oops_exit()'s end marker, 'RIP: %04x:%pS' first (the
     # executive summary, 4.17+, "in case the oops scrolled away"): RIP lines there that repeat the report's own trap
     # address are that report's, not another one (review s163 MINOR 1)

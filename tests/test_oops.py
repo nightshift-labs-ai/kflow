@@ -479,6 +479,24 @@ POW_ARM64 = """\
 <0>[  88.123740][ T2201] ---[ end Kernel panic - not syncing: kernel: panic_on_warn set ... ]---
 """
 
+# Linux 4.10 to 4.16 (arch/x86/kernel/dumpstack.c __die(): show_regs(), then the executive summary 'RIP: %pS RSP:
+# %016lx', no CS, after the call trace), as Ubuntu 18.04's 4.15 prints it; the site and sizes are the fixture's
+X86_414_BUG = """\
+[  222.868961] ------------[ cut here ]------------
+[  222.868990] kernel BUG at mm/filemap.c:1499!
+[  222.942000] invalid opcode: 0000 [#1] SMP PTI
+[  222.942001] Modules linked in: nf_tables libcrc32c
+[  222.942010] CPU: 1 PID: 8817 Comm: a.out Not tainted 4.15.0-213-generic #224-Ubuntu
+[  222.942030] RIP: 0010:folio_unlock+0x70/0xd0
+[  222.942120] RSP: 0018:ffffc90000d4bd18 EFLAGS: 00010246
+[  222.942140] Call Trace:
+[  222.942147]  filemap_add_folio+0x3c/0xa0
+[  222.942148]  do_syscall_64+0x82/0x190
+[  222.942149]  entry_SYSCALL_64_after_hwframe+0x76/0x7e
+[  222.942150] Code: 48 8b 7c 24 10 e8 c5 f2 ff ff 49 89 c4 e9 1b fc ff ff 0f 0b <0f> 0b 49 c7 c4 f2 ff ff ff e9 0d fc ff ff
+[  222.942160] RIP: folio_unlock+0x70/0xd0 RSP: ffffc90000d4bd18
+[  222.942170] ---[ end trace 1a2b3c4d5e6f7081 ]---
+"""
 # Linux 4.9: show_regs 'RIP: %04lx:[<%016lx>] ' + printk_address ' [<%p>] %pS'; entries ' [<%p>] %s%pB'; the
 # executive summary 'RIP  [<%p>] %pS'; arch/x86/mm/fault.c 'IP:' + printk_address; arm64 'PC is at %s'
 OLD_X86 = """\
@@ -650,8 +668,9 @@ class Parse(unittest.TestCase):
                          (1, "WARN", "lib/refcount.c", 28, "rip", "refcount_warn_saturate", 0xBE, 0x110))
         self.assertEqual((m.status, m.address, m.site.where()), ("exact", 0xFFFFFFFF8E8A531E, "lib/refcount.c:28"))
         self.assertFalse([n for n in m.notes if "reports" in n], m.notes)
-        # panic()'s dump shows the trap's RIP again inside its call trace: kept, but not as a trap line (review s161 MAJOR 2)
-        self.assertEqual([x.source for x in rep.locations if x.source != "frame"], ["warning", "rip", "regs"])
+        # panic()'s dump shows the trap's RIP again inside its call trace, right after the #UD entry frame
+        # asm_exc_invalid_op: the trap's own registers (review s163 MINOR 2; s161 MAJOR 2 had made it 'regs')
+        self.assertEqual([x.source for x in rep.locations if x.source != "frame"], ["warning", "rip", "rip"])
         rep, m = find(POW_ARM64)  # arm64: the panic's dump prints no pc line
         self.assertEqual((rep.reports, rep.primary.source, m.status, m.address), (1, "pc", "exact", 0xFFFFFFFF8E629BC4))
         self.assertFalse([n for n in m.notes if "reports" in n], m.notes)
@@ -751,6 +770,35 @@ class Parse(unittest.TestCase):
         # Linux 4.9's executive summary 'RIP  [<%p>] %pS' follows the call trace and is the trap's RIP
         rep, m = find(OLD_X86.split("\n", 1)[1] + OLD_SUMMARY)
         self.assertEqual((rep.primary.source, m.status, m.address), ("rip", "exact", 0xFFFFFFFF8E629BC4))
+
+    def test_trap_rip_after_the_trace(self):
+        """review s163 MINOR 2: RIP lines the kernel prints after the call trace that are the trap's own: Linux
+        4.10-4.16's executive summary 'RIP: %pS RSP: %016lx' (no CS), and a RIP right after the #UD entry frame
+        (asm_exc_invalid_op: panic()'s dump crossing the BUG/WARN ud2's exception). On a paste of the bottom of a report
+        (the top scrolled away) they are the trap. In an NMI backtrace (another CPU), after an unreliable '? ' entry or
+        another entry, a RIP after the call trace is still not (review s161 MAJOR 2)."""
+        bottom = X86_414_BUG[X86_414_BUG.index("[  222.942140] Call Trace:"):]
+        for text in (X86_414_BUG, bottom):
+            rep, m = find(text)
+            self.assertEqual((rep.reports, m.status, m.address), (1, "exact", 0xFFFFFFFF81000110), text[:60])
+            self.assertFalse([x for x in rep.locations if x.source == "regs"], text[:60])
+            self.assertFalse([n for n in m.notes if "not a trap line" in n], m.notes)
+        pow_bottom = POW_X86[POW_X86.index("[ 4521.903342] Kernel panic"):]  # panic()'s dump only
+        rep, m = find(pow_bottom)
+        self.assertEqual((rep.reports, rep.primary.source, m.status, m.address), (1, "rip", "exact", 0xFFFFFFFF8E8A531E))
+        nmi_ud = ("INFO: task kworker/u8:3:5123 blocked for more than 143 seconds.\nNMI backtrace for cpu 0\n"
+                  "CPU: 0 UID: 0 PID: 4410 Comm: stress Not tainted 6.12.115+deb13.1-amd64 #1\n"
+                  "RIP: 0010:folio_unlock+0x10/0xd0\nCall Trace:\n <NMI>\n nmi_cpu_backtrace+0x9d/0x100\n </NMI>\n"
+                  " <TASK>\n handle_bug+0x10f/0x170\n exc_invalid_op+0x17/0x70\n asm_exc_invalid_op+0x1a/0x20\n"
+                  "RIP: 0010:mfill_atomic_copy+0x674/0x9d0\n </TASK>\n")  # another CPU in a WARN: not this report's
+        for text in (pow_bottom.replace("]  asm_exc_invalid_op", "]  ? asm_exc_invalid_op"),
+                     pow_bottom.replace("asm_exc_invalid_op", "asm_sysvec_apic_timer_interrupt"), nmi_ud,
+                     bottom.replace("RIP: folio_unlock+0x70/0xd0 RSP: ffffc90000d4bd18", "RIP: 0010:folio_unlock+0x70/0xd0")):
+            rep, m = find(text)
+            self.assertEqual((m.status, m.address), ("none", None), text)
+            self.assertIn(("folio_unlock", 0x70) if "folio_unlock+0x70" in text else ("mfill_atomic_copy", 0x674) if
+                          "mfill" in text else ("refcount_warn_saturate", 0xBE),
+                          [(x.function, x.offset) for x in rep.locations if x.source == "regs"], text)
 
     def test_details(self):
         """Parser details the review's mutants found untested (review s157 m7)."""
