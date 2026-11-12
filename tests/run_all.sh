@@ -18,6 +18,7 @@ run() {
 }
 
 run "$PY" -I tests/test_core.py
+run "$PY" -I tests/test_reach.py
 
 if [ $# -eq 0 ]; then
     tmp=$(mktemp -d)
