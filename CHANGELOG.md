@@ -2,7 +2,7 @@
 
 Taken from the GitHub release notes. Newest first.
 
-## Unreleased
+## v0.0.4 (2026-11-15)
 
 - `tests/check_ida_names.py <stub dir>...`: checks that every `ida_*` name kflow uses exists in a folder of IDAPython stubs; all 82 are in the stubs of IDA 9.1 to 9.5 (PyPI `idapro` 0.0.5, 0.0.7, 0.0.9 and 0.0.11, and the IDA 9.5 stubs that `tests/check_ida_api.py` is run against).
 - Annotate: a static-key target or fixup inside another IDA function (`ida_funcs.get_func`; not at its start, not in a tail the source's function shares, not the source function's own `.cold` part) now gets a user data reference (`dr_O`) instead of a jump reference (`fl_JN`), so that IDA is not asked to treat the other function's code as flow of this one (it could try to attach it as a tail chunk); other targets get the jump reference as before. This needs IDA's functions: Annotate run while auto-analysis is still going says to run it again afterwards, and a later Annotate changes references kflow added earlier (also by older versions) between the two kinds to match IDA's current functions. Recorded and removed like the others; counts reported. Tested only on fake `ida_*` modules; not yet run in real IDA.
