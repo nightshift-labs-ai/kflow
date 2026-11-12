@@ -58,19 +58,26 @@ for mod, cls, name in MEMBERS:
     if not body or not re.search(r"(?:def\s+%s\b|^\s+%s\s*:)" % (name, name), body.group(0), re.M):
         print("MISSING", "%s.%s.%s" % (mod, cls, name))
         missing += 1
-# signatures and return shapes the pseudocode hook relies on (the hook returns 0; coords are (x, y))
-SHAPES = [("ida_hexrays", r"def func_printed\(self, cfunc: cfunc_t\) -> int:"),
-          ("ida_hexrays", r"find_item_coords\(item: citem_t\) -> Tuple\[int, int\]"),
-          ("ida_hexrays", r"def get_eamap\(self\) -> eamap_t:"), ("ida_hexrays", r"def get_pseudocode\(self\) -> strvec_t:"),
-          ("ida_hexrays", r"def __getitem__\(self, i: int\) -> cinsn_t:"),
-          ("ida_hexrays", r"def clear_cached_cfuncs\(\) -> None:"), ("ida_hexrays", r"def init_hexrays_plugin\(flags: int = 0\) -> bool:"),
-          ("ida_pro", r"def __getitem__\(self, i: int\) -> simpleline_t:"), ("ida_lines", r"def COLSTR\(str: Any, tag: Any\)"),
-          ("ida_funcs", r"def get_func\(ea: ida_idaapi.ea_t\) -> Optional\[func_t\]:"),
-          ("ida_segment", r"def get_segm_qty\(\) -> int:"), ("ida_segment", r"def getnseg\(n: int\) -> Optional\[segment_t\]:")]
-for mod, pattern in SHAPES:
+# signatures and return shapes the pseudocode hook relies on (the hook returns 0; coords are (x, y)); a class name
+# limits the search to that class's body, None to the whole module
+SHAPES = [("ida_hexrays", "Hexrays_Hooks", r"def func_printed\(self, cfunc: cfunc_t\) -> int:"),
+          ("ida_hexrays", "cfunc_t", r"find_item_coords\(item: citem_t\) -> Tuple\[int, int\]"),
+          ("ida_hexrays", "cfunc_t", r"def get_eamap\(self\) -> eamap_t:"),
+          ("ida_hexrays", "cfunc_t", r"def get_pseudocode\(self\) -> strvec_t:"),
+          ("ida_hexrays", "cinsnptrvec_t", r"def __getitem__\(self, i: int\) -> cinsn_t:"),
+          ("ida_hexrays", None, r"def clear_cached_cfuncs\(\) -> None:"),
+          ("ida_hexrays", None, r"def init_hexrays_plugin\(flags: int = 0\) -> bool:"),
+          ("ida_pro", "strvec_t", r"def __getitem__\(self, i: int\) -> simpleline_t:"), ("ida_lines", None, r"def COLSTR\(str: Any, tag: Any\)"),
+          ("ida_funcs", None, r"def get_func\(ea: ida_idaapi.ea_t\) -> Optional\[func_t\]:"),
+          ("ida_segment", None, r"def get_segm_qty\(\) -> int:"), ("ida_segment", None, r"def getnseg\(n: int\) -> Optional\[segment_t\]:")]
+for mod, cls, pattern in SHAPES:
     checked += 1
-    if not re.search(pattern, open(os.path.join(sys.argv[1], mod + ".pyi")).read()):
-        print("MISSING", mod, pattern)
+    src = open(os.path.join(sys.argv[1], mod + ".pyi")).read()
+    if cls is not None:
+        body = re.search(r"^class %s\b.*?(?=^class |\Z)" % cls, src, re.M | re.S)
+        src = body.group(0) if body else ""
+    if not re.search(pattern, src):
+        print("MISSING", mod, cls or "", pattern)
         missing += 1
 print("checked", checked, "missing", missing)
 sys.exit(1 if missing else 0)
