@@ -116,8 +116,14 @@ for s in sorted(traps):
     if f[0] <= target < f[1] and not nxt <= target < nxt + n and nxt + n <= f[1] and \
             not any(nxt <= o < nxt + n for o in (s + 1, s + 2, s + 3, s + 4, s + 5, s + 6) if o in traps or o in calls):
         HOLES[nxt] = (nxt + n, s)
+for h in sorted(HOLES):  # "WARN ud2; WARN ud2; jmp back": the second trap is reached only through the first one
+    he, s = HOLES[h]
+    if traps[s] and traps.get(s - 2) and elf_func(s - 2) == elf_func(s):
+        del HOLES[h]
+        HOLES[s] = (he, s - 2)  # so the tail kflow appends starts on a WARN site (its record has both bits)
+PAIRS = sorted(h for h in HOLES if h in traps)
 ORPHAN_FN = None  # (site, start of the orphan jmp IDA made a function of)
-warn_holes = [h for h in sorted(HOLES) if traps[HOLES[h][1]]]
+warn_holes = [h for h in sorted(HOLES) if traps[HOLES[h][1]] and h not in traps]
 if len(warn_holes) >= 2:
     ORPHAN_FN = (HOLES[warn_holes[0]][1], warn_holes[0])
 P = []
@@ -138,7 +144,8 @@ if ORPHAN_FN is not None:
 P.sort()
 PS = [p[0] for p in P]
 for s in traps:
-    w["code"].add(s)
+    if s not in HOLES:  # a trap reached only through another trap is not disassembled either
+        w["code"].add(s)
     if s + 2 not in HOLES or (ORPHAN_FN and s + 2 == ORPHAN_FN[1]):
         w["code"].add(s + 2)  # reached from elsewhere (or IDA's function there): disassembled
 for s in calls:
@@ -279,7 +286,7 @@ def free_end(ea1):
 
 def append_func_tail(pfn, ea1, ea2):
     owner = pfn.start_ea
-    ok = piece_at(owner) is not None and piece_at(owner)[0] == owner and ea1 in w["code"]
+    ok = piece_at(owner) is not None and piece_at(owner)[0] == owner  # code or not: the SDK does not say it refuses
     if ok and ea2 == BAD:
         ea2 = free_end(ea1)
     ok = ok and ea1 < ea2 and piece_at(ea1) is None
@@ -521,6 +528,8 @@ for h in tails:  # each tail is the orphan jmp, now a tail of the site's own fun
     pc = piece_at(h)
     assert pc == [h, HOLES[h][0], piece_at(HOLES[h][1])[2]] and pc[0] != pc[2], pc
     assert on["node"][(h - w["imagebase"]) & (2 ** 64 - 1)] >> 8 == HOLES[h][0] - h, "tail length (its end) recorded"
+for h in PAIRS:  # a tail that starts on another WARN site: the record keeps both bits (review s151 mutant C)
+    assert h in tails and h in EXP_WARN and on["node"][(h - w["imagebase"]) & (2 ** 64 - 1)] & 3 == 3
 new_pieces = set(on["pieces"]) - set(pre["pieces"])
 assert set(pre["pieces"]) <= set(on["pieces"]) and {p0 for p0, _, _ in new_pieces} == tails, "no function lost code"
 for h, (pc, code) in holes_before.items():
@@ -649,9 +658,12 @@ assert snap(m) == pre
 assert m.WarnFlowAction().activate(None) == 1 and snap(m) == on
 
 # ---- 5. Remove restores what was there before: flow, function tails, record, filter, hook ----
+n0 = len(w["reanalysed"])
 assert m.WarnFlowOffAction().activate(None) == 1
 off = m.STATE["wf_last"]
 assert snap(m) == pre and m.STATE["wf"] is None and m.STATE["wf_filter"] is None
+# Remove reanalyses each function that still has a site once (the owners of the removed tails are among them)
+assert w["reanalysed"][n0:] == sorted({piece_at(s)[2] for s in EXP_WARN if piece_at(s) is not None})
 assert off["sites"] == len(EXP_WARN) and off["tails"] == len(exp_tails) and off["flow_left"] == 0 and off["tails_left"] == 0
 assert msgs("WARN fall-through removed: %d sites reanalysed, flow still after 0; function tails removed: %d"
             % (len(EXP_WARN), len(exp_tails)))
@@ -760,10 +772,11 @@ m, p = load_plugin()
 assert not w["listeners"] and not w["filters"], "no record: the next load installs nothing"
 p.term()
 assert hx_log["hooked"] == 0
-print("OK warnflow %s: %d WARN ud2 sites, %d BUG ud2 sites; flow after %d WARN sites and 0 BUG sites; tails %d; "
+print("OK warnflow %s: %d WARN ud2 sites, %d BUG ud2 sites; flow after %d WARN sites and 0 BUG sites; tails %d "
+      "(%d of them start on a WARN site); "
       "other_func %d; site in no function %d; %d functions reanalysed; idempotent; term unhooks, the next load hooks "
       "from the record and reports lost flow; rebase; Remove restores flow, tails, record, filter; Annotate/Remove "
       "unchanged; filter matches only WARN sites; decompiler part fails soft; Remove takes out only exact tails "
       "(%d changed tails left; merge modes, removed/left: %s)"
-      % (name, len(EXP_WARN), len(EXP_BUG), res["flow"], res["tails"], res["other_func"], res["no_func"], res["functions"],
+      % (name, len(EXP_WARN), len(EXP_BUG), res["flow"], res["tails"], len(PAIRS), res["other_func"], res["no_func"], res["functions"],
          len(changed), ", ".join("%s %d/%d" % (k, a, b) for k, (a, b) in merged.items()) or "no tails"))
