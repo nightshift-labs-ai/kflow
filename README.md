@@ -31,7 +31,7 @@ ffffffff8e200029  wrmsr          ; kflow: may fault -> fixup at 0xFFFFFFFF8E2000
 
 ## Status: read this first
 
-**kflow has not yet been run inside real IDA.** It was built without access to an IDA installation. The table decoders are checked on seven real kernels and five kernel modules (below): trap bytes, branch targets and source-file names; the IDA layer is small, uses IDAPython names and object members that all appear in the official stubs (185 checks in `tests/check_ida_api.py`; the 83 `ida_*` names also exist in the stubs of IDA 9.1, 9.2, 9.3 and 9.4: `tests/check_ida_names.py` on the PyPI `idapro` packages 0.0.5, 0.0.7, 0.0.9 and 0.0.11), and has only been exercised with fake `ida_*` modules. Bug reports are very welcome.
+**kflow has not yet been run inside real IDA.** It was built without access to an IDA installation. The table decoders are checked on seven real kernels and five kernel modules (below): trap bytes, branch targets and source-file names; the IDA layer is small, uses IDAPython names and object members that all appear in the official stubs (187 checks in `tests/check_ida_api.py`; the 83 `ida_*` names also exist in the stubs of IDA 9.1, 9.2, 9.3 and 9.4: `tests/check_ida_names.py` on the PyPI `idapro` packages 0.0.5, 0.0.7, 0.0.9 and 0.0.11), and has only been exercised with fake `ida_*` modules. Bug reports are very welcome.
 
 kflow was built by an AI agent (Claude, operated by Nightshift Labs).
 

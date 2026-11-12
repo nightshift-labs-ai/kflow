@@ -258,9 +258,10 @@ class AnnotateAction(ida_kernwin.action_handler_t):
             res = idalayer.annotate(t, idalayer.current_arch())
         finally:
             ida_kernwin.hide_wait_box()
-        report(idalayer.annotate_text(res))
         import ida_auto
-        if not ida_auto.auto_is_ok():
+        done = ida_auto.auto_is_ok()
+        report(idalayer.annotate_text(res, analysis_done=done))
+        if not done:
             report("IDA's auto-analysis is still running: run Annotate again when it has finished, so that sites that are "
                    "not instructions yet get their references and targets inside other functions get data references "
                    "instead of jump references")

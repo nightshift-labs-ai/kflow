@@ -30,6 +30,7 @@ class PackedElf(Elf):
 
 SEG_XTRN = 1
 FF_CODE, MS_CLS = 0x600, 0x600  # ida_bytes.pyi values
+FF_FLOW = 0x10000  # bytes.hpp: "Exec flow from prev instruction"
 X86_LEN = [(b"\xe9", 5), (b"\xeb", 2), (b"\x0f\x1f\x44\x00\x00", 5), (b"\x66\x90", 2), (b"\x0f\x0b", 2), (b"\xe8", 5)]
 
 
@@ -79,8 +80,10 @@ def install(w, names=True):
             return ea in w["code"]
         seg = getseg(ea)
         return seg is not None and bool(seg.perm & 1)
-    m["ida_bytes"].get_flags = lambda ea: FF_CODE if is_head(ea) else 0
+    # w["flow"]: instructions that IDA's ordinary flow reaches from the previous one (FF_FLOW), only where a test sets it
+    m["ida_bytes"].get_flags = lambda ea: (FF_CODE | (FF_FLOW if ea in w.get("flow", ()) else 0)) if is_head(ea) else 0
     m["ida_bytes"].is_code = lambda F: F & MS_CLS == FF_CODE
+    m["ida_bytes"].is_flow = lambda F: bool(F & FF_FLOW)
 
     def get_item_end(ea):
         """Like IDA: unexplored bytes are 1-byte items; an instruction ends where it ends. Instruction ends come from
@@ -169,6 +172,7 @@ def install(w, names=True):
     m["ida_ida"].inf_get_procname = lambda: "metapc" if elf.arch == "x86_64" else "ARM"
     x = m["ida_xref"]
     x.fl_JN, x.XREF_USER, x.XREF_FAR, x.XREF_DATA, x.dr_O = 19, 32, 1, 2, 1
+    x.fl_F = 21
     w.setdefault("drefs", {})
     m["ida_bytes"].is_mapped = lambda ea: any(s.start_ea <= ea < s.end_ea for s in w["segs"])
 
@@ -180,12 +184,17 @@ def install(w, names=True):
     x.del_dref = lambda f, t: w["drefs"].pop((f, t), None) and None
 
     def add_cref(f, t, k):
+        if k == 21:  # fl_F: ordinary flow, which xrefblk_t with XREF_FAR does not list
+            w.setdefault("flow", set()).add(t)
+            return True
         w["xrefs"][(f, t)] = bool(k & 32)
         w["by_from"].setdefault(f, set()).add(t)
         return True
     x.add_cref = add_cref
 
     def del_cref(f, t, expand):
+        if w.get("del_clears_flow") and t == m["ida_bytes"].get_item_end(f):  # worst case: real IDA unknown (s159)
+            w.get("flow", set()).discard(t)
         w["by_from"].get(f, set()).discard(t)
         return w["xrefs"].pop((f, t), None) is not None
     x.del_cref = del_cref
@@ -597,6 +606,10 @@ def analysis_running(path):
     assert not any(w["netnodes"].get(n) for n in (il.NODE, il.KEY_NODE, il.OTHER_NODE)) and il.annotated()
     assert res["comments"] > 0 and "%d static-key / exception-table sites are not instructions yet" % sites in \
         il.annotate_text(res) or not sites, il.annotate_text(res)
+    # review s159 NIT: once analysis has finished, waiting changes nothing: the text says what to do instead
+    done_text = il.annotate_text(res, analysis_done=True)
+    assert not sites or ("%d static-key / exception-table sites are not code in IDA" % sites in done_text
+                         and "press C" in done_text and "not instructions yet" not in done_text), done_text
     # auto-analysis finished: every site an instruction, the functions made
     w.pop("code")
     w["auto_ok"] = True
@@ -638,7 +651,9 @@ def stale_next_insn(path):
     w["netnodes"][il.NODE] = {(a - base) & il.MASK: (fa - base) & il.MASK}
     w["netnodes"][il.OTHER_NODE] = {(b - base) & il.MASK: (fb - base) & il.MASK}
     w["item_end"] = dict(ends)
+    w["flow"], w["del_clears_flow"] = {fa, fb}, True  # review s159 MINOR 2: if del_cref also cleared the flow
     res = il.annotate(t, arch)
+    assert {fa, fb} <= w["flow"], "deleting the stale reference lost IDA's ordinary flow to the next instruction"
     assert (a, fa) not in w["xrefs"] and (b, fb) not in w["drefs"], "the earlier next-instruction reference is still there"
     assert res.get("next_insn_refs") == 2 and res["not_code"] == 0, res
     assert w["xrefs"] == w2["xrefs"] and w["drefs"] == w2["drefs"] and w["netnodes"] == w2["netnodes"], "other references"

@@ -373,6 +373,16 @@ def _add_other(src, dst, node, arch=None):
     return 1
 
 
+def _del_user_cref(src, dst):
+    """Delete kflow's user jump reference src -> dst. When dst is the next instruction, IDA's ordinary flow
+    (FF_FLOW on dst) is the same pair, and the SDK does not say whether del_cref() clears it too; if it did, the
+    ordinary flow is put back (review s159 MINOR 2), so the fixup keeps its flow from the faulting instruction."""
+    had_flow = dst == ida_bytes.get_item_end(src) and ida_bytes.is_flow(ida_bytes.get_flags(dst))
+    ida_xref.del_cref(src, dst, False)
+    if had_flow and not ida_bytes.is_flow(ida_bytes.get_flags(dst)):
+        ida_xref.add_cref(src, dst, ida_xref.fl_F)
+
+
 def _ref(src, dst, node, onode, arch, res):
     """A jump reference src -> dst, or a data reference when dst is inside another function. A reference of the
     other kind that an earlier Annotate recorded for this pair (before IDA made the functions, or by an older kflow)
@@ -389,7 +399,7 @@ def _ref(src, dst, node, onode, arch, res):
     key, val = (src - base) & MASK, (dst - base) & MASK
     if dst == ida_bytes.get_item_end(src):
         if node.altval(key) == val and code_refs_from(src).get(dst):  # still kflow's user reference
-            ida_xref.del_cref(src, dst, False)
+            _del_user_cref(src, dst)
             node.altdel(key)
             res["next_insn_refs"] += 1
         elif onode.altval(key) == val and data_refs_from(src).get(dst):
@@ -491,7 +501,7 @@ def annotate(t, arch=None):
     return res
 
 
-def annotate_text(res):
+def annotate_text(res, analysis_done=False):
     """One readable line for the counts annotate() returns (menu action and headless runner)."""
     text = ("comments: %d, jump references added: %d, static-key site -> key references: %d, user comments kept: %d"
             % (res["comments"], res["xrefs"], res["key_refs"], res["kept_user_comments"]))
@@ -504,7 +514,10 @@ def annotate_text(res):
     if res.get("next_insn_refs"):
         text += (", references to the next instruction removed (added by an earlier Annotate before IDA had made the "
                  "instruction): %d" % res["next_insn_refs"])
-    if res.get("not_code"):
+    if res.get("not_code") and analysis_done:  # review s159 NIT: after analysis, waiting will not change them
+        text += ("; %d static-key / exception-table sites are not code in IDA, so no references were added there "
+                 "(press C at such a site to make it code, then run Annotate again)" % res["not_code"])
+    elif res.get("not_code"):
         text += ("; %d static-key / exception-table sites are not instructions yet (IDA's auto-analysis has not reached "
                  "them), so no references were added there: run Annotate again when auto-analysis has finished"
                  % res["not_code"])
@@ -583,7 +596,7 @@ def remove_annotations(t, res=None):
     while off != ida_netnode.BADNODE:
         f, to = (off + base) & MASK, (node.altval(off) + base) & MASK
         if code_refs_from(f).get(to):  # still there and still a user reference
-            ida_xref.del_cref(f, to, False)
+            _del_user_cref(f, to)
             removed += 1
         off = node.altnext(off)
     node.kill()
