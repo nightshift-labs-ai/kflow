@@ -119,6 +119,59 @@ X86_BUG = """\
 <4>[  222.942000][ T8817] Oops: invalid opcode: 0000 [#1] PREEMPT SMP KASAN NOPTI
 <4>[  222.942106][ T8817] RIP: 0010:folio_unlock+0x70/0xd0
 """
+# the rest of that oops (arch/x86/kernel/dumpstack.c, 4.17+): __die_body() show_regs() (registers, call trace) and
+# print_modules(), then oops_end(): oops_exit()'s '---[ end trace %016llx ]---', the executive summary
+# __show_regs(&exec_summary_regs, ...) ('RIP: %04x:%pS' and the registers again, "in case the oops scrolled away") and
+# panic("Fatal exception"). One report (review s163 MINOR 1)
+X86_BUG_REST = """\
+<4>[  222.942110][ T8817] Code: 48 8b 7c 24 10 e8 c5 f2 ff ff 49 89 c4 e9 1b fc ff ff 0f 0b <0f> 0b 49 c7 c4 f2 ff ff ff e9 0d fc ff ff
+<4>[  222.942120][ T8817] RSP: 0018:ffffc90000d4bd18 EFLAGS: 00010246
+<4>[  222.942130][ T8817] RAX: 0000000000000000 RBX: ffff888103a2c000 RCX: 0000000000000000
+<4>[  222.942140][ T8817] Call Trace:
+<4>[  222.942141][ T8817]  <TASK>
+<4>[  222.942142][ T8817]  ? die+0x36/0x90
+<4>[  222.942143][ T8817]  ? do_trap+0xdd/0x100
+<4>[  222.942144][ T8817]  ? folio_unlock+0x70/0xd0
+<4>[  222.942145][ T8817]  ? exc_invalid_op+0x50/0x70
+<4>[  222.942146][ T8817]  ? asm_exc_invalid_op+0x1a/0x20
+<4>[  222.942147][ T8817]  filemap_add_folio+0x3c/0xa0
+<4>[  222.942148][ T8817]  do_syscall_64+0x82/0x190
+<4>[  222.942149][ T8817]  entry_SYSCALL_64_after_hwframe+0x76/0x7e
+<4>[  222.942150][ T8817]  </TASK>
+<4>[  222.942151][ T8817] Modules linked in: nf_tables libcrc32c
+<4>[  222.942160][ T8817] ---[ end trace 0000000000000000 ]---
+<4>[  222.942170][ T8817] RIP: 0010:folio_unlock+0x70/0xd0
+<4>[  222.942171][ T8817] Code: 48 8b 7c 24 10 e8 c5 f2 ff ff 49 89 c4 e9 1b fc ff ff 0f 0b <0f> 0b 49 c7 c4 f2 ff ff ff e9 0d fc ff ff
+<4>[  222.942172][ T8817] RSP: 0018:ffffc90000d4bd18 EFLAGS: 00010246
+<4>[  222.942173][ T8817] RAX: 0000000000000000 RBX: ffff888103a2c000 RCX: 0000000000000000
+<0>[  222.942180][ T8817] Kernel panic - not syncing: Fatal exception
+<0>[  222.942190][ T8817] Kernel Offset: disabled
+<0>[  222.942200][ T8817] ---[ end Kernel panic - not syncing: Fatal exception ]---
+"""
+# the same oops as a syzbot report (symbolized, no prefixes) ends with the summary too
+SYZBOT_BUG = """\
+------------[ cut here ]------------
+kernel BUG at mm/filemap.c:1499!
+Oops: invalid opcode: 0000 [#1] PREEMPT SMP KASAN NOPTI
+CPU: 1 UID: 0 PID: 5850 Comm: syz-executor123 Not tainted 6.12.0-rc7-syzkaller #0
+RIP: 0010:folio_unlock+0x70/0xd0 mm/filemap.c:1499
+Code: 48 8b 7c 24 10 e8 c5 f2 ff ff 49 89 c4 e9 1b fc ff ff e8 40 59 25 00 <0f> 0b 49 c7 c4 f2 ff ff ff e9 0d fc ff ff
+RSP: 0018:ffffc90003a77a80 EFLAGS: 00010293
+Call Trace:
+ <TASK>
+ filemap_add_folio+0x3c/0xa0 mm/filemap.c:960
+ do_syscall_x64 arch/x86/entry/common.c:52 [inline]
+ do_syscall_64+0xcd/0x250 arch/x86/entry/common.c:83
+ entry_SYSCALL_64_after_hwframe+0x77/0x7f
+RIP: 0033:0x7f4d1c2e4ab9
+RSP: 002b:00007ffd4e1d6c18 EFLAGS: 00000246 ORIG_RAX: 0000000000000010
+ </TASK>
+Modules linked in:
+---[ end trace 0000000000000000 ]---
+RIP: 0010:folio_unlock+0x70/0xd0 mm/filemap.c:1499
+Code: 48 8b 7c 24 10 e8 c5 f2 ff ff 49 89 c4 e9 1b fc ff ff e8 40 59 25 00 <0f> 0b 49 c7 c4 f2 ff ff ff e9 0d fc ff ff
+RSP: 0018:ffffc90003a77a80 EFLAGS: 00010293
+"""
 # report_bug() without file:line: 'Kernel BUG at %pB [verbose debug info unavailable]' (capital K, v5.10 to v7.0); the
 # lower-case form is not printed by the kernel but accepted, as people retype it
 BUG_NO_FILE = "kernel BUG at folio_unlock+0x70/0xd0 [verbose debug info unavailable]"
@@ -621,6 +674,25 @@ class Parse(unittest.TestCase):
             self.assertEqual((rep.reports, rep.primary.function, m.status), (2, first, "exact"), text[:80])
             self.assertIn("the text holds 2 reports; the first one with a WARNING / kernel BUG / RIP / pc line is used "
                           "(paste one report to look up another)", m.notes)
+
+    def test_executive_summary(self):
+        """review s163 MINOR 1: x86 oops_end() prints the trap's RIP and registers again after the end marker (the
+        executive summary, 4.17+): the same report, no 'the text holds 2 reports' note. Another RIP after the end
+        marker, or another report, still counts."""
+        for text in (X86_BUG + X86_BUG_REST, SYZBOT_BUG):
+            rep, m = find(text)
+            self.assertEqual((rep.reports, rep.kind, m.status, m.address), (1, "BUG", "exact", 0xFFFFFFFF81000110), text)
+            self.assertFalse([n for n in m.notes if "reports" in n], m.notes)
+        rep, m = find(X86_BUG + X86_BUG_REST + X86_WARN)  # another report after it: two
+        self.assertEqual((rep.reports, rep.primary.function, m.status), (2, "folio_unlock", "exact"))
+        rep = oops.parse(X86_BUG + X86_BUG_REST.replace("RIP: 0010:folio_unlock", "RIP: 0010:mfill_atomic_copy+0x674/0x9d0 "
+                                                                                   "folio_unlock"))  # not the trap's RIP
+        self.assertEqual((rep.reports, rep.primary.function), (2, "folio_unlock"))
+        # the summary after a WARNING / kernel BUG line without the trap's RIP line (a partial paste): the same address
+        rep = oops.parse("WARNING: CPU: 1 PID: 9 at mm/userfaultfd.c:755 mfill_atomic_copy+0x674/0x9d0\nCall Trace:\n"
+                         " userfaultfd_ioctl+0x5d1/0x1e70\n---[ end trace 0000000000000000 ]---\n"
+                         "RIP: 0010:mfill_atomic_copy+0x674/0x9d0\n")
+        self.assertEqual((rep.reports, rep.primary.source, rep.primary.function), (1, "rip", "mfill_atomic_copy"))
 
     def test_no_trap_line(self):
         """Reports with no WARNING / kernel BUG / RIP / pc line (KASAN, hung task, lockdep) and pasted call traces: the

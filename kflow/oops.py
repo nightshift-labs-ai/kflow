@@ -175,6 +175,7 @@ def parse(text):
     segs, closed = [[]], False
     trap = lambda seg: any(x.source in ("warning", "bug", "rip", "pc") for x in seg)
     started = [False]  # per segment: a report's first line was seen
+    ended = [False]  # per segment: it begins at an end marker ('---[ end trace')
     for raw in (text or "").splitlines():
         s = strip_prefix(raw)
         if not s:
@@ -183,6 +184,7 @@ def parse(text):
             if segs[-1] or started[-1]:
                 segs.append([])
                 started.append(bool(_CUT.search(s)))
+                ended.append(not _CUT.search(s))
             in_trace = others = False
             continue
         found = None
@@ -246,6 +248,7 @@ def parse(text):
                 not header and _START.search(s) and any(x.source in ("rip", "pc", "regs") for x in segs[-1])):  # the next
             segs.append([])
             started.append(True)
+            ended.append(False)
             in_trace = others = False
         elif _START.search(s) or _PANIC.search(s):
             started[-1] = True
@@ -254,6 +257,15 @@ def parse(text):
         if found is None:
             continue
         segs[-1].append(found)
+    # x86 oops_end() prints the trap's registers again after oops_exit()'s end marker, 'RIP: %04x:%pS' first (the
+    # executive summary, 4.17+, "in case the oops scrolled away"): RIP lines there that repeat the report's own trap
+    # address are that report's, not another one (review s163 MINOR 1)
+    same = lambda x, y: (x.function, x.offset, x.address) == (y.function, y.offset, y.address)
+    for i in range(1, len(segs)):
+        if ended[i] and segs[i] and segs[i - 1] and all(x.source == "rip" and any(
+                y.source in ("rip", "pc", "warning", "bug") and same(x, y) for y in segs[i - 1]) for x in segs[i]):
+            segs[i - 1].extend(segs[i])
+            segs[i] = []
     reports = [seg for seg, st in zip(segs, started) if seg and (st or trap(seg))]
     rep.reports = len(reports)
     rep.locations = next((seg for seg in reports if trap(seg)), None) or next((seg for seg in segs if seg), [])
