@@ -397,8 +397,9 @@ def warnflow_resume():
         if warnflow_hook(offsets) is None:
             report("WARN fall-through is on in this database, but IDA did not accept the processor hook")
             return
-        dec = warnflow_filter(offsets)
         lost = warnflow.missing_flow(offsets)
+        # like the action: __WARN() needs a successor in the function, so no filter while no site has flow
+        dec = warnflow_filter(offsets) if lost < len(offsets) else "not installed (no site has flow)"
         report("WARN fall-through (experimental) is on in this database: processor hook installed for %d WARN sites, "
                "decompiler part %s; %s" % (len(offsets), dec, "%d of them have no flow now (reanalysed without kflow?): "
                                            "run kflow: Let WARN sites fall through again to restore it" % lost
@@ -449,6 +450,10 @@ class WarnFlowAction(ida_kernwin.action_handler_t):
             dec = warnflow_filter(hook.offsets)
         else:  # IDA ignored the hook: __WARN() would have no successor in the function, so no filter
             dec = "not installed (no site got flow)"
+            if STATE["wf_filter"] is not None:  # one installed at load time while sites still had flow
+                from kflow import warnflow
+                warnflow.remove_filter(STATE.pop("wf_filter"))
+                STATE["wf_filter"] = None
         flush_pseudocode()
         report("WARN fall-through (experimental): %d WARN ud2 sites, flow after %d of them (IDA marks ud2 as the end "
                "of flow: %s); the %d BUG ud2 traps are left alone; function tails added: %d, next instruction already "
@@ -474,6 +479,7 @@ class WarnFlowOffAction(ida_kernwin.action_handler_t):
                 warnflow_stop()
                 report("WARN fall-through: no record in this database (undone?); kflow's processor hook and decompiler "
                        "filter were still installed and are now removed")
+                flush_pseudocode()
                 return 1
             ida_kernwin.warning("kflow: WARN fall-through is not on in this database.")
             return 0

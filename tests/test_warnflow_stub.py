@@ -626,7 +626,7 @@ close_database()
 replan(traps)  # the database reanalysed without kflow: IDA drops the flow
 assert w["flow"] == pre["flow"]
 m, p = load_plugin()
-assert len(w["listeners"]) == 1 and w["listeners"][0] is m.STATE["wf"] and len(w["filters"]) == 1
+assert len(w["listeners"]) == 1 and w["listeners"][0] is m.STATE["wf"] and len(w["filters"]) == 0  # no site has flow
 assert msgs("%d of them have no flow now" % len(EXP_WARN)), [x for x in log if x[0] == "msg"][-3:]
 assert m.WarnFlowAction().activate(None) == 1 and snap(m) == on, "running it again restores the flow"
 p.term()

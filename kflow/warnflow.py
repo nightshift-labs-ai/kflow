@@ -212,9 +212,10 @@ def disable():
         if ida_funcs.get_func(ea) is None:
             continue  # no function there any more: nothing to take back
         f = _own_tail(rec, off, base)
+        fea = f.start_ea if f is not None else None  # read before the chunk list changes
         if f is not None and ida_funcs.remove_func_tail(f, ea):
             res["tails"] += 1
-            funcs.add(f.start_ea)
+            funcs.add(fea)
         else:
             res["tails_left"] += 1  # merged with IDA's own code, end not recorded, moved to another function, or refused
     for ea in sites:
