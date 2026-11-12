@@ -61,6 +61,10 @@ class Elf:
         shentsize, shnum, shstrndx = struct.unpack_from("<HHH", d, 0x3A)
         machine, = struct.unpack_from("<H", d, 0x12)
         etype, = struct.unpack_from("<H", d, 0x10)
+        if shnum == 0 and shoff:  # extended numbering (0xff00 or more sections): the count is section 0's sh_size
+            shnum, = struct.unpack_from("<Q", d, shoff + 32)
+        if shstrndx == 0xFFFF:  # SHN_XINDEX: the section-name table's index is section 0's sh_link
+            shstrndx, = struct.unpack_from("<I", d, shoff + 40)
         self.arch = {62: "x86_64", 183: "aarch64"}.get(machine, "machine %d" % machine)
         self.secs, names, extra = [], [], []
         for i in range(shnum):
@@ -89,12 +93,15 @@ class Elf:
         self.symbols = {}
         best = {}  # address -> (rank, name): the name to show for an address
         funcs = []
-        for t, f, a, o, s, link in self.secs:
+        for si, (t, f, a, o, s, link) in enumerate(self.secs):
             if t != 2:
                 continue
             stro = self.secs[link][3]
+            xindex = self._xindex(si)
             for k in range(s // 24):
                 st_name, st_info, _, shndx, value, size = struct.unpack_from("<IBBHQQ", d, o + 24 * k)
+                if shndx == 0xFFFF and xindex is not None:
+                    shndx, = struct.unpack_from("<I", d, xindex + 4 * k)
                 end = d.index(b"\0", stro + st_name)
                 name = d[stro + st_name:end].decode("utf-8", "replace")
                 if self.relocatable:
@@ -170,16 +177,26 @@ class Elf:
     def _all_symbol_values(self):
         """Index in .symtab -> address, for the relocations (section symbols = their section's address)."""
         out = {}
-        for t, f, a, o, s, link in self.secs:
+        for si, (t, f, a, o, s, link) in enumerate(self.secs):
             if t != 2:
                 continue
             stro = self.secs[link][3]
+            xindex = self._xindex(si)
             for k in range(s // 24):
                 st_name, st_info, _, shndx, value, size = struct.unpack_from("<IBBHQQ", self.data, o + 24 * k)
+                if shndx == 0xFFFF and xindex is not None:
+                    shndx, = struct.unpack_from("<I", self.data, xindex + 4 * k)
                 name = self.data[stro + st_name:self.data.index(b"\0", stro + st_name)].decode("utf-8", "replace")
                 out[k] = self._symval(name, shndx, value)
             break
         return out
+
+    def _xindex(self, symtab):
+        """File offset of the SHT_SYMTAB_SHNDX table for this symbol table (extended section numbering), or None."""
+        for t, f, a, o, s, link in self.secs:
+            if t == 18 and link == symtab:
+                return o
+        return None
 
     def _symval(self, name, shndx, value):
         if shndx == 0 or shndx == 0xFFF2:  # undefined or common: an extern slot, one per name

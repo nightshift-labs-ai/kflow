@@ -167,27 +167,31 @@ class Keys(unittest.TestCase):
         self.assertIsNone(key_label(at, BASE + 0x500, m.read))  # nothing named within 64 bytes
 
 
-def module_elf(path):
+def module_elf(path, extended=False):
     """A minimal x86_64 relocatable ELF (.ko) with one BUG entry and one static-key entry, both only meaningful
-    after relocation: .text = ud2 + 2-byte NOP, .rodata.str = "\\0a/b.c\\0", the key is an undefined symbol."""
+    after relocation: .text = ud2 + 2-byte NOP, .rodata.str = "\\0a/b.c\\0", the key is an undefined symbol.
+    extended=True writes it with extended section numbering (e_shnum 0, e_shstrndx SHN_XINDEX, and the .text section
+    symbol's index in a .symtab_shndx table), as an ELF with 0xff00 or more sections has."""
     text, rodata = b"\x0f\x0b\x66\x90", b"\0a/b.c\0"
     bug, jump = bytes(12), bytes(32)
     struct_bug = bytearray(bug)
     struct.pack_into("<HH", struct_bug, 8, 42, 1 << 0)  # line 42, BUGFLAG_WARNING
     strtab = b"\0my_key\0__tracepoint_foo\0"
     names = [b"", b".text", b".rodata.str", b"__bug_table", b".rela__bug_table", b"__jump_table",
-             b".rela__jump_table", b".symtab", b".strtab", b".shstrtab"]
+             b".rela__jump_table", b".symtab", b".strtab", b".shstrtab"] + ([b".symtab_shndx"] if extended else [])
     shstr = b"\0".join(names) + b"\0"
     off = {n: shstr.index(b"\0" + n + b"\0") + 1 if n else 0 for n in names}
     # symbols: 0 null, 1 section .text, 2 section .rodata.str, 3 undefined __tracepoint_foo, 4 undefined my_key
     # (a core-kernel tracepoint used from a module: its key is __tracepoint_foo + 8, which must not land on my_key)
-    sym = bytes(24) + struct.pack("<IBBHQQ", 0, 3, 0, 1, 0, 0) + struct.pack("<IBBHQQ", 0, 3, 0, 2, 0, 0) \
+    sym = bytes(24) + struct.pack("<IBBHQQ", 0, 3, 0, 0xFFFF if extended else 1, 0, 0) + struct.pack("<IBBHQQ", 0, 3, 0, 2, 0, 0) \
         + struct.pack("<IBBHQQ", 8, 0x10, 0, 0, 0, 0) + struct.pack("<IBBHQQ", 1, 0x10, 0, 0, 0, 0)
     rela = lambda o, s, t, a: struct.pack("<QQq", o, (s << 32) | t, a)  # noqa: E731
     rbug = rela(0, 1, 2, 0) + rela(4, 2, 2, 1)  # PC32: insn -> .text+0, file -> .rodata.str+1
     rjump = rela(0, 1, 2, 2) + rela(4, 1, 2, 4) + rela(8, 4, 24, 0) \
         + rela(16, 1, 2, 2) + rela(20, 1, 2, 4) + rela(24, 3, 24, 8)  # keys: my_key; __tracepoint_foo + 8 (PC64)
     blobs = [b"", text, rodata, bytes(struct_bug), rbug, jump, rjump, sym, strtab, shstr]
+    if extended:
+        blobs.append(struct.pack("<5I", 0, 1, 0, 0, 0))  # symbol 1's real section index (.text)
     body, offs = b"", []
     for b in blobs:
         body += bytes((-len(body)) % 8)
@@ -199,12 +203,17 @@ def module_elf(path):
     spec = [(b"", 0, 0, 0, 0, 0), (b".text", 1, 6, 0, 0, 0), (b".rodata.str", 1, 2, 0, 0, 0), (b"__bug_table", 1, 3, 0, 0, 0),
             (b".rela__bug_table", 4, 0x40, 3, 7, 24), (b"__jump_table", 1, 3, 0, 0, 0),
             (b".rela__jump_table", 4, 0x40, 5, 7, 24), (b".symtab", 2, 0, 3, 8, 24), (b".strtab", 3, 0, 0, 0, 0),
-            (b".shstrtab", 3, 0, 0, 0, 0)]
+            (b".shstrtab", 3, 0, 0, 0, 0)] + ([(b".symtab_shndx", 18, 0, 0, 7, 4)] if extended else [])
+    shstrndx = 9
     sh = b""
     for i, (n, t, f, info, link, ent) in enumerate(spec):
-        sh += struct.pack("<IIQQQQIIQQ", off[n], t, f, 0, offs[i] if i else 0, len(blobs[i]), link, info, 8 if i else 0, ent)
+        size, lnk = len(blobs[i]), link
+        if i == 0 and extended:
+            size, lnk = len(spec), shstrndx  # the real e_shnum and e_shstrndx
+        sh += struct.pack("<IIQQQQIIQQ", off[n], t, f, 0, offs[i] if i else 0, size, lnk, info, 8 if i else 0, ent)
     hdr = b"\x7fELF" + bytes([2, 1, 1]) + bytes(9) + struct.pack("<HHIQQQIHHHHHH", 1, 62, 1, 0, 0, shoff, 0, 64, 0, 0,
-                                                                   64, len(spec), len(spec) - 1)
+                                                                   64, 0 if extended else len(spec),
+                                                                   0xFFFF if extended else shstrndx)
     with open(path, "wb") as fh:
         fh.write(hdr + body + sh)
 
@@ -229,6 +238,21 @@ class Module(unittest.TestCase):
         self.assertEqual(e.key_name(j2.key), "tracepoint foo")  # PC64 key: also checks 8-byte relocations
         self.assertEqual(e.by_addr[j.key], "my_key")
         self.assertGreater(j.key, max(end for a, end in e.sections.values()))  # extern slot after the sections
+
+    def test_extended_section_numbering(self):
+        import tempfile
+        from kflow.cli import Elf, load
+        with tempfile.TemporaryDirectory() as d:
+            p, q = os.path.join(d, "toy.ko"), os.path.join(d, "toy_ext.ko")
+            module_elf(p)
+            module_elf(q, extended=True)
+            plain, ext = Elf(p), Elf(q)
+            tp, tq = load(plain), load(ext)
+        self.assertEqual(len(ext.secs), 11)
+        self.assertIn(".symtab_shndx", ext.secnames)
+        self.assertEqual(ext.sections[".text"], plain.sections[".text"])
+        self.assertEqual([(b.addr, b.file, b.line) for b in tq["bug"]], [(b.addr, b.file, b.line) for b in tp["bug"]])
+        self.assertEqual([(j.code, j.target) for j in tq["jump"]], [(j.code, j.target) for j in tp["jump"]])
 
     def test_debug_only_file(self):
         import tempfile

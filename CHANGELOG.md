@@ -2,6 +2,10 @@
 
 Taken from the GitHub release notes. Newest first.
 
+## Unreleased
+
+- ELF files with extended section numbering (0xff00 or more sections: `e_shnum` 0, `e_shstrndx` `SHN_XINDEX`, symbol section indexes in `.symtab_shndx`) are read; before, kflow saw no sections in them. Synthetic test.
+
 ## v0.0.1 (2026-11-12)
 
 First release.
