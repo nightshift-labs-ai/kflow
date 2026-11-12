@@ -5,6 +5,7 @@ Taken from the GitHub release notes. Newest first.
 ## Unreleased
 
 - Annotate (menu and `tools/kflow_headless.py`) reports its counts in words, including the static-key site -> key references: `comments: 18999, jump references added: 9006, static-key site -> key references: 9012, user comments kept: 0` on the MemLens demo kernel (fake `ida_*` modules); the headless runner printed a Python dict before.
+- `tests/run_all.sh`: every test in one command, on the pinned Debian arm64 `ext4.ko` package (377 KB download, sha256 checked) or on files you give it.
 - README: how to go from a `WARNING: ... at file:line func+0xoff` log line to the site (filter the BUG/WARN list, or G and `func+0xoff`).
 - Hex-Rays pseudocode comments: with the decompiler, each annotated BUG/WARN, static-key and exception-table site whose address has a pseudocode statement gets a display-only `// kflow: ...` comment at the end of that line; a static-key site with no statement of its own (usually a NOP) gets it on the line of the next instruction that has one if that is at most 16 bytes on in the same function with no other kflow site in between, otherwise none. Nothing is saved; Annotate and Remove apply to functions decompiled afterwards (press F5 in an open pseudocode window). Tested only against a fake `ida_hexrays` module; not yet run in the real decompiler.
 - **kflow: List static-key sites** now says when the `__jump_table` was found but could not be decoded, and why (it said "the table is empty").
