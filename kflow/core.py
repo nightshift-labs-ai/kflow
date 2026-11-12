@@ -201,7 +201,7 @@ def decode_jump_table(read, start, stop, in_text=None):
     if size <= 0:
         return []
     if size % 16:
-        raise ValueError("jump table size %d is not a multiple of 16 (absolute 24-byte layout of Linux before 5.0?)" % size)
+        raise ValueError("jump table size %d is not a multiple of 16 (absolute 24-byte layout of Linux 4.19 and older?)" % size)
     raw = read(start, size)
     if raw is None or len(raw) < size:
         raise ValueError("jump table not readable at 0x%x" % start)
@@ -213,7 +213,7 @@ def decode_jump_table(read, start, stop, in_text=None):
                             branch=bool(kr & 1), init=bool(kr & 2), entry=ea))
     if in_text and out and sum(1 for j in out if in_text(j.code)) * 2 < len(out):
         raise ValueError("jump table entries do not point into code: not the relative 16-byte layout "
-                         "(Linux before 5.0 uses absolute 24-byte entries, which kflow does not decode)")
+                         "(Linux 4.19 and older use absolute 24-byte entries, which kflow does not decode)")
     return out
 
 

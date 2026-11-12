@@ -121,7 +121,7 @@ class Flags(unittest.TestCase):
 
 class OldJump(unittest.TestCase):
     def test_absolute_24_byte_entries_rejected(self):
-        # Linux before 5.0: {u64 code, u64 target, u64 key} absolute. 2 entries = 48 bytes, a multiple of 16.
+        # Linux 4.19 and older: {u64 code, u64 target, u64 key} absolute. 2 entries = 48 bytes, a multiple of 16.
         m = Mem()
         start = BASE + 0x800
         for k in range(2):
