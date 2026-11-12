@@ -758,6 +758,13 @@ class Parse(unittest.TestCase):
                                    "not a trap line: pc : nft_do_chain+0x400/0x6d0 [nf_tables] (after the report's call "
                                    "trace began or in an NMI backtrace: the registers of an interrupted context or of "
                                    "another CPU)"])
+        # the whole arm64 NMI backtrace: arm64 repeats that CPU's pc as the first call-trace entry, which is not taken
+        # either (review s163 NIT 2)
+        rep, m = find(RCU_NMI_ARM64 + "<4>[  412.110090][    C1] Call trace:\n"
+                                      "<4>[  412.110100][    C1]  nft_do_chain+0x400/0x6d0 [nf_tables] (P)\n"
+                                      "<4>[  412.110110][    C1]  nft_do_chain_ipv4+0x6c/0xb8 [nf_tables]\n")
+        self.assertEqual((m.status, m.address, rep.primary.function), ("none", None, "nft_do_chain_ipv4"))
+        self.assertTrue(m.notes[-2].startswith("not a trap line: pc : nft_do_chain+0x400/0x6d0 [nf_tables]"), m.notes)
         # the trap's own RIP comes before the call trace: still used when an interrupt frame's RIP (here on another site)
         # follows in the trace; with the trap's RIP line left out, the WARNING line, not the interrupted code
         irq = X86_WARN.replace("[  152.334340]  userfaultfd_ioctl", "[  152.334336]  asm_sysvec_apic_timer_interrupt+0x1a/0x20\n"

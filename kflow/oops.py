@@ -291,12 +291,16 @@ def parse(text):
         lambda x: x.source in ("warning", "bug"))
     rep.kind = {"warning": "WARN", "bug": "BUG"}.get(rep.header.source) if rep.header else None
     addressable = lambda x: x.offset is not None or x.address is not None
+    # arm64 repeats a CPU's pc as the first entry of its call trace: when that pc is not a trap ('regs': another CPU's,
+    # in an NMI backtrace), neither is that entry (review s163 NIT 2)
+    regs = [x for x in locs if x.source == "regs"]
     rep.primary = (first(lambda x: x.source in ("rip", "pc") and addressable(x))
                    or first(lambda x: x.source == "warning" and addressable(x))
                    or first(lambda x: x.source == "bug")
                    or first(lambda x: x.source == "warning")
                    or first(lambda x: x.source == "text" and not x.inline and x.reliable)
-                   or first(lambda x: x.source == "frame" and x.reliable and addressable(x)))
+                   or first(lambda x: x.source == "frame" and x.reliable and addressable(x)
+                            and not any(same(x, r) for r in regs)))
     if rep.kind is None and rep.primary is not None and rep.primary.source in ("rip", "pc"):
         rep.kind = "oops"
     src = rep.header if rep.header is not None and rep.header.file else rep.primary
