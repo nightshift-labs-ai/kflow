@@ -878,6 +878,9 @@ class Resolve(unittest.TestCase):
         rep, m = find("WARNING: CPU: 1 PID: 9 at do_one_initcall+0x27c/0x310\nRIP: 0010:mfill_atomic_copy+0x674/0x9d0")
         self.assertEqual((m.status, m.address, m.site), ("mismatch", None, None), (m.status, m.reason))
         self.assertIn("is not the log's WARNING line's do_one_initcall+0x27c", m.reason)
+        # the reason names the WARNING line's function+offset, so 'from the log' shows it too (review s161 NIT 2)
+        self.assertEqual(oops.describe(rep, m, lambda ea: "")[0], "from the log: WARNING do_one_initcall+0x27c/0x310; "
+                                                                  "RIP: mfill_atomic_copy+0x674/0x9d0")
         # header and RIP / pc line agree (the normal report of a kernel without CONFIG_DEBUG_BUGVERBOSE): exact (review
         # s161 MINOR 3: the old check used a function without sites, so a rule that always fired passed it)
         for text, want in (("WARNING: CPU: 1 PID: 9 at mfill_atomic_copy+0x674/0x9d0\nRIP: 0010:mfill_atomic_copy+0x674/0x9d0",
@@ -906,6 +909,9 @@ class Resolve(unittest.TestCase):
         rep, m = find("WARNING: CPU: 1 PID: 9 at mm/userfaultfd.c:755 mfill_atomic_poison+0x494/0x850\n"
                       "RIP: 0010:mfill_atomic_copy+0x674/0x9d0")  # RIP from another report: other function, same line
         self.assertEqual((m.status, m.address), ("exact", 0xFFFFFFFF8E629BC4))
+        self.assertEqual(oops.describe(rep, m, lambda ea: "")[0], "from the log: WARNING at mm/userfaultfd.c:755 "
+                                                                  "mfill_atomic_poison+0x494/0x850; RIP: "
+                                                                  "mfill_atomic_copy+0x674/0x9d0")
         # the kind: a kernel BUG line, a WARN site at the address (same file:line)
         rep, m = find("kernel BUG at mm/userfaultfd.c:755!\nRIP: 0010:mfill_atomic_copy+0x674/0x9d0")
         self.assertEqual((m.status, m.reason), ("mismatch", "the site at mfill_atomic_copy+0x674 is a WARN, but the log "

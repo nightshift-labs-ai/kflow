@@ -601,9 +601,12 @@ def describe(report, match, func_of):
     loc = match.loc or report.primary
     if loc is not None:
         what = []
-        if report.header is not None:
+        h = report.header
+        if h is not None:
             what.append(("WARNING" if report.kind == "WARN" else "kernel BUG") +
                         (" at %s:%d" % (report.file, report.line) if report.file else ""))
+            if h is not loc and h.function is not None and (h.function, h.offset) != (loc.function, loc.offset):
+                what[-1] += " " + h.symbol()  # another function+offset than the line used (review s161 NIT 2)
         if loc.function is not None or loc.address is not None:
             label = {"rip": "RIP: ", "pc": "pc : ", "frame": "call trace: "}.get(loc.source, "")
             if loc is report.header:
