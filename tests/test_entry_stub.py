@@ -267,7 +267,7 @@ if key is not None:
     shown_texts.append(("static key", key.code, got))
     # the site has its own statement: the next statement (within 16 bytes, same function) gets no second copy
     kf, nxt = get_func(key.code), key.code + 5
-    if kf is not None and nxt not in m.STATE["pseudo"]["sites"]:
+    if kf is not None and not any(key.code < e <= nxt for e in m.STATE["pseudo"]["eas"]):  # no other site up to nxt
         assert decompile([key.code, nxt], entry=kf.start_ea) == {key.code: want, nxt: ""}
 exact = list(shown_texts)  # (kind, address, text) of the sites whose own address has a statement
 if nop is not None:
