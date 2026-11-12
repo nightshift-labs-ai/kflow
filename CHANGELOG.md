@@ -4,7 +4,7 @@ Taken from the GitHub release notes. Newest first.
 
 ## Unreleased
 
-- Hex-Rays pseudocode comments: with the decompiler, each annotated BUG/WARN, static-key and exception-table site gets a display-only `// kflow: ...` comment at the end of its pseudocode line (nothing saved, gone after Remove); a static-key site with no statement of its own (usually a NOP) gets it on the line of the next instruction that has one if that is at most 16 bytes on in the same function with no other kflow site in between, otherwise none. Found by a judge-style review ("nothing reaches Hex-Rays"). Tested only against a fake `ida_hexrays` module; not yet run in the real decompiler.
+- Hex-Rays pseudocode comments: with the decompiler, each annotated BUG/WARN, static-key and exception-table site whose address has a pseudocode statement gets a display-only `// kflow: ...` comment at the end of that line; a static-key site with no statement of its own (usually a NOP) gets it on the line of the next instruction that has one if that is at most 16 bytes on in the same function with no other kflow site in between, otherwise none. Nothing is saved; Annotate and Remove apply to functions decompiled afterwards (press F5 in an open pseudocode window). Tested only against a fake `ida_hexrays` module; not yet run in the real decompiler.
 
 ## v0.0.2 (2026-11-13)
 
