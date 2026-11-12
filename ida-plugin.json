@@ -8,7 +8,8 @@
     "description": "Reads a Linux kernel's own __bug_table, __jump_table and __ex_table (64-bit x86_64 and arm64): comments BUG/WARN traps with their source file:line (WARN = execution continues), static-key sites with their key and branch target, and faulting instructions with their fixup, and adds the missing jump references. Tested on five kernels outside IDA. Not yet run in real IDA.",
     "license": "MIT",
     "categories": [
-      "api-scripting-and-automation"
+      "vulnerability-research-and-exploit-development",
+      "disassembly-and-processor-modules"
     ],
     "keywords": [
       "linux",
