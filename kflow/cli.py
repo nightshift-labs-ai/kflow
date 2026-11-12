@@ -76,6 +76,8 @@ class Elf:
         self.externs = {}
         if self.relocatable:
             self._layout(extra)
+        # sections without contents here (SHT_NOBITS): in a separate debug-info file, even code and tables are empty
+        self.nobits = {nm for i, nm in enumerate(self.secnames) if self.secs[i][0] == 8}
         self.sections = {}
         for i, nm in enumerate(self.secnames):
             t, f, a, o, s, l = self.secs[i]
@@ -228,6 +230,10 @@ def load(elf):
             out["found_by"][kind] = "section"
         else:
             out["missing"].append(kind)
+            continue
+        if s[len("__start_"):] in elf.nobits:
+            out["errors"][kind] = ("the %s section has no contents in this file (a separate debug-info file? "
+                                   "use the kernel or module itself)" % s[len("__start_"):])
             continue
         try:  # one table in a layout kflow does not know must not hide the others
             if kind == "bug":

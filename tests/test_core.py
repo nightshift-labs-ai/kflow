@@ -230,6 +230,21 @@ class Module(unittest.TestCase):
         self.assertEqual(e.by_addr[j.key], "my_key")
         self.assertGreater(j.key, max(end for a, end in e.sections.values()))  # extern slot after the sections
 
+    def test_debug_only_file(self):
+        import tempfile
+        from kflow.cli import Elf, load
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "toy.ko")
+            module_elf(p)
+            b = bytearray(open(p, "rb").read())
+            shoff, = struct.unpack_from("<Q", b, 0x28)
+            struct.pack_into("<I", b, shoff + 3 * 64 + 4, 8)  # section 3 (__bug_table) -> SHT_NOBITS, as in debug info
+            with open(p, "wb") as fh:
+                fh.write(b)
+            t = load(Elf(p))
+        self.assertIn("no contents in this file", t["errors"]["bug"])
+        self.assertEqual(len(t["jump"]), 2)  # the other tables are still decoded
+
     def test_compressed_and_broken(self):
         import gzip
         import lzma
