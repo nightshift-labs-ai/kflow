@@ -522,6 +522,18 @@ for h in list(w["listeners"]):
     h.ev_ending_undo("kflow:warnflow", False)
 assert m.STATE["wf"].offsets == on_offsets and m.STATE["wf_filter"].match(cdg(s0))
 assert res2["flow"] == res2["sites"] == res["sites"] and res2["tails"] == 0 and res2["other_func"] == res["other_func"]
+# the record is gone but the hook and filter are still in memory (an undo whose ev_ending_undo kflow did not get):
+# Remove clears them instead of refusing, so a reanalysis no longer adds flow there (review s151 finding 1)
+saved = w["netnodes"].pop(il.WARN_NODE)
+assert len(w["listeners"]) == 1 and len(w["filters"]) == 1 and m.STATE["wf"].offsets == on_offsets
+assert m.WarnFlowOffAction().activate(None) == 1
+assert not w["listeners"] and not w["filters"] and m.STATE["wf"] is None and m.STATE["wf_filter"] is None
+assert msgs("WARN fall-through: no record in this database (undone?); kflow's processor hook and decompiler filter "
+            "were still installed and are now removed")
+replan(EXP_WARN)
+assert w["flow"] == pre["flow"], "no hook left: IDA's reanalysis drops the flow at the sites"
+w["netnodes"][il.WARN_NODE] = saved  # redo
+assert m.WarnFlowAction().activate(None) == 1 and snap(m) == on, "running the action again hooks and restores"
 
 # ---- 5b. Annotate / Remove give the same results with WARN fall-through on ----
 assert annotate_remove() == ar_off
