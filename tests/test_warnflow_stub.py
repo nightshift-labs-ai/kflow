@@ -169,6 +169,11 @@ for s in traps:
 for s in calls:
     w["code"].add(s)
     w["flow"].add(s + 5)
+HSTARTS = sorted(HOLES)
+for s in [j.code for j in ref.get("jump", [])] + [x.insn for x in ref.get("ex", [])]:
+    i = bisect.bisect_right(HSTARTS, s) - 1  # Annotate's sources are instructions too, except in unreachable code
+    if elf.in_text(s) and not (i >= 0 and s < HOLES[HSTARTS[i]][0]):
+        w["code"].add(s)
 
 
 def piece_at(ea):

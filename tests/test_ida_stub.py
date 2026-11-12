@@ -29,6 +29,8 @@ class PackedElf(Elf):
 
 
 SEG_XTRN = 1
+FF_CODE, MS_CLS = 0x600, 0x600  # ida_bytes.pyi values
+X86_LEN = [(b"\xe9", 5), (b"\xeb", 2), (b"\x0f\x1f\x44\x00\x00", 5), (b"\x66\x90", 2), (b"\x0f\x0b", 2), (b"\xe8", 5)]
 
 
 def world_from(elf):
@@ -51,9 +53,10 @@ def world_from(elf):
 def install(w, names=True):
     elf = w["elf"]
     m = {n: types.ModuleType(n) for n in "ida_bytes ida_ida ida_idaapi ida_name ida_segment ida_xref ida_funcs".split()}
-    # functions as the plugin's IDA layer sees them: none, unless a test sets w["func_of"] (ea -> (start, end) or None)
+    # functions as the plugin's IDA layer sees them: none, unless a test sets w["func_of"] (ea -> (start, end) or None);
+    # none at all while auto-analysis runs (w["auto_ok"] False: IDA has not made them yet)
     m["ida_funcs"].get_func = lambda ea: (lambda r: types.SimpleNamespace(start_ea=r[0], end_ea=r[1]) if r else None)(
-        w["func_of"](ea) if "func_of" in w else None)
+        w["func_of"](ea) if "func_of" in w and w.get("auto_ok", True) else None)
     m["ida_funcs"].func_contains = lambda f, ea: f.start_ea <= ea < f.end_ea or ea in w.get("shared", {}).get(f.start_ea, ())
     m["ida_funcs"].get_func_name = lambda ea: w.get("func_names", {}).get(ea, "")
     m["ida_idaapi"].BADADDR = BAD
@@ -69,7 +72,33 @@ def install(w, names=True):
     m["ida_bytes"].get_bytes = lambda ea, n: elf.read(ea, n)
     m["ida_bytes"].is_loaded = lambda ea: elf.read(ea, 1) is not None
     m["ida_bytes"].get_cmt = lambda ea, rep: w["cmts"].get(ea)
-    m["ida_bytes"].get_item_end = lambda ea: w.get("item_end", {}).get(ea, ea + 1)
+    # instruction heads: w["code"], the set IDA has made so far, while a test models auto-analysis; without it (a
+    # finished analysis) every address of an executable segment counts as one. Unexplored bytes have flags 0.
+    def is_head(ea):
+        if "code" in w:
+            return ea in w["code"]
+        seg = getseg(ea)
+        return seg is not None and bool(seg.perm & 1)
+    m["ida_bytes"].get_flags = lambda ea: FF_CODE if is_head(ea) else 0
+    m["ida_bytes"].is_code = lambda F: F & MS_CLS == FF_CODE
+
+    def get_item_end(ea):
+        """Like IDA: unexplored bytes are 1-byte items; an instruction ends where it ends. Instruction ends come from
+        w["item_end"], else arm64's 4 bytes, else the x86 encodings at static-key sites (jmp, 2/5-byte NOP) and of
+        ud2/call. An x86 instruction the fake cannot size (it has no decoder) ends 1 byte on: its next instruction is
+        never taken for a fixup there, so the fake adds references real IDA would not (never fewer)."""
+        if not is_head(ea):
+            return ea + 1
+        if ea in w.get("item_end", {}):
+            return w["item_end"][ea]
+        if elf.arch == "aarch64":
+            return ea + 4
+        b = elf.read(ea, 5) or b""
+        for raw, n in X86_LEN:
+            if b.startswith(raw) and len(b) >= n:
+                return ea + n
+        return ea + 1
+    m["ida_bytes"].get_item_end = get_item_end
 
     def set_cmt(ea, text, rep):
         if text:
@@ -223,7 +252,9 @@ def install_ui(w, log):
     fn.get_func_name = lambda ea: elf.func(ea) or ""
     fstarts = [f[0] for f in elf.funcs]
 
-    def get_func(ea):  # the function's entry chunk, from the ELF's function symbols
+    def get_func(ea):  # the function's entry chunk, from the ELF's function symbols; none while auto-analysis runs
+        if not w.get("auto_ok", True):
+            return None
         i = bisect.bisect_right(fstarts, ea) - 1
         if i >= 0 and elf.funcs[i][0] <= ea < elf.funcs[i][1]:
             return types.SimpleNamespace(start_ea=elf.funcs[i][0], end_ea=elf.funcs[i][1])
@@ -523,6 +554,96 @@ def other_function(path):
           " reference kept (%s)" % os.path.basename(path))
 
 
+def _db(path):
+    cli_elf = Elf(path)
+    elf = PackedElf(path) if cli_elf.relocatable else cli_elf
+    w = world_from(elf)
+    il = install(w)
+    return elf, w, il, il.scan()
+
+
+def _funcs(elf):
+    starts = [f[0] for f in elf.funcs]
+
+    def func_of(ea):  # IDA's functions once analysis has made them: the ELF's function symbols
+        i = bisect.bisect_right(starts, ea) - 1
+        return elf.funcs[i][:2] if i >= 0 and ea < elf.funcs[i][1] else None
+    return func_of
+
+
+def analysis_running(path):
+    """Annotate right after loading, while IDA's auto-analysis still runs (review s158 F1): no site is an instruction
+    yet and IDA has made no functions. An xref's source must be an item head (ida_xref.pyi) and get_item_end() counts
+    unexplored bytes as 1-byte items, so a fixup that is the next instruction would get a user jump reference that a
+    later Annotate keeps. kflow adds no reference from such a site and counts it; once analysis has finished, a second
+    Annotate adds exactly what Annotate on the analysed database adds."""
+    elf, w, il, t = _db(path)
+    arch = il.current_arch()
+    w["code"], w["auto_ok"], w["func_of"] = set(), False, _funcs(elf)
+    res = il.annotate(t, arch)
+    assert not w["xrefs"] and not w["drefs"], "%d jump and %d data references from addresses that are not " \
+        "instructions yet" % (len(w["xrefs"]), len(w["drefs"]))
+    sites = sum(1 for j in t["jump"] if il.in_text(j.code)) + sum(1 for x in t["ex"] if il.in_text(x.insn))
+    assert res.get("not_code") == sites and res["xrefs"] == res["key_refs"] == res["other_refs"] == 0, (res, sites)
+    assert not any(w["netnodes"].get(n) for n in (il.NODE, il.KEY_NODE, il.OTHER_NODE)) and il.annotated()
+    assert res["comments"] > 0 and "%d static-key / exception-table sites are not instructions yet" % sites in \
+        il.annotate_text(res) or not sites, il.annotate_text(res)
+    # auto-analysis finished: every site an instruction, the functions made
+    w.pop("code")
+    w["auto_ok"] = True
+    res2 = il.annotate(t, arch)
+    _, w2, il2, t2 = _db(path)  # the same database annotated only after analysis
+    w2["func_of"] = _funcs(elf)
+    ref = il2.annotate(t2, arch)
+    assert res2["not_code"] == 0 and (res2["xrefs"], res2["key_refs"], res2["other_refs"]) == (
+        ref["xrefs"], ref["key_refs"], ref["other_refs"]), (res2, ref)
+    assert w["xrefs"] == w2["xrefs"] and w["drefs"] == w2["drefs"] and w["netnodes"] == w2["netnodes"]
+    print("OK analysis running: %d sites not instructions yet, no reference added from them; after analysis %d jump, "
+          "%d key and %d other-function references as on the analysed database (%s)"
+          % (sites, res2["xrefs"], res2["key_refs"], res2["other_refs"], os.path.basename(path)))
+
+
+def stale_next_insn(path):
+    """An earlier Annotate (kflow 0.0.4 and older, run while the sites were unexplored bytes) recorded a user
+    reference to the next instruction, a jump reference and, from a run that saw the target in another function, a
+    data reference (review s158 F1). Annotate after analysis deletes both and their records, and adds every other
+    reference exactly as on a database annotated only after analysis; Remove then leaves no user reference."""
+    elf, w, il, t = _db(path)
+    arch = il.current_arch()
+    srcs = collections.Counter([j.code for j in t["jump"]] + [x.insn for x in t["ex"]])
+    nxt = [x for x in t["ex"] if srcs[x.insn] == 1 and il.in_text(x.insn) and il.in_text(x.fixup)
+           and 0 < x.fixup - x.insn <= 15 and not il.branches_to(x.insn, x.fixup, arch)][:2]
+    if len(nxt) < 2:
+        print("  stale next-instruction check skipped: no two exception sites in %s" % os.path.basename(path))
+        return
+    base = w["imagebase"] = 0x10000
+    ends = {x.insn: x.fixup for x in nxt}  # both fixups are the next instruction
+    _, w2, il2, t2 = _db(path)
+    w2["imagebase"], w2["item_end"] = base, dict(ends)
+    ref = il2.annotate(t2, arch)
+    (a, fa), (b, fb) = [(x.insn, x.fixup) for x in nxt]
+    w["xrefs"][(a, fa)] = True
+    w["by_from"].setdefault(a, set()).add(fa)
+    w["drefs"][(b, fb)] = True
+    w.setdefault("dref_keys", {}).setdefault(b, set()).add((b, fb))
+    w["netnodes"][il.NODE] = {(a - base) & il.MASK: (fa - base) & il.MASK}
+    w["netnodes"][il.OTHER_NODE] = {(b - base) & il.MASK: (fb - base) & il.MASK}
+    w["item_end"] = dict(ends)
+    res = il.annotate(t, arch)
+    assert (a, fa) not in w["xrefs"] and (b, fb) not in w["drefs"], "the earlier next-instruction reference is still there"
+    assert res.get("next_insn_refs") == 2 and res["not_code"] == 0, res
+    assert w["xrefs"] == w2["xrefs"] and w["drefs"] == w2["drefs"] and w["netnodes"] == w2["netnodes"], "other references"
+    assert (res["xrefs"], res["key_refs"], res["other_refs"]) == (ref["xrefs"], ref["key_refs"], ref["other_refs"]), (res, ref)
+    assert "references to the next instruction removed (added by an earlier Annotate" in il.annotate_text(res)
+    again = il.annotate(t, arch)
+    assert again["next_insn_refs"] == again["xrefs"] == again["key_refs"] == 0, again
+    il.remove_annotations(t)
+    assert not any(w["xrefs"].values()) and not any(w["drefs"].values()), "Remove left a user reference"
+    print("OK stale next instruction: a jump and a data reference an earlier Annotate recorded to the next instruction "
+          "deleted with their records, the other %d references as on a database annotated after analysis (%s)"
+          % (res["xrefs"] + res["key_refs"] + res["other_refs"], os.path.basename(path)))
+
+
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("SKIP: pass a kernel ELF path")
@@ -530,3 +651,5 @@ if __name__ == "__main__":
     for p in sys.argv[1:]:
         run(p)
         other_function(p)
+        analysis_running(p)
+        stale_next_insn(p)

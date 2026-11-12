@@ -231,8 +231,9 @@ class AnnotateAction(ida_kernwin.action_handler_t):
         report(idalayer.annotate_text(res))
         import ida_auto
         if not ida_auto.auto_is_ok():
-            report("IDA's auto-analysis is still running: run Annotate again when it has finished, so that targets inside "
-                   "other functions get data references instead of jump references")
+            report("IDA's auto-analysis is still running: run Annotate again when it has finished, so that sites that are "
+                   "not instructions yet get their references and targets inside other functions get data references "
+                   "instead of jump references")
         if hook_pseudocode():
             STATE["pseudo"] = pseudo_index(t, idalayer.current_arch(), idalayer.layout())
             flush_pseudocode()

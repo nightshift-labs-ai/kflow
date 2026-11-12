@@ -94,8 +94,9 @@ def main(argv=None):
         else:
             print("[kflow] %s" % idalayer.annotate_text(idalayer.annotate(t, arch)))
             if args.no_analysis:
-                print("[kflow] --no-analysis: IDA has not made the functions yet, so targets inside other functions kept "
-                      "jump references; run again without --no-analysis to change them")
+                print("[kflow] --no-analysis: IDA has not made the instructions and functions yet, so references were "
+                      "added only from sites that are instructions already, and targets inside other functions kept jump "
+                      "references; run again without --no-analysis to add the rest and change those")
         return 0
     finally:
         idapro.close_database(True)

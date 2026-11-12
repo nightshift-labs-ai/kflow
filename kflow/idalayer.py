@@ -324,12 +324,18 @@ def branches_to(src, dst, arch):
     return False
 
 
+def is_insn(ea):
+    """True when IDA has made an instruction at ea. The source of a reference must be an item head (ida_xref), and
+    get_item_end() counts unexplored bytes as 1-byte items, so before auto-analysis reaches a site neither the
+    reference nor the next-instruction test would be right."""
+    return ida_bytes.is_code(ida_bytes.get_flags(ea))
+
+
 def _add(src, dst, node, arch=None):
     """Add a user jump reference unless one (IDA's own, e.g. an enabled jmp, or the user's) already exists or the
-    instruction itself branches there. Every reference added is recorded in the database, so Remove deletes only these."""
+    instruction itself branches there. Every reference added is recorded in the database, so Remove deletes only these.
+    The caller has checked that src is an instruction and dst is not the next one."""
     if not in_text(dst) or dst in code_refs_from(src) or branches_to(src, dst, arch):
-        return 0
-    if dst == ida_bytes.get_item_end(src):  # the fixup/target is the next instruction: ordinary flow already goes there
         return 0
     if not ida_xref.add_cref(src, dst, ida_xref.fl_JN | ida_xref.XREF_USER):
         return 0
@@ -360,8 +366,6 @@ def _add_other(src, dst, node, arch=None):
     reference is already there or the instruction branches there itself; recorded so Remove deletes only these."""
     if not in_text(dst) or dst in data_refs_from(src) or dst in code_refs_from(src) or branches_to(src, dst, arch):
         return 0
-    if dst == ida_bytes.get_item_end(src):
-        return 0
     if not ida_xref.add_dref(src, dst, ida_xref.dr_O | ida_xref.XREF_USER):
         return 0
     base = ida_nalt.get_imagebase()
@@ -372,9 +376,27 @@ def _add_other(src, dst, node, arch=None):
 def _ref(src, dst, node, onode, arch, res):
     """A jump reference src -> dst, or a data reference when dst is inside another function. A reference of the
     other kind that an earlier Annotate recorded for this pair (before IDA made the functions, or by an older kflow)
-    is replaced, so re-running Annotate after auto-analysis fixes it and Remove still finds everything."""
+    is replaced, so re-running Annotate after auto-analysis fixes it and Remove still finds everything.
+
+    Nothing while src is not an instruction yet (auto-analysis has not reached it; counted in res["not_code"]). No
+    reference when dst is the next instruction (ordinary flow goes there); one that an earlier Annotate recorded for
+    this pair (run while the site was still unexplored bytes, so the next-instruction test could not match) is
+    deleted (res["next_insn_refs"])."""
+    if not is_insn(src):
+        res["not_code"] += 1
+        return
     base = ida_nalt.get_imagebase()
     key, val = (src - base) & MASK, (dst - base) & MASK
+    if dst == ida_bytes.get_item_end(src):
+        if node.altval(key) == val and code_refs_from(src).get(dst):  # still kflow's user reference
+            ida_xref.del_cref(src, dst, False)
+            node.altdel(key)
+            res["next_insn_refs"] += 1
+        elif onode.altval(key) == val and data_refs_from(src).get(dst):
+            ida_xref.del_dref(src, dst)
+            onode.altdel(key)
+            res["next_insn_refs"] += 1
+        return
     if in_other_function(src, dst):
         if node.altval(key) == val and code_refs_from(src).get(dst):
             ida_xref.del_cref(src, dst, False)
@@ -441,7 +463,8 @@ def key_ref_target(j):
 def annotate(t, arch=None):
     """Comment every site; add jump references site -> static-key target and faulting insn -> fixup, and data
     references site -> key."""
-    res = {"comments": 0, "xrefs": 0, "other_refs": 0, "changed_refs": 0, "key_refs": 0, "kept_user_comments": 0}
+    res = {"comments": 0, "xrefs": 0, "other_refs": 0, "changed_refs": 0, "key_refs": 0, "kept_user_comments": 0,
+           "not_code": 0, "next_insn_refs": 0}
     node = _created()
     knode = _created(KEY_NODE)
     onode = _created(OTHER_NODE)
@@ -449,16 +472,18 @@ def annotate(t, arch=None):
     for b in t["bug"]:
         if in_text(b.addr):
             _set(b.addr, bug_comment(b), res)
+    insn = {j.code for j in t["jump"] if in_text(j.code) and is_insn(j.code)}  # key references only from instructions
     wanted = {}  # site -> the key references this Annotate wants there (a site can carry several entries)
     for j in t["jump"]:
-        if in_text(j.code):
+        if j.code in insn:
             wanted.setdefault(j.code, set()).add(key_ref_target(j))
     res["stale_key_refs"] = _drop_stale_key_refs(wanted, knode)
     for j in t["jump"]:
         if in_text(j.code):
             _set(j.code, jump_comment(j), res)
             _ref(j.code, j.target, node, onode, arch, res)
-            res["key_refs"] += _add_key_ref(j.code, key_ref_target(j), knode)
+            if j.code in insn:
+                res["key_refs"] += _add_key_ref(j.code, key_ref_target(j), knode)
     for x in t["ex"]:
         if in_text(x.insn):
             _set(x.insn, ex_comment(x, arch), res)
@@ -476,6 +501,13 @@ def annotate_text(res):
         text += ", references changed between jump and data reference (IDA's functions changed): %d" % res["changed_refs"]
     if res.get("stale_key_refs"):
         text += ", outdated key references removed: %d" % res["stale_key_refs"]
+    if res.get("next_insn_refs"):
+        text += (", references to the next instruction removed (added by an earlier Annotate before IDA had made the "
+                 "instruction): %d" % res["next_insn_refs"])
+    if res.get("not_code"):
+        text += ("; %d static-key / exception-table sites are not instructions yet (IDA's auto-analysis has not reached "
+                 "them), so no references were added there: run Annotate again when auto-analysis has finished"
+                 % res["not_code"])
     return text
 
 

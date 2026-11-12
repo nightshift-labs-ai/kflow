@@ -36,10 +36,16 @@ assert m.STATE["hx"] is None
 assert m.AnnotateAction().activate(None) == 1
 assert [x for x in log if x[0] == "msg" and "jump references added: " in x[1] and "static-key site -> key references: " in x[1]], "Annotate reports its counts"
 assert not [x for x in log if x[0] == "msg" and "auto-analysis is still running" in x[1]]
-w["auto_ok"] = False  # Annotate while auto-analysis still runs: it works and says to run it again afterwards
+# Annotate while auto-analysis still runs (no instructions, no functions yet): it works, adds no reference from a site
+# that is not an instruction yet, and says to run it again afterwards
+w["auto_ok"], w["code"] = False, set()
+before = (dict(w["xrefs"]), dict(w["drefs"]))
 assert m.AnnotateAction().activate(None) == 1
 assert [x for x in log if x[0] == "msg" and "auto-analysis is still running" in x[1]]
+assert [x for x in log if x[0] == "msg" and "sites are not instructions yet" in x[1]]
+assert (w["xrefs"], w["drefs"]) == before, "references added from addresses that are not instructions"
 w["auto_ok"] = True
+w.pop("code")
 assert any(c.startswith("kflow: ") for c in w["cmts"].values())
 assert ("hide", None) in log and not [x for x in log if x[0] == "warning"], log[-3:]
 assert m.ListAction().activate(None) == 1
