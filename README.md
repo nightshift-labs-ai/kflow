@@ -10,7 +10,7 @@ kflow reads these tables from the database and, in IDA, comments every site and 
 
 ## Status: read this first
 
-**kflow has not yet been run inside real IDA.** It was built without access to an IDA installation. The table decoders are checked on five real kernels and one kernel module (below): trap bytes, branch targets and source-file names; the IDA layer is small, uses 54 IDAPython names and object members, all present in the official stubs (`tests/check_ida_api.py`), and has only been exercised with fake `ida_*` modules. Bug reports are very welcome.
+**kflow has not yet been run inside real IDA.** It was built without access to an IDA installation. The table decoders are checked on five real kernels and three kernel modules (below): trap bytes, branch targets and source-file names; the IDA layer is small, uses 54 IDAPython names and object members, all present in the official stubs (`tests/check_ida_api.py`), and has only been exercised with fake `ida_*` modules. Bug reports are very welcome.
 
 kflow was built by an AI agent (Claude, operated by Nightshift Labs).
 
@@ -84,6 +84,7 @@ The comments kflow writes in IDA, for three of the sites above (text produced by
 | 5.10.198-android12-9, arm64 (vmlinux-to-elf) | 24,386 (17,374 WARN, all `brk #0x800`) | 75,316 | 1,488 (8-byte, no type) | the 54,896 sites outside init code compiled as a `b` branch to the decoded target (most are `static_branch_likely` sites, not keys switched on); the rest are `nop`; file pointers here are entry-relative (before Linux 5.19) |
 | 5.10.0-32-amd64 (Debian 11, 5.10.223), x86_64 (vmlinux-to-elf) | 6,573 (4,671 WARN) | 3,820 | 548 (12-byte, third field = handler function) | WARN/BUG sites are `ud2`; the 169 sites compiled as a `jmp` branch to the decoded target; file pointers are entry-relative; all 548 handlers are the kernel's `ex_handler_*` functions (288 `ex_handler_uaccess`, 114 `ex_handler_default`, ...), and the 49 MSR handlers sit on `rdmsr`/`wrmsr` |
 | module `nf_tables.ko` from 6.12.115+deb13.1-cloud-amd64, x86_64 (relocations applied by the command line) | 141 (138 WARN) | 8 | none in this module | WARN/BUG sites are `ud2`; the 2 sites compiled as a `jmp` branch to the decoded target; all 141 `file:line` pairs checked against the v6.12.115 sources: 133 lines hold a `WARN`/`BUG` macro, the other 8 a `memcpy` (fortified copies warn on overflow); keys named, e.g. `nft_trace_enabled` |
+| modules `fat.ko` + `vfat.ko` from 6.12.94+deb13-arm64 (Debian installer package `fat-modules`), arm64 | 25 + 5 (19 WARN, all `brk #0x800`) | none | 25 in `fat.ko` (12-byte, all UACCESS_ERR_ZERO) | all 30 `file:line` pairs checked against the v6.12.94 sources: 26 lines hold a `WARN`/`BUG` macro, the other 4 a fortified `memcpy`; every fixup lies in the same function as its faulting instruction |
 | 6.1.57-android14-11, arm64 (vmlinux-to-elf) | 12,223 (8,792 WARN, all `brk #0x800`) | 10,629 | 1,043 (12-byte: 1,022 UACCESS_ERR_ZERO, 12 LOAD_UNALIGNED_ZEROPAD, 9 KACCESS_ERR_ZERO) | the 1,099 `b` sites outside init code branch to the decoded target; the rest are `nop` |
 
 The entry layout is chosen from the data: for `__bug_table` the layout whose entries name source files, for `__ex_table` the layout that gives the address-sorted list the kernel build produces (arm64 before 5.16 has 8-byte entries).
@@ -94,7 +95,7 @@ The entry layout is chosen from the data: for `__bug_table` the layout whose ent
 - Exception-type names: x86_64 from Linux 6.12, arm64 from Linux 6.1/6.12 (`asm-extable.h`, same numbers in both). Other versions number some x86_64 types differently, so treat the name as a hint; arm64 kernels before 5.16 have no type field. On x86_64 before 5.16 the third field points to a handler function: kflow detects that layout and names the handler instead (checked on a synthetic table and on Debian 11's 5.10 kernel).
 - kflow does not change how IDA treats a WARN `ud2` (IDA may still end the block there); the comment says that execution continues. Not tried in IDA.
 - Static-key sites in freed init code (memory images) are decoded but not commented when they are outside code segments.
-- Kernel modules: checked on one x86_64 module (`nf_tables.ko`). The arm64 relocation types (`R_AARCH64_PREL32`/`PREL64`/`ABS64`/`ABS32`) are applied the same way but have not been tried on a real arm64 module. In IDA, kflow relies on IDA's own relocation of the `.ko` (not tried in IDA).
+- Kernel modules: checked on one x86_64 module (`nf_tables.ko`) and two arm64 modules (`fat.ko`, `vfat.ko`). Only the data relocations the tables use are applied (x86_64 `R_X86_64_PC32`/`PLT32`/`PC64`/`64`/`32`/`32S`, arm64 `R_AARCH64_PREL32`/`PREL64`/`ABS64`/`ABS32`); the three modules above use only `R_X86_64_PC32`/`PC64` and `R_AARCH64_PREL32` in their tables, so the other types (for example the arm64 static-key `PREL64`) follow the same rule but are untested on real files. In IDA, kflow relies on IDA's own relocation of the `.ko` (not tried in IDA).
 - Alternatives (`.altinstructions`) are not handled; see [ida-linux-alternatives](https://github.com/opensrcsec/ida-linux-alternatives).
 
 ## Credits
