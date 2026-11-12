@@ -342,6 +342,12 @@ class OopsAction(ida_kernwin.action_handler_t):
         path = ida_nalt.get_input_file_path() or ""
         mod = oops.module_name(path)
         m = oops.resolve(rep, t["bug"], function_starts, mod, mod is not None)
+        if m.status == "exact" and m.function_start is not None and not oops.confirms(rep, m.site) \
+                and not ida_name.is_public_name(m.function_start) and not ida_name.is_weak_name(m.function_start):
+            # IDA shows one function under a name; the kernel can have several static functions of that name
+            m.notes.append("%s is a static function, and IDA names only one function so: another static function of "
+                           "that name is not tried (python3 -m kflow --oops lists them all); the log's WARNING / kernel "
+                           "BUG line would confirm the site" % m.function)
         for line in oops.describe(rep, m, ida_funcs.get_func_name):
             report(line)
         if m.status == "ambiguous" or (m.address is None and m.candidates):  # the candidates, no jump
@@ -356,7 +362,10 @@ class OopsAction(ida_kernwin.action_handler_t):
             ida_kernwin.warning("kflow: no BUG/WARN site or function of this file matches the pasted text; details are "
                                 "in the Output window.")
             return 0
-        ida_kernwin.jumpto(m.address)
+        if not ida_kernwin.jumpto(m.address):  # an address outside this database
+            ida_kernwin.warning("kflow: could not jump to 0x%X (not in this database?); details are in the Output "
+                                "window." % m.address)
+            return 0
         return 1
 
     def update(self, ctx):

@@ -32,6 +32,7 @@ FUNCS = {name: [(start, size)] for _, name, start, size in UFFD}
 SITES = [BugSite(a, "mm/userfaultfd.c", 755, 0x901) for a, _, _, _ in UFFD]
 SITES += [BugSite(0xFFFFFFFF8E629BA9, "mm/userfaultfd.c", 861, 0),  # a BUG in mfill_atomic_copy, before the WARN
           BugSite(0xFFFFFFFF8E62ACE0, "mm/userfaultfd.c", 900, 1),  # a WARN in mfill_atomic_poison, before :755's
+          BugSite(0xFFFFFFFF810012C3, "lib/pad.c", 1, 1),  # right at the end of padded_fn's code: not in it
           BugSite(0xFFFFFFFF81000110, "mm/filemap.c", 1499, 0),  # folio_unlock: a BUG with a unique file:line
           BugSite(0xFFFFFFFF81000210, "lib/dup.c", 10, 1),  # two static functions named dup_fn: sites at +0x10 in both
           BugSite(0xFFFFFFFF81000310, "lib/dup.c", 20, 1),
@@ -109,7 +110,8 @@ X86_BUG = """\
 <4>[  222.942000][ T8817] Oops: invalid opcode: 0000 [#1] PREEMPT SMP KASAN NOPTI
 <4>[  222.942106][ T8817] RIP: 0010:folio_unlock+0x70/0xd0
 """
-# report_bug() without file:line: 'kernel BUG at %pB [verbose debug info unavailable]' ('Kernel BUG' in 5.10)
+# report_bug() without file:line: 'Kernel BUG at %pB [verbose debug info unavailable]' (capital K, v5.10 to v7.0); the
+# lower-case form is not printed by the kernel but accepted, as people retype it
 BUG_NO_FILE = "kernel BUG at folio_unlock+0x70/0xd0 [verbose debug info unavailable]"
 BUG_NO_FILE_510 = "Kernel BUG at folio_unlock+0x70/0xd0 [verbose debug info unavailable]"
 
@@ -341,6 +343,50 @@ class Parse(unittest.TestCase):
         rep, m = find("mfill_atomic_copy+0x670")  # one bare line: the function's sites, as asked
         self.assertEqual((m.status, m.address), ("near", 0xFFFFFFFF8E629BC0))
 
+    def test_details(self):
+        """Parser details the review's mutants found untested (review s157 m7)."""
+        self.assertEqual(oops.parse(X86_WARN.splitlines()[5]).kind, "oops")  # a RIP line alone: an oops
+        self.assertEqual(oops.parse("RIP: 0010:mfill_atomic_copy+0x674/0x9D0").primary.size, 0x9D0)  # upper-case hex
+        self.assertIsNone(oops.parse("RIP: 0010:0x1234").primary)  # not an address: fewer than 8 hex digits
+        self.assertIsNone(oops.parse("mm/userfaultfd.c:755 and more").primary)  # file:line must be the whole line
+        rep = oops.parse("Call Trace:\n mm/userfaultfd.c:755\n vfs_ioctl fs/ioctl.c:51\n vfs_ioctl fs/ioctl.c:51 [inline]")
+        self.assertEqual([(x.function, x.inline) for x in rep.locations], [("vfs_ioctl", True)])  # only '[inline]' frames
+        rep = oops.parse("Call Trace:\n entry_SYSCALL_64_after_hwframe+0x77/0x7f arch/x86/entry/entry_64.S:130\n"
+                         " rust_fn+0x10/0x20 rust/kernel/lib.rs:12")  # syzbot: assembly and Rust sources
+        self.assertEqual([(f.function, f.file, f.line) for f in rep.frames],
+                         [("entry_SYSCALL_64_after_hwframe", "arch/x86/entry/entry_64.S", 130),
+                          ("rust_fn", "rust/kernel/lib.rs", 12)])
+        rep = oops.parse("vfs_ioctl fs/ioctl.c:51 [inline]\nmfill_atomic_copy+0x674/0x9d0")  # an inlined frame: no address
+        self.assertEqual(rep.primary.function, "mfill_atomic_copy")
+        rep = oops.parse("lr : folio_unlock+0x70/0xd0\npc : mfill_atomic_copy+0x674/0x9d0")  # lr is a caller
+        self.assertEqual(rep.primary.function, "mfill_atomic_copy")
+        rep, m = find("Call Trace:\n ? mfill_atomic_copy+0x674/0x9d0\n userfaultfd_ioctl+0x5d1/0x1e70")
+        self.assertEqual(m.status, "none")  # the site is only on a '? ' (unreliable) entry
+        self.assertFalse(oops.same_file("mm/userfaultfd.c", "faultfd.c"))  # a whole path component
+        self.assertEqual(oops.parse("WARNING: at the end of the day").primary, None)  # not __warn()'s
+        index = oops.SiteIndex([BugSite(0x10, "a.c", 1, 1), BugSite(0x10, "b.c", 2, 1)])
+        self.assertEqual(index.by_addr[0x10].file, "a.c")  # as the kernel's find_bug(): the first entry at an address
+        # a 6.19+ x86_64 WARN with a message traps in __WARN_trap (RIP), the WARNING line names the site: its
+        # function+offset is tried after the RIP's
+        rep, m = find("WARNING: mm/userfaultfd.c:755 at mfill_atomic_copy+0x674/0x9d0, CPU#1: t/9\n"
+                      "RIP: 0010:__WARN_trap+0x0/0x10")
+        self.assertEqual((m.status, m.address), ("exact", 0xFFFFFFFF8E629BC4))
+        # the first function found without a site is the one listed (the RIP's), not the WARNING line's
+        rep, m = find("WARNING: CPU: 1 PID: 9 at lib/none.c:1 no_sites_fn+0x20/0x100\nRIP: 0010:mfill_atomic_copy+0x670/0x9d0")
+        self.assertEqual((m.status, m.address), ("near", 0xFFFFFFFF8E629BC0))
+        for off in (0x80, 0x88):  # no size: only cut_fn.77 is that long (cut_fn and cut_fn.123 end at +0x80)
+            rep, m = find("pc : cut_fn+%#x" % off)
+            self.assertEqual((m.status, m.address, m.function), ("near", 0xFFFFFFFF81002200 + off, "cut_fn.77"))
+
+    def test_old_and_bare_forms(self):
+        """2.6 / 3.x __warn() 'WARNING: at %s:%d %pS()' and report_bug()'s 'Kernel BUG at %p' (a bare address)."""
+        rep, m = find("WARNING: at mm/userfaultfd.c:755 mfill_atomic_copy+0x674/0x9d0()")
+        self.assertEqual((rep.kind, rep.file, rep.line, rep.primary.function, rep.primary.offset, m.status, m.address),
+                         ("WARN", "mm/userfaultfd.c", 755, "mfill_atomic_copy", 0x674, "exact", 0xFFFFFFFF8E629BC4))
+        rep, m = find("Kernel BUG at ffffffff81000110 [verbose debug info unavailable]")
+        self.assertEqual((rep.kind, rep.primary.address, m.status, m.address), ("BUG", 0xFFFFFFFF81000110, "exact",
+                                                                                0xFFFFFFFF81000110))
+
     def test_nothing(self):
         for text in ("", "hello, world", "WARNING: possible circular locking dependency detected",
                      "WARNING: suspicious RCU usage", "RIP: 0033:0x7f1c2b0e9c5b", "Code: Bad RIP value.",
@@ -359,6 +405,17 @@ class Resolve(unittest.TestCase):
         lines = oops.describe(rep, m, lambda ea: "mfill_atomic_poison")
         self.assertEqual(lines[:2], ["from the log: WARNING at mm/userfaultfd.c:755; RIP: mfill_atomic_poison+0x494/0x850",
                                      "exact: the WARN site at mfill_atomic_poison+0x494 (0xffffffff8e62b164)"])
+
+    def test_readme_lines(self):
+        """Every WARNING line the README gives as an example to paste finds the demo kernel's site (review s157)."""
+        with open(os.path.join(HERE, "..", "README.md"), encoding="utf-8") as fh:
+            readme = fh.read()
+        lines = [t for t in re.findall(r"`(WARNING: [^`]*)`", readme) + re.findall(r"echo '(WARNING: [^']*)'", readme)
+                 if "mfill_atomic_copy" in t]
+        self.assertGreaterEqual(len(lines), 3)
+        for text in lines:
+            rep, m = find(text)
+            self.assertEqual((m.status, m.address), ("exact", 0xFFFFFFFF8E629BC4), text)
 
     def test_kernel_bug_and_module(self):
         rep, m = find(X86_BUG)  # RIP folio_unlock+0x70 = 0xffffffff81000110, the BUG at mm/filemap.c:1499
@@ -562,8 +619,9 @@ class Resolve(unittest.TestCase):
         self.assertTrue(all(oops.same_file("mm/userfaultfd.c", b) for b in
                             ("mm/userfaultfd.c", "userfaultfd.c", "./mm/userfaultfd.c", "/build/linux/mm/userfaultfd.c")))
         self.assertFalse(oops.same_file("mm/userfaultfd.c", "fault.c"))
-        self.assertEqual([oops.module_name(p) for p in ("/x/nf_tables.ko", "ext4.ko.xz", "snd-hda-intel.ko.zst", "vmlinux")],
-                         ["nf_tables", "ext4", "snd_hda_intel", None])
+        self.assertEqual([oops.module_name(p) for p in ("/x/nf_tables.ko", "ext4.ko.xz", "snd-hda-intel.ko.zst", "vmlinux",
+                                                        "nf_tables.ko.debug")],
+                         ["nf_tables", "ext4", "snd_hda_intel", None, "nf_tables"])
         rep, m = find(SYZBOT)
         rec = json.loads(json.dumps(oops.match_record(rep, m, lambda ea: "mfill_atomic_copy")))
         self.assertEqual((rec["status"], rec["address"], rec["site"]["line"], rec["from"]["offset"], len(rec["frames"])),
@@ -721,6 +779,14 @@ def cli_check(path, elf, bugs, reg, tag):
             assert (rec["status"], rec["address"], rec["site"]) == ("mismatch", None, None), rec
         code, got = run("hello, world\n")
         assert code == 1 and "no match" in got, got
+        for more in (["--list", "warn"], ["--limit", "5"]):  # those are for the table listing, not --oops
+            with contextlib.redirect_stderr(io.StringIO()) as err:
+                try:
+                    cli.main([path, "--oops", log] + more)
+                    code = 0
+                except SystemExit as e:
+                    code = e.code
+            assert code == 2 and "--oops cannot be combined with --list or --limit" in err.getvalue(), err.getvalue()
         code, got = run("%skflow_no_such_function+0x10/0x20\n" % reg)
         assert code == 1 and "note: no function kflow_no_such_function in this file" in got, got
         with contextlib.redirect_stderr(io.StringIO()) as err:

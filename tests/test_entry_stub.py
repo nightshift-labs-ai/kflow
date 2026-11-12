@@ -118,6 +118,10 @@ if site is not None:
     assert not [x for x in new if x[0] in ("warning", "show")], new
     r, new = ask("%s+%#x" % (name, off))  # just func+0xoff; the dialog offers the last text
     assert r == 1 and went(new) == [site.addr] and new[0][2] == text, new
+    # the module the log names is passed on (review s157 m7, M65): a note says this file is not that module
+    r, new = ask("%s%s+%#x/%#x [kflow_other_mod]" % (reg, name, off, size))
+    assert went(new) == [site.addr] and said(new, "the log puts %s in module kflow_other_mod; this file is %s" % (
+        name, ("module " + mod) if mod else "not that module (vmlinux?): open kflow_other_mod.ko")), new
     gap = next((d for d in range(1, size - off) if start + off + d not in at_addr), None)
     if gap is not None:  # an offset with no site: go to the log's address and list the function's sites
         r, new = ask("%s%s+%#x/%#x%s" % (reg, name, off + gap, size, modtag))
@@ -138,6 +142,27 @@ if site is not None:
     oops_done.append("WARNING/%s line and func+0xoff -> 0x%X (%s+%#x)%s; past the end -> %d rows; another line -> "
                      "mismatch, no jump" % (reg.split(":")[0].strip(), site.addr, name, off,
                                             ", near offset" if gap is not None else "", len(want)))
+# a static function (IDA shows one function under a name; the kernel may have several static functions of that name):
+# found from the RIP / pc line alone, a note says another one is not tried; its own WARNING / kernel BUG line confirms
+# the site (no note); a global or weak function needs no note (review s157 m3)
+b = next((b for b in bugs if b.file and at_addr[b.addr] == 1 and only_function(b)), None)
+if b is not None:
+    name, start, size = only_function(b)
+    at = "%s+%#x/%#x%s" % (name, b.addr - start, size, modtag)
+    head = ("WARNING: CPU: 1 PID: 9 at %s:%d %s\n" % (b.file, b.line, at) if b.warn else
+            "kernel BUG at %s:%d!\n" % (b.file, b.line))
+    saved = {k: set(getattr(elf, k, ())) for k in ("public", "weak")}
+    for kind in ("static", "global", "weak"):  # the function's symbol made each kind in turn (IDA: neither, public, weak)
+        elf.public, elf.weak = saved["public"] - {start}, saved["weak"] - {start}
+        if kind != "static":
+            getattr(elf, "public" if kind == "global" else "weak").add(start)
+        r, new = ask(reg + at)
+        assert r == 1 and went(new) == [b.addr] and bool(said(new, "%s is a static function, and IDA names only one "
+                                                                 "function so" % name)) == (kind == "static"), new
+        r, new = ask(head + reg + at)
+        assert r == 1 and went(new) == [b.addr] and not said(new, "is a static function"), new
+    elf.public, elf.weak = saved["public"], saved["weak"]
+    oops_done.append("%s as a static function: note without its own line; global or weak: no note" % name)
 if any(b.addr == 0xFFFFFFFF8E629BC4 and b.where() == "mm/userfaultfd.c:755" for b in bugs):  # the MemLens demo kernel
     # the review's example: four functions share mm/userfaultfd.c:755; the WARNING line's func+0xoff picks one
     r, new = ask("WARNING: CPU: 1 PID: 9 at mm/userfaultfd.c:755 mfill_atomic_copy+0x674/0x...")
@@ -236,6 +261,13 @@ if many is not None:
     w["shown"].OnSelectLine(len(want) - 1)
     assert log[-1] == ("jump", want[-1])
     oops_done.append("file:line -> %d candidate rows" % len(want))
+if site is not None:  # jumpto() fails (an address outside the database): a warning, not silence
+    jumpto = sys.modules["ida_kernwin"].jumpto
+    sys.modules["ida_kernwin"].jumpto = lambda ea: False
+    r, new = ask("%s+%#x" % (only_function(site)[0], site.addr - only_function(site)[1]))
+    sys.modules["ida_kernwin"].jumpto = jumpto
+    assert r == 0 and [x for x in new if x[0] == "warning" and "could not jump to 0x%X" % site.addr in x[1]], new
+    oops_done.append("jumpto failing -> warned")
 r, new = ask("hello, world")  # nothing usable: a warning, no jump
 assert r == 0 and not went(new) and [x for x in new if x[0] == "warning" and "found no WARNING" in x[1]], new
 r, new = ask("%skflow_no_such_function+0x10/0x20" % reg)  # a function this file does not have

@@ -5,8 +5,8 @@ kflow's BUG/WARN site table. The line formats are the kernel's own printk format
 
   kernel/panic.c __warn()          'WARNING: CPU: %d PID: %d at %s:%d %pS' and '... PID: %d at %pS' (up to 6.18);
                                    'WARNING: %s:%d at %pS, CPU#%d: %s/%d' and 'WARNING: at %pS, CPU#%d: %s/%d' (6.19+)
-  lib/bug.c report_bug()           'kernel BUG at %s:%u!'; 'kernel BUG at %pB [verbose debug info unavailable]'
-                                   ('Kernel BUG at ...' in 5.10)
+  lib/bug.c report_bug()           'kernel BUG at %s:%u!'; 'Kernel BUG at %pB [verbose debug info unavailable]'
+                                   (capital K; '%p', a bare address, up to 4.x); 'kernel BUG at' with a symbol accepted
   arch/x86/kernel/dumpstack.c      'RIP: %04x:%pS' (show_ip); call-trace entries ' %s%pBb', '? ' before unreliable
                                    ones; 4.9: 'RIP: %04lx:[<%016lx>]  [<%p>] %pS', 'RIP  [<%p>] %pS', ' [<%p>] %s%pB'
                                    and (arch/x86/mm/fault.c) 'IP: [<%p>] %pS'
@@ -46,6 +46,7 @@ _PREFIX = re.compile(
     r"|\d\d-\d\d\s+\d\d:\d\d:\d\d\.\d+\s+\d+\s+\d+\s+[VDIWEFA]\s+[^:]*:)")  # logcat -b kernel
 _WARN_OLD = re.compile(r"WARNING: CPU: \d+ PID: \d+ at (?:(?P<file>[^\s:]+):(?P<line>\d+) )?(?P<rest>.*)$")
 _WARN_NEW = re.compile(r"WARNING: (?:(?P<file>[^\s:]+):(?P<line>\d+) )?at (?P<rest>.*)$")
+_WARN_26 = re.compile(r"WARNING: at (?P<file>[^\s:]+):(?P<line>\d+) (?P<rest>.*)$")  # 2.6 / 3.x: 'WARNING: at %s:%d %pS()'
 _BUG_LINE = re.compile(r"[Kk]ernel BUG at (?P<file>[^\s:!]+):(?P<line>\d+)!")
 _BUG_SYM = re.compile(r"[Kk]ernel BUG at (?P<rest>.*?)\s*\[verbose debug info unavailable\]")
 _RIP = re.compile(r"(?:^|\s)(?:RIP:?|IP:)\s+(?:(?P<cs>[0-9a-fA-F]{4}):)?(?P<rest>.*)$")
@@ -166,7 +167,7 @@ def parse(text):
             in_trace = False
             continue
         found = None
-        m = _WARN_OLD.search(s) or _WARN_NEW.search(s)
+        m = _WARN_OLD.search(s) or _WARN_26.search(s) or _WARN_NEW.search(s)
         if m:
             found = _loc("warning", m.group("rest"), s) or Loc("warning", text=s)
             if m.group("file"):
@@ -180,6 +181,8 @@ def parse(text):
             else:
                 m = _BUG_SYM.search(s)
                 found = _loc("bug", m.group("rest"), s) if m else None
+                if m and found is None and re.fullmatch(r"[0-9a-fA-F]{8,16}", m.group("rest")):  # '%p' (4.x)
+                    found = Loc("bug", address=int(m.group("rest"), 16), text=s)
         if found is None:
             m = _RIP.search(s)
             if m:
@@ -251,9 +254,10 @@ def same_file(a, b):
 
 
 def module_name(path):
-    """The kernel's name for a module file (nf_tables.ko.xz -> nf_tables; '-' becomes '_'), None for anything else."""
+    """The kernel's name for a module file (nf_tables.ko.xz -> nf_tables, also nf_tables.ko.debug as Fedora / RHEL
+    debuginfo packages name it; '-' becomes '_'), None for anything else."""
     base = re.split(r"[\\/]", path or "")[-1]
-    m = re.match(r"^(.+)\.ko(?:\.(?:xz|gz|zst))?$", base)
+    m = re.match(r"^(.+)\.ko(?:\.(?:xz|gz|zst|debug))?$", base)
     return m.group(1).replace("-", "_") if m else None
 
 
@@ -364,7 +368,7 @@ def _kind(site):
     return "WARN" if site.warn else "BUG"
 
 
-def _confirms(report, site):
+def confirms(report, site):
     """The log's WARNING / kernel BUG line names this very site: its file:line (the same build prints the site's own)
     and its kind."""
     h = report.header
@@ -383,7 +387,7 @@ def _contradicts(report, site, loc, func=None):
     if report.kind in ("WARN", "BUG") and report.kind != _kind(site):
         return "the site at %s is a %s, but the log reports a %s" % (at, _kind(site), report.kind)
     if func is not None and loc.size is not None and func.size is not None and not _same_size(func, loc.size) \
-            and not _confirms(report, site):
+            and not confirms(report, site):
         return "the log prints %s's size as %#x, this file has %#x" % (loc.function, loc.size, func.printed or func.size)
     return None
 

@@ -109,6 +109,8 @@ class Elf:
         self.symbols = {}
         best = {}  # address -> (rank, name): the name to show for an address
         funcs = []
+        self.public = set()  # addresses of global function symbols (IDA: public names)
+        self.weak = set()  # and of weak ones (IDA: weak names)
         for si, (t, f, a, o, s, link) in enumerate(self.secs):
             if t != 2:
                 continue
@@ -134,6 +136,10 @@ class Elf:
                         best[value] = (rank, name)
                 if st_info & 0xF == 2 and value:
                     funcs.append((value, value + size, name))
+                    if st_info >> 4 == 1:
+                        self.public.add(value)
+                    elif st_info >> 4 == 2:
+                        self.weak.add(value)
         funcs.sort()
         # kallsyms-derived ELFs (vmlinux-to-elf) give every function size 0: end it at the next function
         for k, (a, e, n) in enumerate(funcs):
@@ -390,12 +396,15 @@ def main(argv=None):
     ap = argparse.ArgumentParser(prog="kflow", description=__doc__.splitlines()[0])
     ap.add_argument("kernel")
     ap.add_argument("--list", choices=["bug", "warn", "jump", "ex"])
-    ap.add_argument("--limit", type=int, default=20)
+    ap.add_argument("--limit", type=int, help="rows for --list (default 20)")
     ap.add_argument("--json")
     ap.add_argument("--oops", metavar="LOG", help="a kernel log (a WARNING / kernel BUG / RIP / pc line or a whole "
                     "report; - reads stdin): print the BUG/WARN site it names")
     ap.add_argument("--version", action="version", version="kflow " + __version__)
     a = ap.parse_args(argv)
+    if a.oops is not None and (a.list or a.limit is not None):
+        ap.error("--oops cannot be combined with --list or --limit")
+    limit = 20 if a.limit is None else a.limit
     try:
         if a.oops is not None:
             if a.oops == "-":
@@ -427,10 +436,10 @@ def main(argv=None):
             for x in t.get("ex", []):
                 rows.append("%#x -> %#x  %-40s %s" % (x.insn, x.fixup, elf.func(x.insn) or "?",
                             ("handler " + elf.by_addr.get(x.handler, hex(x.handler))) if x.handler is not None else x.type_name(elf.arch)))
-        for r in rows[:a.limit]:
+        for r in rows[:limit]:
             print(r)
-        if len(rows) > a.limit:
-            print("... %d more (--limit)" % (len(rows) - a.limit))
+        if len(rows) > limit:
+            print("... %d more (--limit)" % (len(rows) - limit))
     if a.json:
         with open(a.json, "w") as fh:
             json.dump({"bug_layout": t.get("bug_layout"),

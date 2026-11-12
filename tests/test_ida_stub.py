@@ -136,6 +136,8 @@ def install(w, names=True):
     m["ida_name"].get_nlist_idx = lambda ea: bisect.bisect_left(nlist, ea)  # "closest match": may be the next name
     m["ida_name"].get_nlist_ea = lambda i: nlist[i]
     m["ida_name"].get_nlist_name = lambda i: elf.by_addr[nlist[i]]
+    m["ida_name"].is_public_name = lambda ea: ea in getattr(elf, "public", ())  # IDA: the ELF's global symbols
+    m["ida_name"].is_weak_name = lambda ea: ea in getattr(elf, "weak", ())  # and its weak ones
     m["ida_ida"].inf_is_64bit = lambda: True
     m["ida_ida"].inf_get_procname = lambda: "metapc" if elf.arch == "x86_64" else "ARM"
     x = m["ida_xref"]
