@@ -97,7 +97,8 @@ class Elf:
                 name = d[stro + st_name:end].decode("utf-8", "replace")
                 if self.relocatable:
                     value = self._symval(name, shndx, value)
-                if name and name not in self.symbols:
+                undefined = self.relocatable and shndx in (0, 0xFFF2)  # a module's imports: names, not table bounds
+                if name and name not in self.symbols and not undefined:
                     self.symbols[name] = value
                 if name and value:
                     # prefer real objects and functions: section markers, mapping symbols ($x/$d) and zero-size

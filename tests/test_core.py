@@ -224,7 +224,8 @@ class Module(unittest.TestCase):
         (b,) = t["bug"]
         self.assertEqual((b.addr, b.file, b.line, b.warn), (text, "a/b.c", 42, True))
         j, j2 = t["jump"]
-        self.assertEqual((j.code, j.target, j.key), (text + 2, text + 4, e.symbols["my_key"]))
+        self.assertEqual((j.code, j.target, j.key), (text + 2, text + 4, e.externs["my_key"]))
+        self.assertNotIn("my_key", e.symbols)  # imports never count as __start_/__stop_ table bounds
         self.assertEqual(e.key_name(j2.key), "tracepoint foo")  # PC64 key: also checks 8-byte relocations
         self.assertEqual(e.by_addr[j.key], "my_key")
         self.assertGreater(j.key, max(end for a, end in e.sections.values()))  # extern slot after the sections
