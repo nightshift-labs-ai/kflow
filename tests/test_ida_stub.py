@@ -97,6 +97,11 @@ def install(w, names=True):
             store.pop(self.name, None)
     nn.netnode = netnode
     m["ida_name"].get_name = lambda ea: elf.by_addr.get(ea, "") if names else ""
+    nlist = sorted(elf.by_addr) if names else []
+    m["ida_name"].get_nlist_size = lambda: len(nlist)
+    m["ida_name"].get_nlist_idx = lambda ea: bisect.bisect_left(nlist, ea)  # "closest match": may be the next name
+    m["ida_name"].get_nlist_ea = lambda i: nlist[i]
+    m["ida_name"].get_nlist_name = lambda i: elf.by_addr[nlist[i]]
     m["ida_ida"].inf_is_64bit = lambda: True
     m["ida_ida"].inf_get_procname = lambda: "metapc" if elf.arch == "x86_64" else "ARM"
     x = m["ida_xref"]
@@ -171,6 +176,9 @@ def run(path):
     if other is not None:
         w["cmts"][other] = "kflow-like note by the user"  # starts with "kflow" but is not ours
     res = il.annotate(t, il.current_arch())
+    if not elf.relocatable:  # IDA's name list gives every key the same name as the command line
+        bad = [hex(j.key) for j in t["jump"] if il.key_name(j.key) != (elf.key_name(j.key) or "0x%X" % j.key)]
+        assert not bad, bad[:5]
     for a in filter(None, os.environ.get("KFLOW_SHOW", "").split(",")):  # print the comments at these addresses
         print("%s:  %s" % (a, w["cmts"].get(int(a, 16), "(none)")))
     if nxt is not None:

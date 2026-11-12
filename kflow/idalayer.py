@@ -148,8 +148,22 @@ def bug_comment(b):
     return "%s: BUG%s (does not return)" % (TAG, where)
 
 
+def nearest_name(ea):
+    """(name, address) of the closest name at or before ea from IDA's name list, or None. get_nlist_idx returns "the
+    closest match", which may be the next name after ea, so its neighbour before it is checked too."""
+    size = ida_name.get_nlist_size()
+    idx = ida_name.get_nlist_idx(ea)
+    best = None
+    for i in (idx, idx - 1):
+        if 0 <= i < size:
+            a = ida_name.get_nlist_ea(i)
+            if a <= ea and (best is None or a > best[1]):
+                best = (ida_name.get_nlist_name(i), a)
+    return best
+
+
 def key_name(ea):
-    return core.key_label(ida_name.get_name, ea, read) or "0x%X" % ea
+    return core.key_label(ida_name.get_name, ea, read, nearest_name) or "0x%X" % ea
 
 
 def jump_comment(j):

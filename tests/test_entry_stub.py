@@ -86,7 +86,7 @@ if jumps:
     j = jumps[0]
     assert rows[0][0] == j.code and rows[0][3] == ("likely" if j.branch else "unlikely") and rows[0][4] in ("jump", "no jump")
     nj = sum(r[4] == "jump" for r in rows)
-    assert 0 < nj < len(rows) or len(rows) < 50, nj  # real kernels have both states
+    assert 0 < nj < len(rows) or len(rows) < 50 or elf.relocatable, nj  # kernels have both states; a module on disk is all NOPs
 else:
     assert keys == 0
 assert m.RemoveAction().activate(None) == 1

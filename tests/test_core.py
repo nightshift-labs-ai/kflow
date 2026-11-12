@@ -165,6 +165,10 @@ class Keys(unittest.TestCase):
         self.assertEqual(key_label(at, BASE + 0x110, m.read), "__tracepoint_sched_switch+0x10")
         self.assertEqual(key_label(at, BASE + 0x330, m.read), "my_keys+0x30")
         self.assertIsNone(key_label(at, BASE + 0x500, m.read))  # nothing named within 64 bytes
+        # an array of keys: the nearest name before the key, up to KEY_WINDOW back (arm64 cpu_hwcap_keys + 0x50)
+        self.assertEqual(key_label(at, BASE + 0x500, m.read, lambda ea: ("cpu_hwcap_keys", ea - 0x50)), "cpu_hwcap_keys+0x50")
+        self.assertIsNone(key_label(at, BASE + 0x500, m.read, lambda ea: ("far_away", ea - 0x1001)))
+        self.assertIsNone(key_label(at, BASE + 0x500, m.read, lambda ea: None))
 
 
 def module_elf(path, extended=False):

@@ -87,7 +87,7 @@ The MemLens demo `kernel.elf` (Debian 13, 6.12.115, x86_64):
 $ python3 -m kflow kernel.elf
 __bug_table (addr,file,line,flags): 9850 sites, 7831 WARN (resume after the trap), 2019 BUG; 9850 with file:line in 1168 source files
   WARN sites that are ud2 here: 7504; sites inside a function symbol: 9329
-__jump_table: 9237 static-key sites, 8898 keys named (1728 tracepoints, 1941 pr_debug sites, 100 as symbol+offset), 9006 targets in the same function
+__jump_table: 9237 static-key sites, 9237 keys named (1728 tracepoints, 1941 pr_debug sites, 439 as symbol+offset), 9006 targets in the same function
 __ex_table (insn,fixup,data): 671 faulting instructions with a fixup, 635 fixups in the same function; types UACCESS 410, IMM_REG 87, WRMSR 42, RDMSR 39, FAULT_SGX 23, CLEAR_FS 15
 
 $ python3 -m kflow kernel.elf --list jump --limit 3   (summary lines and the '... more' line left out here)

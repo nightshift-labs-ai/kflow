@@ -251,7 +251,14 @@ class Elf:
                 if name.startswith("__tracepoint_") and off == TRACEPOINT_KEY_OFFSET:
                     return "tracepoint " + name[len("__tracepoint_"):]
                 return "%s+%#x" % (name, off)
-        return key_label(lambda a: self.by_addr.get(a, ""), ea, self.read)
+        return key_label(lambda a: self.by_addr.get(a, ""), ea, self.read, self._nearest)
+
+    def _nearest(self, ea):
+        """(name, address) of the closest named address at or before ea, or None."""
+        if not hasattr(self, "_named"):
+            self._named = sorted(self.by_addr)
+        i = bisect.bisect_right(self._named, ea) - 1
+        return (self.by_addr[self._named[i]], self._named[i]) if i >= 0 else None
 
     def in_text(self, ea):
         return any(a <= ea < e for a, e in self.text)

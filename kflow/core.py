@@ -164,6 +164,8 @@ def decode_bug_table(read, start, stop, layout=None, in_text=None):
 
 
 KEY_SEARCH = 64  # how far back from an unnamed key address to look for the symbol that contains it
+KEY_WINDOW = 0x1000  # a key in an array of keys (arm64 cpu_hwcap_keys[], 16 bytes each) can sit further in: name it
+# after the nearest symbol before it, up to this far
 TRACEPOINT_KEY_OFFSET = 8  # struct tracepoint { const char *name; struct static_key(_false) key; ... }
 
 
@@ -185,11 +187,12 @@ def ddebug_label(read, ea):
     return 'pr_debug %s:%d "%s"' % (f, line, m if len(m) <= 48 else m[:45] + "...")
 
 
-def key_label(name_at, ea, read=None):
+def key_label(name_at, ea, read=None, nearest=None):
     """Readable name for a static key. name_at(ea) -> symbol name exactly at ea, or "".
     A tracepoint's key is the member at offset 8 of struct tracepoint __tracepoint_<event>: 'tracepoint <event>';
     a dynamic-debug key sits at offset 0x28 of a struct _ddebug (__UNIQUE_ID_ddebug*): 'pr_debug file:line "fmt"'.
-    Otherwise the symbol at or up to 64 bytes before the key ('sym+0x10'), else None."""
+    Otherwise the symbol at or up to 64 bytes before the key ('sym+0x10'); then, if nearest(ea) -> (name, address) gives
+    the closest named address at or before ea, that name up to KEY_WINDOW bytes back (an array of keys); else None."""
     n = name_at(ea)
     if n:
         return n
@@ -203,6 +206,9 @@ def key_label(name_at, ea, read=None):
                 if d:
                     return d
             return "%s+%#x" % (n, off)
+    hit = nearest(ea) if nearest else None
+    if hit and hit[0] and 0 < ea - hit[1] <= KEY_WINDOW:
+        return "%s+%#x" % (hit[0], ea - hit[1])
     return None
 
 
