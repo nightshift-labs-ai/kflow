@@ -45,6 +45,7 @@ def install(w, names=True):
     m["ida_bytes"].get_bytes = lambda ea, n: elf.read(ea, n)
     m["ida_bytes"].is_loaded = lambda ea: elf.read(ea, 1) is not None
     m["ida_bytes"].get_cmt = lambda ea, rep: w["cmts"].get(ea)
+    m["ida_bytes"].get_item_end = lambda ea: w.get("item_end", {}).get(ea, ea + 1)
 
     def set_cmt(ea, text, rep):
         if text:
@@ -79,9 +80,12 @@ def install(w, names=True):
         def altval(self, i):
             return store.get(self.name, {}).get(i, 0)
 
-        def _after(self, cur):
-            ks = sorted(k for k in store.get(self.name, {}) if cur is None or k > cur)
-            return ks[0] if ks else BAD
+        def _after(self, cur):  # sorted key list cached per netnode; bisect keeps Remove linear on 75k records
+            d = store.get(self.name, {})
+            if getattr(self, "_n", -1) != len(d):
+                self._keys, self._n = sorted(d), len(d)
+            i = 0 if cur is None else bisect.bisect_right(self._keys, cur)
+            return self._keys[i] if i < len(self._keys) else BAD
 
         def altfirst(self):
             return self._after(None)
@@ -155,6 +159,11 @@ def run(path):
     if mine is not None:
         w["xrefs"][mine] = True
         w["by_from"].setdefault(mine[0], set()).add(mine[1])
+    # a fixup that is the very next instruction: ordinary flow, so kflow adds no reference there
+    nxt = next(((x.insn, x.fixup) for x in t["ex"] if il.in_text(x.insn) and il.in_text(x.fixup)
+                and (x.insn, x.fixup) not in w["xrefs"]), None)
+    if nxt is not None:
+        w.setdefault("item_end", {})[nxt[0]] = nxt[1]
     note = next((b.addr for b in t["bug"] if il.in_text(b.addr)), None)
     if note is not None:
         w["cmts"][note] = "my note"
@@ -162,6 +171,8 @@ def run(path):
     if other is not None:
         w["cmts"][other] = "kflow-like note by the user"  # starts with "kflow" but is not ours
     res = il.annotate(t, il.current_arch())
+    if nxt is not None:
+        assert nxt not in w["xrefs"], "no reference to the next instruction"
     if other is not None:
         assert w["cmts"][other] == "kflow-like note by the user"
     assert res["kept_user_comments"] == (1 if note is not None else 0) + (1 if other is not None else 0), res

@@ -1,4 +1,6 @@
 """IDA side of kflow: find the kernel's site tables in the database, comment the sites, add references."""
+import os
+
 import ida_bytes
 import ida_ida
 import ida_idaapi
@@ -53,13 +55,24 @@ def file_symbols():
     IDA keeps one name per address, and __stop_ names usually share theirs with another symbol
     (__stop___bug_table with __start_orc_header, for example), so the database may not have them."""
     path = ida_nalt.get_input_file_path() or ""
-    if path not in _FILE_SYMBOLS:
+    try:
+        st = os.stat(path)
+        key = (path, st.st_size, st.st_mtime)
+    except OSError:
+        return {}
+    if key not in _FILE_SYMBOLS:
+        _FILE_SYMBOLS.clear()  # one input file at a time; a new kernel at the same path gets read again
         try:
-            from .cli import Elf
-            _FILE_SYMBOLS[path] = Elf(path).symbols
+            with open(path, "rb") as fh:
+                head = fh.read(18)
+            if head[:4] == b"\x7fELF" and head[16:18] == b"\x01\x00":  # ET_REL: a module never has __start_ names
+                _FILE_SYMBOLS[key] = {}
+            else:
+                from .cli import Elf
+                _FILE_SYMBOLS[key] = Elf(path).symbols
         except Exception:  # noqa: BLE001  (missing, moved or not an ELF: just no fallback)
-            _FILE_SYMBOLS[path] = {}
-    return _FILE_SYMBOLS[path]
+            _FILE_SYMBOLS[key] = {}
+    return _FILE_SYMBOLS[key]
 
 
 def table_range(kind):
@@ -176,6 +189,8 @@ def _add(src, dst, node, arch=None):
     """Add a user jump reference unless one (IDA's own, e.g. an enabled jmp, or the user's) already exists or the
     instruction itself branches there. Every reference added is recorded in the database, so Remove deletes only these."""
     if not in_text(dst) or dst in code_refs_from(src) or branches_to(src, dst, arch):
+        return 0
+    if dst == ida_bytes.get_item_end(src):  # the fixup/target is the next instruction: ordinary flow already goes there
         return 0
     if not ida_xref.add_cref(src, dst, ida_xref.fl_JN | ida_xref.XREF_USER):
         return 0
