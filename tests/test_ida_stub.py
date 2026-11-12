@@ -229,6 +229,18 @@ def run(path):
         offs = sum(1 for c in ref.get("jump", []) if (cli_elf.extern_of(c.key) or (0, 0))[1])
         print("  module keys in imports: %d at import + offset, %d labels from the command line"
               % (offs, len(il.SITE_KEY)))
+        lab = [j for j in t["jump"] if j.entry in il.SITE_KEY and il.in_text(j.code)
+               and il.key_name(j.key) != il.SITE_KEY[j.entry][0]]  # sites where IDA's own name would be wrong
+        assert all(il.key_name(j.key) not in w["cmts"].get(j.code, "") for j in lab), "comment shows the neighbour"
+        assert not lab or any(il.SITE_KEY[j.entry][0] in w["cmts"].get(j.code, "") for j in lab)
+        if t["jump"]:  # a segment that starts elsewhere than its section: the decodes do not line up, no labels
+            seg = il.ida_segment.getseg(t["jump"][0].code)
+            seg.start_ea -= 0x40
+            try:
+                assert il.module_key_labels(t["jump"]) == {}
+            finally:
+                seg.start_ea += 0x40
+            assert il.module_key_labels(t["jump"][:-1]) == {}  # entry counts differ: no labels
         for j in t["jump"]:  # each site's key reference goes to its own import, never a neighbour
             hit = il.SITE_KEY.get(j.entry)
             if hit and il.in_text(j.code):
