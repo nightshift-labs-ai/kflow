@@ -96,7 +96,12 @@ def install(w, names=True):
         def kill(self):
             store.pop(self.name, None)
     nn.netnode = netnode
-    m["ida_name"].get_name = lambda ea: elf.by_addr.get(ea, "") if names else ""
+    # like IDA: get_name() also returns placeholder names (unk_...) for unnamed (referenced) addresses; only
+    # get_ea_name(ea, GN_NOT_DUMMY) leaves them out
+    m["ida_name"].get_name = lambda ea: (elf.by_addr.get(ea, "") if names else "") or "unk_%X" % ea
+    m["ida_name"].GN_NOT_DUMMY = 512
+    m["ida_name"].get_ea_name = lambda ea, flags=0: ((elf.by_addr.get(ea, "") if names else "") if flags & 512
+                                                     else m["ida_name"].get_name(ea))
     nlist = sorted(elf.by_addr) if names else []
     m["ida_name"].get_nlist_size = lambda: len(nlist)
     m["ida_name"].get_nlist_idx = lambda ea: bisect.bisect_left(nlist, ea)  # "closest match": may be the next name
@@ -207,6 +212,8 @@ def run(path):
         assert w["cmts"][note] == "my note"
     ours = [c for c in w["cmts"].values() if c.startswith("kflow: ")]
     assert len(ours) <= res["comments"] and ours, (len(ours), res)  # sites sharing an address keep the last comment
+    dummy = [c for c in ours if "unk_" in c]  # the fake get_name() returns IDA-style placeholder names: never show them
+    assert not dummy, dummy[:3]
     users = sum(1 for u in w["xrefs"].values() if u)
     assert users == res["xrefs"] + (mine is not None), (users, res)
     assert len(w["netnodes"].get(il.NODE, {})) == res["xrefs"] and (res["xrefs"] > 0 or not (t["jump"] or t["ex"]))

@@ -136,8 +136,14 @@ def not_decoded(t):
     return "".join("; not decoded: %s (%s)" % (k, e) for k, e in t.get("errors", {}).items())
 
 
+def real_name(ea):
+    """The name at ea, but never one of IDA's placeholder names (unk_..., byte_..., loc_...): IDA puts those on
+    referenced addresses, keys included once Annotate adds its key references, and get_name() returns them."""
+    return ida_name.get_ea_name(ea, ida_name.GN_NOT_DUMMY)
+
+
 def name_or_hex(ea):
-    return ida_name.get_name(ea) or "0x%X" % ea
+    return real_name(ea) or "0x%X" % ea
 
 
 def bug_comment(b):
@@ -164,7 +170,7 @@ def nearest_name(ea):
 
 
 def key_name(ea):
-    return core.key_label(ida_name.get_name, ea, read, nearest_name) or "0x%X" % ea
+    return core.key_label(real_name, ea, read, nearest_name) or "0x%X" % ea
 
 
 def jump_comment(j):
