@@ -2,7 +2,7 @@
 
 <img src="assets/logo.png" width="96" align="right" alt="kflow logo">
 
-For kernel reverse engineers (Linux and Android vulnerability research, patch diffing, crash triage): kflow turns the bare traps, NOPs and faulting instructions of a kernel into source lines, static keys and fixups. A `WARNING: ... at mm/userfaultfd.c:755` from a kernel log can be looked up in kflow's list of BUG/WARN sites, and a NOP says which key patches it and where it then jumps.
+For kernel reverse engineers (Linux and Android vulnerability research, patch diffing, crash triage): kflow turns the bare traps, NOPs and faulting instructions of a kernel into source lines, static keys and fixups. A `WARNING: ... at mm/userfaultfd.c:755 mfill_atomic_copy+0x674/...` line pasted from a kernel log leads to the trap it names, and a NOP says which key patches it and where it then jumps.
 
 Before: what the disassembly shows at three addresses of the [MemLens demo kernel](https://github.com/nightshift-labs-ai/memlens/releases/tag/demo-data) (`objdump -d`). After: the comment kflow writes at each one (text from kflow's fake-IDA test, not an IDA screenshot):
 
@@ -17,7 +17,22 @@ ffffffff8e200029  wrmsr          ; kflow: may fault -> fixup at 0xFFFFFFFF8E2000
 **Status:** the table decoders are checked on seven real kernels and five kernel modules; the IDA layer has not yet been run inside real IDA (only with fake `ida_*` modules). [Details](#status-read-this-first)
 
 - [**BUG/WARN comments**](#step-by-step): every BUG/WARN site of the kernel's `__bug_table` gets its source `file:line` (where the kernel recorded one) and whether the kernel continues after the trap (WARN) or not (BUG).
-- [**BUG/WARN list**](#step-by-step): **kflow: List BUG/WARN sites** lists every trap with its function and `file:line`; type `userfaultfd.c:755` from a `WARNING: ... at mm/userfaultfd.c:755` log line into its filter to find the site.
+- [**BUG/WARN list**](#step-by-step): **kflow: List BUG/WARN sites** lists every trap with its function and `file:line`; Enter jumps to it.
+- [**Go to oops/WARN line**](#step-by-step): **kflow: Go to oops/WARN line** takes pasted log text (a `WARNING:`, `kernel BUG at`, `RIP:` or `pc :` line, a whole oops or syzbot report, `func+0xoff` or `file:line`) and jumps to the trap it names; when only `file:line` is known and several traps share it, it lists just those. `python3 -m kflow <kernel> --oops <log>` does the same outside IDA (the IDA action is tested only with fake `ida_*` modules). Real command-line output on the MemLens demo kernel; the log line is in the kernel's `__warn()` format, written for this site, not taken from a real crash:
+
+  ```
+  $ python3 -m kflow kernel.elf --list warn --limit 100000 | grep userfaultfd.c:755     # before: file:line alone
+  0xffffffff8e629bc4 WARN  mfill_atomic_copy                        mm/userfaultfd.c:755
+  0xffffffff8e62a489 WARN  mfill_atomic_zeropage                    mm/userfaultfd.c:755
+  0xffffffff8e62ab60 WARN  mfill_atomic_continue                    mm/userfaultfd.c:755
+  0xffffffff8e62b164 WARN  mfill_atomic_poison                      mm/userfaultfd.c:755
+
+  $ echo 'WARNING: CPU: 1 PID: 9 at mm/userfaultfd.c:755 mfill_atomic_copy+0x674/0x9d0' > warn.txt
+  $ python3 -m kflow kernel.elf --oops warn.txt                                           # after: the whole line
+  from the log: WARNING at mm/userfaultfd.c:755 mfill_atomic_copy+0x674/0x9d0
+  exact: the WARN site at mfill_atomic_copy+0x674 (0xffffffff8e629bc4)
+    0xffffffff8e629bc4 WARN  mfill_atomic_copy                        mm/userfaultfd.c:755
+  ```
 - [**Static-key comments and key references**](#step-by-step): each static-key site (a NOP or branch the kernel patches at runtime) gets its key, its branch target and when it jumps, and a jump reference to the target where IDA has none (a data reference if the target is inside another function); a data reference from each site to its key makes X on a key list its sites.
 - [**Static-key chooser**](#step-by-step): **kflow: List static-key sites** shows every site with its key, `likely`/`unlikely`, `jump` / `no jump` now, the target and the function; the filter finds every site of one key.
 - [**Exception-table fixups**](#what-kflow-reads): each instruction that may fault on purpose (user-memory access, MSR reads...) gets its fixup and type (or handler), and a jump reference to the fixup (a data reference if it is inside another function).
@@ -26,12 +41,12 @@ ffffffff8e200029  wrmsr          ; kflow: may fault -> fixup at 0xFFFFFFFF8E2000
 - [**Clean removal**](#step-by-step): **kflow: Remove annotations** takes out only the comments and references kflow added (also after a rebase); IDA's and yours stay.
 - [**WARN fall-through**](docs/warnflow.md) (experimental, off by default, x86_64 only, not yet run in real IDA): **kflow: Let WARN sites fall through (experimental)** adds ordinary flow after exactly the WARN `ud2` traps the kernel's `__bug_table` lists, so that IDA can reach the code after them; **kflow: Remove WARN fall-through** undoes it.
 - [**Headless runner**](#headless-idalib): `python3 tools/kflow_headless.py <kernel>` annotates (or with `--remove` removes) and saves the database without the IDA window (idalib, IDA 9.0+); `--json` exports every site with IDA's function names.
-- [**Command-line decoder, no IDA needed**](#what-you-get-real-output-not-ida-screenshots): `python3 -m kflow <kernel ELF>` needs only Python 3.8+ and no packages; `--list warn`, `bug`, `jump` or `ex` lists the sites.
+- [**Command-line decoder, no IDA needed**](#what-you-get-real-output-not-ida-screenshots): `python3 -m kflow <kernel ELF>` needs only Python 3.8+ and no packages; `--list warn`, `bug`, `jump` or `ex` lists the sites; `--oops <log>` finds the site a kernel log names.
 - [**One-command tests**](#what-was-verified): `sh tests/run_all.sh` runs every test in about two seconds on a pinned Debian arm64 `ext4.ko` (sha256 checked) or on your own files.
 
 ## Status: read this first
 
-**kflow has not yet been run inside real IDA.** It was built without access to an IDA installation. The table decoders are checked on seven real kernels and five kernel modules (below): trap bytes, branch targets and source-file names; the IDA layer is small, uses IDAPython names and object members that all appear in the official stubs (178 checks in `tests/check_ida_api.py`; the 82 `ida_*` names also exist in the stubs of IDA 9.1, 9.2, 9.3 and 9.4: `tests/check_ida_names.py` on the PyPI `idapro` packages 0.0.5, 0.0.7, 0.0.9 and 0.0.11), and has only been exercised with fake `ida_*` modules. Bug reports are very welcome.
+**kflow has not yet been run inside real IDA.** It was built without access to an IDA installation. The table decoders are checked on seven real kernels and five kernel modules (below): trap bytes, branch targets and source-file names; the IDA layer is small, uses IDAPython names and object members that all appear in the official stubs (190 checks in `tests/check_ida_api.py`; the 83 `ida_*` names also exist in the stubs of IDA 9.1, 9.2, 9.3 and 9.4: `tests/check_ida_names.py` on the PyPI `idapro` packages 0.0.5, 0.0.7, 0.0.9 and 0.0.11), and has only been exercised with fake `ida_*` modules. Bug reports are very welcome.
 
 kflow was built by an AI agent (Claude, operated by Nightshift Labs).
 
@@ -74,7 +89,7 @@ A stripped `vmlinux` (from `extract-vmlinux`) still has `__bug_table` and `__ex_
 1. Outside IDA, see what is there: `python3 -m kflow kernel.elf` (output below).
 2. In IDA, open the kernel and run **Edit > Plugins > kflow: Annotate kernel sites** (comments, the missing jump references, and a data reference from each static-key site to its key, so X on a key lists its sites). Run it after IDA's auto-analysis has finished: a static-key target or fixup that lies inside another function (not at its start, not that function's own `.cold` part) then gets a data reference instead of a jump reference, so that IDA is not asked to treat that function's code as flow of this one; it is still listed under X. Running Annotate again later changes earlier references to match IDA's current functions.
 3. **kflow: List BUG/WARN sites** lists every trap with its function and source line; Enter jumps to it.
-   From a crash log such as `WARNING: ... at mm/userfaultfd.c:755 mfill_atomic_copy+0x674/...`: type `userfaultfd.c:755` in the list's filter (one line can have several sites: on the demo kernel four functions share this one), or press G (Jump to address) and enter `mfill_atomic_copy+0x674`. The kernel prints the address of the trap itself, so this lands on the `ud2`, where kflow's comment confirms the file and line.
+   From a crash log such as `WARNING: ... at mm/userfaultfd.c:755 mfill_atomic_copy+0x674/...`: run **kflow: Go to oops/WARN line** and paste the line, or the whole report. It takes the function+offset from the `RIP:` / `pc :` line, else from the `WARNING:` or `kernel BUG at` line, and jumps there: the kernel prints the address of the trap itself, so this lands on the `ud2` / `brk`, where kflow's comment confirms the file and line. With only a `file:line` (one line can have several sites: on the demo kernel four functions share `mm/userfaultfd.c:755`) it shows the list with just those sites. The match and any notes (no site at that exact address, a module the log names, a function size that differs from the log's) go to the Output window. Tested only with fake `ida_*` modules.
 4. **kflow: List static-key sites** lists every static-key site with its key, `likely`/`unlikely`, whether the bytes there are a jump to the target now (`jump` / `no jump`), the target and the function; the chooser's filter finds every site of one key.
 5. **kflow: Remove annotations** removes kflow's comments and the references it added (Annotate records each one in the database, so Remove works after a rebase too). References that were there before, IDA's own (for example at a static-key site that is currently a jump) or yours, and your own comments are never touched.
 6. Experimental, off by default, x86_64 only: **kflow: Let WARN sites fall through (experimental)** and **kflow: Remove WARN fall-through**; read [docs/warnflow.md](docs/warnflow.md) before you use them.
@@ -166,7 +181,8 @@ The comments kflow writes in IDA, for three of the sites above (text produced by
 - `tests/test_demo.py <kernel ELF>` checks the decoded tables against the instruction bytes;
 - `tests/test_ida_stub.py <kernel ELF>` runs the IDA layer on fake `ida_*` modules backed by the same file (annotate, then remove, with IDA's own references, a reference you added and user comments in place; again after a rebase);
 - `tests/test_headless_stub.py <kernel ELF>` does the same through the headless runner;
-- `tests/test_entry_stub.py <kernel ELF>` loads the plugin itself and runs its four annotation and list actions;
+- `tests/test_entry_stub.py <kernel ELF>` loads the plugin itself and runs its annotation, list, Go to oops/WARN line and remove actions;
+- `tests/test_oops.py [<kernel ELF>]` reads log samples built from the kernel's own printk formats (x86 and arm64 reports, a syzbot report, Linux 4.9 forms, `dmesg` / journal prefixes, call traces with `?` entries and `[module]`); with a kernel ELF, a `RIP:` / `pc :` line made for every BUG/WARN site inside a function finds that site, and `--oops` is run;
 - `tests/test_warnflow_stub.py <kernel ELF>` runs the two experimental WARN fall-through actions on fake `ida_*` modules that model IDA's reanalysis and processor hooks, and function tails with a simplified model (see the test's docstring);
 - `python3 tests/test_core.py` covers the layouts on synthetic tables and the relocation of a synthetic module.
 
@@ -194,6 +210,7 @@ One line per limit; the full text is in [docs/limits.md](docs/limits.md).
 - WARN fall-through (experimental, off by default, x86_64 only): not yet run in real IDA, tested only on fake `ida_*` modules; the part most likely to need a fix. [More](docs/warnflow.md)
 - Static-key sites in freed init code (memory images) are decoded but not commented when they are outside code segments.
 - Kernel modules: checked on one x86_64 and four arm64 modules; absolute relocation types untested on real files; in IDA, kflow relies on IDA's own relocation of the `.ko` (not tried in IDA). [More](docs/modules.md#what-was-checked)
+- Go to oops/WARN line: the log must come from the same build as the file you open (otherwise offsets differ and you get the function's nearest sites); IDA's names for symbols with a dot (`foo.isra.0`) and for same-named static functions are not verified (not yet run in real IDA).
 - Alternatives (`.altinstructions`) are not handled; see [ida-linux-alternatives](https://github.com/opensrcsec/ida-linux-alternatives).
 
 ## Credits
