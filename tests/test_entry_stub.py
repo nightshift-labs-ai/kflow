@@ -185,6 +185,9 @@ for a, e, name in elf.funcs:
     if len(c) == 1 and c[0][0] == a and c[0][1] and c[0][2] and c[0][2] != c[0][1] and a not in at_addr:
         padded = (name, c[0])
         break
+# review s159 NIT 3: the check must not skip silently when this kernel has a function whose printed size differs from its code
+assert padded is not None or not any(cli_elf.printed_size(a) not in (None, e - a) for a, e, _ in elf.funcs
+                                     if len(m.function_starts(_)) == 1 and a not in at_addr), "printed() found no padded function"
 if padded is not None:
     name, (a, size, printed, _) = padded
     assert printed == cli_elf.printed_size(a) or cli_elf.relocatable, (name, printed, cli_elf.printed_size(a))
