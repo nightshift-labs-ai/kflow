@@ -443,7 +443,7 @@ def main(argv=None):
 
 def oops_main(elf, t, log_text, json_path=None):
     """--oops: the BUG/WARN site a kernel log names. Exit status 0 when something was found (the site, the function,
-    or the candidates for a file:line), 1 when not."""
+    or the candidates for a file:line), 1 when not, or when the log contradicts this file (status mismatch)."""
     from . import oops
     for kind, error in t.get("errors", {}).items():
         if kind == "bug":
@@ -458,4 +458,4 @@ def oops_main(elf, t, log_text, json_path=None):
     if json_path:
         with open(json_path, "w") as fh:
             json.dump({"input": elf.path, "oops": oops.match_record(report, match, elf.func)}, fh, indent=1)
-    return 1 if match.status == "none" else 0
+    return 1 if match.status in ("none", "mismatch") else 0

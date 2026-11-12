@@ -224,15 +224,16 @@ class SiteIndex:
     def __init__(self, sites):
         self.sites = sorted(sites, key=lambda s: s.addr)
         self.addrs = [s.addr for s in self.sites]
-        self.by_addr = {}
+        self.by_addr, self.by_line = {}, {}
         for s in self.sites:
             self.by_addr.setdefault(s.addr, s)
+            self.by_line.setdefault(s.line, []).append(s)
 
     def between(self, lo, hi):
         return self.sites[bisect.bisect_left(self.addrs, lo):bisect.bisect_left(self.addrs, hi)]
 
     def at_line(self, file, line):
-        return [s for s in self.sites if s.line == line and same_file(s.file, file)]
+        return [s for s in self.by_line.get(line, []) if same_file(s.file, file)]
 
 
 @dataclass
@@ -240,12 +241,15 @@ class Match:
     """status: 'exact' (a site at the log's address), 'near' (no site there; candidates = the sites in that function,
     those at the log's file:line first, then nearest first; when the offset is past the end of the function in this
     file there is no address and they are in address order), 'function' (the function has no site), 'line' (no
-    function+offset; one site at file:line), 'ambiguous' (no usable function+offset; several sites at file:line) or
-    'none'.
+    function+offset; one site at file:line), 'ambiguous' (no usable function+offset; several sites at file:line),
+    'mismatch' (a site is at the log's address, but the log itself says it is another one: its WARNING / kernel BUG
+    line names another file:line or kind, or it prints another function size; a log from another build, or two
+    reports in one paste; candidates = the sites at the log's file:line, else that site; nothing to go to) or 'none'.
     address: where to go (the log's address for exact/near/function, the site for line), else None.
     site: the site found (exact, line), else None.
-    label: what the candidates of 'line' / 'ambiguous' share ('mm/userfaultfd.c:755', or 'func+0x10' when functions
-    of the same name each have a site there)."""
+    label: what the candidates of 'line' / 'ambiguous' / 'mismatch' share ('mm/userfaultfd.c:755', or 'func+0x10' when
+    functions of the same name each have a site there).
+    reason: for 'mismatch', why the site at the log's address is not the one the log names."""
     status: str
     address: int = None
     site: object = None
@@ -254,6 +258,7 @@ class Match:
     function_start: int = None
     notes: list = field(default_factory=list)
     label: str = None
+    reason: str = None
 
 
 @dataclass(frozen=True)
@@ -290,6 +295,50 @@ def _starts(loc, symbols):
     more = [c for c in map(_func, symbols(loc.function, True) or []) if c.start not in {e.start for e in exact}
             and (c.size is None or loc.offset < c.size)]
     return (more, True) if more else (exact, False)
+
+
+def _kind(site):
+    return "WARN" if site.warn else "BUG"
+
+
+def _confirms(report, site):
+    """The log's WARNING / kernel BUG line names this very site: its file:line (the same build prints the site's own)
+    and its kind."""
+    h = report.header
+    return (h is not None and h.file is not None and site.file is not None and report.kind == _kind(site)
+            and site.line == h.line and same_file(site.file, h.file))
+
+
+def _contradicts(report, site, loc, func=None):
+    """Why the site at the log's address cannot be the one the log names, or None. The same build prints the bug
+    entry's own file:line and kind on the WARNING / kernel BUG line, and the function's size after the '/'."""
+    h = report.header
+    at = "%s+%#x" % (loc.function, loc.offset) if loc.function is not None else "0x%x" % loc.address
+    if h is not None and h.file and site.file and not (site.line == h.line and same_file(site.file, h.file)):
+        return "the %s site at %s is at %s, but the log's %s line says %s:%d" % (
+            _kind(site), at, site.where(), "WARNING" if report.kind == "WARN" else "kernel BUG", h.file, h.line)
+    if report.kind in ("WARN", "BUG") and report.kind != _kind(site):
+        return "the site at %s is a %s, but the log reports a %s" % (at, _kind(site), report.kind)
+    if func is not None and loc.size is not None and func.size is not None and not _same_size(func, loc.size) \
+            and not _confirms(report, site):
+        return "the log prints %s's size as %#x, this file has %#x" % (loc.function, loc.size, func.printed or func.size)
+    return None
+
+
+def _mismatch(report, index, site, loc, start, notes, why, symbols):
+    """A 'mismatch': the sites at the log's own file:line (those in a function of the log's name first), else the
+    site at the log's address; nothing to go to."""
+    h = report.header
+    cands, label = [], None
+    if h is not None and h.file:
+        label = "%s:%d" % (h.file, h.line)
+        spans = [(f.start, f.start + f.size) for f in map(_func, symbols(loc.function) or []) if f.size] \
+            if loc.function else []
+        cands = sorted(index.at_line(h.file, h.line), key=lambda s: not any(a <= s.addr < e for a, e in spans))
+    if not cands:
+        cands, label = [site], ("%s+%#x" % (loc.function, loc.offset) if loc.function is not None else
+                                "0x%x" % loc.address)
+    return Match("mismatch", None, None, cands, loc, start, notes, label, why)
 
 
 def resolve(report, sites, symbols, module=None, is_module=False):
@@ -336,12 +385,22 @@ def resolve(report, sites, symbols, module=None, is_module=False):
                              "%s+%#x" % (cur.function, cur.offset))
             if hits:
                 a = hits[0].start + cur.offset
+                bad = _contradicts(report, by_addr[a], cur, hits[0])
+                if bad:
+                    return _mismatch(report, index, by_addr[a], cur, hits[0].start, notes, bad, symbols)
+                if cur.size is not None and hits[0].size is not None and not _same_size(hits[0], cur.size):
+                    notes.append("size in the log %#x, here %#x: another build, but the log's %s line names this "
+                                 "site" % (cur.size, hits[0].printed or hits[0].size,
+                                           "WARNING" if report.kind == "WARN" else "kernel BUG"))
                 return Match("exact", a, by_addr[a], [by_addr[a]], cur, hits[0].start, notes)
             if found_fn is None:
                 pick = [f for f in starts if _same_size(f, cur.size)] or starts
                 found_fn = (cur, pick[0], suffixed, len(starts))
         elif cur.address is not None:
             if cur.address in by_addr:
+                bad = _contradicts(report, by_addr[cur.address], cur)
+                if bad:
+                    return _mismatch(report, index, by_addr[cur.address], cur, None, notes, bad, symbols)
                 return Match("exact", cur.address, by_addr[cur.address], [by_addr[cur.address]], cur, None, notes)
             notes.append("the log has only the address 0x%x (no symbol), and no BUG/WARN site is there (with KASLR "
                          "the running kernel's addresses differ from the file's)" % cur.address)
@@ -371,6 +430,9 @@ def resolve(report, sites, symbols, module=None, is_module=False):
         cands = index.at_line(want_file, want_line)
         label = "%s:%d" % (want_file, want_line)
         if len(cands) == 1:
+            if report.kind in ("WARN", "BUG") and report.kind != _kind(cands[0]):
+                why = "the site at %s is a %s, but the log reports a %s" % (label, _kind(cands[0]), report.kind)
+                return Match("mismatch", None, None, cands, loc, None, notes, label, why)
             return Match("line", cands[0].addr, cands[0], cands, loc, None, notes, label)
         if cands:
             return Match("ambiguous", None, None, cands, loc, None, notes, label)
@@ -427,6 +489,14 @@ def describe(report, match, func_of):
     elif st == "function":
         out.append("not a BUG/WARN site: %s+%#x (%#x) is in a function without one (an oops, not a BUG/WARN trap?)"
                    % (loc.function, loc.offset, match.address))
+    elif st == "mismatch":
+        out.append("mismatch: %s (a log from another build, or two reports in one paste?); not taken as the match"
+                   % match.reason)
+        n = len(match.candidates)
+        out.append("the %d BUG/WARN site%s at %s in this file:" % (n, "" if n == 1 else "s", match.label))
+        out += rows(match.candidates[:10])
+        if n > 10:
+            out.append("  ... %d more" % (n - 10))
     elif st == "line":
         out.append("one BUG/WARN site at %s:" % match.label)
         out += rows(match.candidates)
@@ -447,7 +517,7 @@ def match_record(report, match, func_of):
     site = lambda s: {"addr": h(s.addr), "kind": "WARN" if s.warn else "BUG", "function": func_of(s.addr) or None,
                       "file": s.file, "line": s.line}
     return {"status": match.status, "address": h(match.address), "site": site(match.site) if match.site else None,
-            "candidates": [site(s) for s in match.candidates], "label": match.label,
+            "candidates": [site(s) for s in match.candidates], "label": match.label, "reason": match.reason,
             "from": match.loc.record() if match.loc else None,
             "report": {"kind": report.kind, "file": report.file, "line": report.line},
             "frames": [f.record() for f in report.frames], "notes": list(match.notes)}

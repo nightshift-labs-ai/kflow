@@ -347,6 +347,10 @@ class OopsAction(ida_kernwin.action_handler_t):
         if m.status == "ambiguous" or (m.address is None and m.candidates):  # the candidates, no jump
             where = "at %s" % m.label if m.label else "in %s" % m.loc.function
             SitesChooser(bug_site_rows(m.candidates), "kflow: BUG/WARN sites %s" % where).Show()
+            if m.status == "mismatch":  # never a silent jump to a site the log itself contradicts
+                ida_kernwin.warning("kflow: the pasted log does not fit this file: %s (a log from another build, or two "
+                                    "reports in one paste?). Not jumping; the BUG/WARN sites at %s are in the list, "
+                                    "details in the Output window." % (m.reason, m.label))
             return 1
         if m.address is None:
             ida_kernwin.warning("kflow: no BUG/WARN site or function of this file matches the pasted text; details are "

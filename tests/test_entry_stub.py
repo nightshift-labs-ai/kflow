@@ -128,8 +128,16 @@ if site is not None:
     assert r == 1 and not went(new) and [x for x in new if x[0] == "show"] == [
         ("show", "kflow: BUG/WARN sites in %s" % name, len(want))], new
     assert sorted(row[0] for row in w["shown"].rows) == want and said(new, "is past the end of %s" % name), new
-    oops_done.append("WARNING/%s line and func+0xoff -> 0x%X (%s+%#x)%s; past the end -> %d rows" % (
-        reg.split(":")[0].strip(), site.addr, name, off, ", near offset" if gap is not None else "", len(want)))
+    # the log's own WARNING line names another file:line (another build, or two reports pasted): a warning and the
+    # chooser, never a jump
+    r, new = ask(text.replace("at %s:%d " % (site.file, site.line), "at %s:%d " % (site.file, site.line + 100000)))
+    assert r == 1 and not went(new) and [x[:2] for x in new if x[0] == "show"] == [
+        ("show", "kflow: BUG/WARN sites at %s+%#x" % (name, off))], new
+    assert [x for x in new if x[0] == "warning" and "does not fit this file: the WARN site at %s+%#x is at %s"
+            % (name, off, site.where()) in x[1]] and said(new, "mismatch: "), new
+    oops_done.append("WARNING/%s line and func+0xoff -> 0x%X (%s+%#x)%s; past the end -> %d rows; another line -> "
+                     "mismatch, no jump" % (reg.split(":")[0].strip(), site.addr, name, off,
+                                            ", near offset" if gap is not None else "", len(want)))
 if any(b.addr == 0xFFFFFFFF8E629BC4 and b.where() == "mm/userfaultfd.c:755" for b in bugs):  # the MemLens demo kernel
     # the review's example: four functions share mm/userfaultfd.c:755; the WARNING line's func+0xoff picks one
     r, new = ask("WARNING: CPU: 1 PID: 9 at mm/userfaultfd.c:755 mfill_atomic_copy+0x674/0x...")
@@ -168,10 +176,11 @@ if cut is not None:
 per_line = collections.Counter((b.file, b.line) for b in bugs if b.file)
 one = next((k for k, n in per_line.items() if n == 1), None)
 if one is not None:
-    r, new = ask("kernel BUG at %s:%d!" % one)
+    warn1 = next(b.warn for b in bugs if (b.file, b.line) == one)
+    r, new = ask(("%s:%d" if warn1 else "kernel BUG at %s:%d!") % one)  # a WARNING line has a function+offset too
     want = next(b.addr for b in bugs if (b.file, b.line) == one)
     assert r == 1 and went(new) == [want] and said(new, "one BUG/WARN site at %s:%d" % one), new
-    oops_done.append("kernel BUG at file:line (one site) -> 0x%X" % want)
+    oops_done.append("%sfile:line (one site) -> 0x%X" % ("" if warn1 else "kernel BUG at ", want))
 many = max(per_line, key=per_line.get) if per_line and max(per_line.values()) > 1 else None
 if many is not None:
     want = sorted(b.addr for b in bugs if (b.file, b.line) == many)

@@ -31,11 +31,12 @@ UFFD = [(0xFFFFFFFF8E629BC4, "mfill_atomic_copy", 0xFFFFFFFF8E629550, 0x9D0),
 FUNCS = {name: [(start, size)] for _, name, start, size in UFFD}
 SITES = [BugSite(a, "mm/userfaultfd.c", 755, 0x901) for a, _, _, _ in UFFD]
 SITES += [BugSite(0xFFFFFFFF8E629BA9, "mm/userfaultfd.c", 861, 0),  # a BUG in mfill_atomic_copy, before the WARN
+          BugSite(0xFFFFFFFF8E62ACE0, "mm/userfaultfd.c", 900, 1),  # a WARN in mfill_atomic_poison, before :755's
           BugSite(0xFFFFFFFF81000110, "mm/filemap.c", 1499, 0),  # folio_unlock: a BUG with a unique file:line
           BugSite(0xFFFFFFFF81000210, "lib/dup.c", 10, 1),  # two static functions named dup_fn: sites at +0x10 in both
           BugSite(0xFFFFFFFF81000310, "lib/dup.c", 20, 1),
           BugSite(0xFFFFFFFF81000444, "kernel/cfi.c", 7, 1),  # in lto_fn.cfi (the log prints lto_fn)
-          BugSite(0x10A00, "net/netfilter/nf_tables_core.c", 260, 1)]  # a module's site
+          BugSite(0x10A00, "net/netfilter/nf_tables_core.c", 260, 0)]  # a module's BUG (ARM64_BUG: kernel BUG at)
 FUNCS.update({"folio_unlock": [(0xFFFFFFFF810000A0, 0xD0)],
               "dup_fn": [(0xFFFFFFFF81000200, 0x40), (0xFFFFFFFF81000300, 0x60)],
               "lto_fn": [(0xFFFFFFFF81000600, 0x8)],  # the 8-byte CFI jump-table entry has the plain name
@@ -160,6 +161,17 @@ OLD_X86 = """\
 """
 OLD_SUMMARY = "RIP  [<ffffffff8e629bc4>] mfill_atomic_copy+0x674/0x9d0"
 OLD_IP = "IP: [<ffffffff810000a1>] folio_unlock+0x70/0xd0"
+# logs from other builds (review s157): Ubuntu 6.8 x86_64, Android 5.10 arm64
+OTHER_BUILD_X86 = """\
+[  301.551234] ------------[ cut here ]------------
+[  301.551240] WARNING: CPU: 2 PID: 4411 at mm/mmu_notifier.c:848 mmu_notifier_unregister+0xd8/0xf0
+[  301.551290] CPU: 2 PID: 4411 Comm: qemu-system-x86 Not tainted 6.8.0-149-generic #159-Ubuntu
+[  301.551300] RIP: 0010:mmu_notifier_unregister+0xd8/0xf0
+"""
+OTHER_BUILD_ARM64 = """\
+<4>[  88.123460][ T2201] WARNING: CPU: 5 PID: 2201 at lib/refcount.c:25 prepare_kernel_cred+0x370/0x46c
+<4>[  88.123500][ T2201] pc : prepare_kernel_cred+0x370/0x46c
+"""
 OLD_ARM64 = "[   12.000001] PC is at nft_do_chain+0x400/0x6d0 [nf_tables]\n[   12.000002] LR is at nf_hook_slow+0x48/0x100"
 
 
@@ -337,6 +349,58 @@ class Resolve(unittest.TestCase):
         rep, m = find("RIP: 0010:no_sites_fn+0x100/0x200")  # past the end of a function without sites: nothing
         self.assertEqual((m.status, m.address, m.candidates), ("none", None, []))
 
+    def test_mismatch(self):
+        """A site at the log's address that the log itself contradicts (its WARNING / kernel BUG line names another
+        file:line or kind, or it prints another size): not exact, nothing to go to; the sites at the log's file:line."""
+        here = [0xFFFFFFFF8E629BC4]
+        # another file:line on the WARNING line: no site at it here, so the site at the address is the one listed
+        rep, m = find("WARNING: CPU: 2 PID: 4411 at mm/mmu_notifier.c:848 mfill_atomic_copy+0x674/0x9d0")
+        why = ("the WARN site at mfill_atomic_copy+0x674 is at mm/userfaultfd.c:755, but the log's WARNING line says "
+               "mm/mmu_notifier.c:848")
+        self.assertEqual((m.status, m.address, m.site, [s.addr for s in m.candidates], m.reason, m.label),
+                         ("mismatch", None, None, here, why, "mfill_atomic_copy+0x674"))
+        self.assertEqual(oops.describe(rep, m, lambda ea: "f")[1:3], [
+            "mismatch: %s (a log from another build, or two reports in one paste?); not taken as the match" % why,
+            "the 1 BUG/WARN site at mfill_atomic_copy+0x674 in this file:"])
+        rec = oops.match_record(rep, m, lambda ea: "")
+        self.assertEqual((rec["status"], rec["address"], rec["site"], rec["reason"], rec["notes"]),
+                         ("mismatch", None, None, why, []))
+        # the offset lands on the BUG at :861, the log says :755: the four sites at :755, mfill_atomic_copy's first
+        rep, m = find("WARNING: CPU: 1 PID: 9 at mm/userfaultfd.c:755 mfill_atomic_copy+0x659/0x9d0")
+        self.assertEqual((m.status, m.label, [s.addr for s in m.candidates]),
+                         ("mismatch", "mm/userfaultfd.c:755", [a for a, _, _, _ in UFFD]))
+        rep, m = find("WARNING: CPU: 1 PID: 9 at mm/userfaultfd.c:755 mfill_atomic_poison+0x10/0x850")  # on :900
+        self.assertEqual((m.status, [s.addr for s in m.candidates]),
+                         ("mismatch", [0xFFFFFFFF8E62B164, 0xFFFFFFFF8E629BC4, 0xFFFFFFFF8E62A489, 0xFFFFFFFF8E62AB60]))
+        rep, m = find("WARNING: CPU: 1 PID: 9 at mm/userfaultfd.c:755 mfill_atomic_poison+0x494/0x850")
+        self.assertEqual((m.status, m.address), ("exact", 0xFFFFFFFF8E62B164))  # the same site: exact
+        rep, m = find("WARNING: CPU: 1 PID: 9 at mm/userfaultfd.c:755 mfill_atomic_poison+0x494/0x850\n"
+                      "RIP: 0010:mfill_atomic_copy+0x674/0x9d0")  # RIP from another report: other function, same line
+        self.assertEqual((m.status, m.address), ("exact", 0xFFFFFFFF8E629BC4))
+        # the kind: a kernel BUG line, a WARN site at the address (same file:line)
+        rep, m = find("kernel BUG at mm/userfaultfd.c:755!\nRIP: 0010:mfill_atomic_copy+0x674/0x9d0")
+        self.assertEqual((m.status, m.reason), ("mismatch", "the site at mfill_atomic_copy+0x674 is a WARN, but the log "
+                                                            "reports a BUG"))
+        rep, m = find("WARNING: CPU: 1 PID: 9 at mfill_atomic_copy+0x659/0x9d0")  # no file:line, a BUG there
+        self.assertEqual((m.status, [s.addr for s in m.candidates]), ("mismatch", [0xFFFFFFFF8E629BA9]))
+        rep, m = find("kernel BUG at mm/filemap.c:1499!\nRIP: 0010:0xffffffff8e629bc4")  # an address, no symbol
+        self.assertEqual((m.status, m.label, [s.addr for s in m.candidates]),
+                         ("mismatch", "mm/filemap.c:1499", [0xFFFFFFFF81000110]))
+        # the size: without a WARNING / kernel BUG line to confirm the site, another size means another build
+        rep, m = find("RIP: 0010:mfill_atomic_copy+0x674/0x9c0")
+        self.assertEqual((m.status, m.reason), ("mismatch", "the log prints mfill_atomic_copy's size as 0x9c0, this "
+                                                            "file has 0x9d0"))
+        rep, m = find("RIP: 0010:padded_fn+0x10/0x9d0")  # the printed size, not the code size 0x9c3: fine
+        self.assertEqual(m.status, "function")
+        rep, m = find("WARNING: CPU: 1 PID: 9 at mm/userfaultfd.c:755 mfill_atomic_copy+0x674/0x9c0")  # confirmed
+        self.assertEqual((m.status, m.address, m.notes), ("exact", 0xFFFFFFFF8E629BC4, [
+            "size in the log 0x9c0, here 0x9d0: another build, but the log's WARNING line names this site"]))
+        # file:line only, one site of the other kind
+        rep, m = find("WARNING: CPU: 0 PID: 1 at mm/filemap.c:1499 other_build_fn+0x10/0x20")
+        self.assertEqual((m.status, m.address, m.reason), ("mismatch", None, "the site at mm/filemap.c:1499 is a BUG, "
+                                                                             "but the log reports a WARN"))
+        self.assertEqual(find("kernel BUG at mm/filemap.c:1499!")[1].status, "line")
+
     def test_ambiguous_file_line(self):
         for text in ("mm/userfaultfd.c:755", "userfaultfd.c:755", "[  12.3] mm/userfaultfd.c:755"):
             rep, m = find(text)
@@ -405,16 +469,18 @@ def whole_kernel(path):
     first_at = {}
     for b in bugs:
         first_at.setdefault(b.addr, b)
-    done = same_name = 0
+    done = same_name = headed = contradicted = 0
     for b in bugs:
         name = elf.func(b.addr)
         if not name or first_at[b.addr] is not b:
             continue
         # the size as the kernel prints it (to the next symbol), as a real log from this build has it
         start, size, printed, _ = next(c for c in elf.function_starts(name) if c[0] <= b.addr < c[0] + c[1])
-        rep = oops.parse("%s%s+%#x/%#x%s" % (reg, name, b.addr - start, printed or size, tag))
+        at = "%s%s+%#x/%#x%s" % (reg, name, b.addr - start, printed or size, tag)
+        rep = oops.parse(at)
         m = oops.resolve(rep, index, elf.function_starts, mod, elf.relocatable)
-        if m.status == "ambiguous":  # functions of the same name and size, each with a site at this offset
+        several = m.status == "ambiguous"
+        if several:  # functions of the same name and size, each with a site at this offset
             assert b in m.candidates and m.label == "%s+%#x" % (name, b.addr - start), (hex(b.addr), m)
             same_name += 1
         else:
@@ -422,6 +488,23 @@ def whole_kernel(path):
             assert not m.notes or (elf.relocatable and not tag and len(m.notes) == 1
                                    and "in the kernel image (no [module] after it)" in m.notes[0]), m.notes
         done += 1
+        if not b.file:
+            continue
+        # the whole report as this build prints it (its WARNING / kernel BUG line names the site's own file:line and
+        # kind): still exact; a line or kind the site does not have (another build, another report): never exact
+        for line, warn, ok in ((b.line, b.warn, True), (b.line + 100000, b.warn, False), (b.line, not b.warn, False)):
+            head = ("WARNING: CPU: 1 PID: 9 at %s:%d %s+%#x/%#x%s" % (b.file, line, name, b.addr - start, printed or size,
+                                                                     tag) if warn else "kernel BUG at %s:%d!" % (b.file, line))
+            m = oops.resolve(oops.parse(head + "\n" + at), index, elf.function_starts, mod, elf.relocatable)
+            if ok:
+                assert m.status in ("exact", "ambiguous") and b in m.candidates, (hex(b.addr), head, m.status, m.notes)
+                headed += 1
+            elif several and m.status == "ambiguous":  # none of them at the log's line: still only candidates
+                assert m.address is None and b in m.candidates, (hex(b.addr), head, m)
+            else:
+                assert m.status == "mismatch" and m.address is None and m.reason and not [
+                    n for n in m.notes if "in the kernel image (no [module] after it)" not in n], (hex(b.addr), head, m)
+                contradicted += 1
     # a log line at an offset with no site, in functions whose printed size (to the next symbol) is not their ELF size:
     # no size note, as the log of this build prints that size
     padded = 0
@@ -446,10 +529,19 @@ def whole_kernel(path):
         m = oops.resolve(oops.parse("WARNING: CPU: 1 PID: 9 at mm/userfaultfd.c:755 mfill_atomic_copy+0x674/0x..."),
                          index, elf.function_starts)
         assert (m.status, m.address, m.site.where()) == ("exact", 0xFFFFFFFF8E629BC4, "mm/userfaultfd.c:755"), m
+    # logs from other builds (review s157): an Ubuntu 6.8 x86_64 WARNING, an Android 5.10 arm64 one; where this file has
+    # a site at that function+offset, it is exact only if it is the site the log's WARNING line names
+    other = 0
+    for text, want in ((OTHER_BUILD_X86, "mm/mmu_notifier.c:848"), (OTHER_BUILD_ARM64, "lib/refcount.c:25")):
+        m = oops.resolve(oops.parse(text), index, elf.function_starts, mod, elf.relocatable)
+        assert m.status != "exact" or (m.site.where().endswith(want) and m.site.warn), (want, m)
+        other += m.status == "mismatch"
     print("OK oops on %s: %d of %d BUG/WARN sites in functions found from their %sfunc+0xoff/0xsize line (%d of them "
-          "among same-named functions: listed as candidates); %d functions whose printed size is not their ELF size: no "
-          "size note; file:line checked for %d lines; --oops exit status, output and --json checked"
-          % (os.path.basename(path), done, len(bugs), reg, same_name, padded, len(lines)))
+          "among same-named functions: listed as candidates); %d of them also with their own WARNING / kernel BUG line, "
+          "%d with another line or kind: mismatch; %d functions whose printed size is not their ELF size: no size note; "
+          "file:line checked for %d lines; %d logs from another build: mismatch; --oops exit status, output and --json "
+          "checked" % (os.path.basename(path), done, len(bugs), reg, same_name, headed, contradicted, padded, len(lines),
+                       other))
 
 
 def cli_check(path, elf, bugs, reg, tag):
@@ -471,16 +563,24 @@ def cli_check(path, elf, bugs, reg, tag):
             return code, buf.getvalue()
         if site is not None:
             name = elf.func(site.addr)
-            start, _, size, _ = next(c for c in elf.function_starts(name) if c[0] <= site.addr < c[0] + c[1])
-            text = "[  152.334201] WARNING: CPU: 1 PID: 9 at %s:%d %s+%#x/%#x%s\n" % (site.file, site.line, name,
-                                                                              site.addr - start, size, tag)
-            code, got = run(text, "--json", out)
+            start, size, printed, _ = next(c for c in elf.function_starts(name) if c[0] <= site.addr < c[0] + c[1])
+            at = "%s+%#x/%#x%s" % (name, site.addr - start, printed or size, tag)
+            head = lambda line: ("[  152.334201] WARNING: CPU: 1 PID: 9 at %s:%d %s\n" % (site.file, line, at) if site.warn
+                                 else "[  152.334201] kernel BUG at %s:%d!\n[  152.334230] %s%s\n" % (site.file, line, reg, at))
+            code, got = run(head(site.line), "--json", out)
             rec = json.load(open(out))["oops"]
             if rec["status"] == "exact":
                 assert code == 0 and "%#x" % site.addr in got.splitlines()[2] and got.splitlines()[1].startswith("exact:"), got
                 assert rec["address"] == "0x%X" % site.addr and rec["site"]["line"] == site.line, rec
             else:  # same-named functions with a site at this offset
                 assert code == 0 and rec["status"] == "ambiguous" and "0x%X" % site.addr in [c["addr"] for c in rec["candidates"]]
+            # the log's own line says another file:line: exit 1, the mismatch printed, no site in the JSON
+            code, got = run(head(site.line + 100000), "--json", out)
+            rec = json.load(open(out))["oops"]
+            assert code == 1 and got.splitlines()[1].startswith("mismatch: the %s site at %s+%#x is at %s, but the log's"
+                                                                % ("WARN" if site.warn else "BUG", name,
+                                                                   site.addr - start, site.where())), got
+            assert (rec["status"], rec["address"], rec["site"]) == ("mismatch", None, None), rec
         code, got = run("hello, world\n")
         assert code == 1 and "no match" in got, got
         code, got = run("%skflow_no_such_function+0x10/0x20\n" % reg)
