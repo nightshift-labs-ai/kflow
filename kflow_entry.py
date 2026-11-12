@@ -6,11 +6,14 @@ Edit > Plugins > kflow actions:
     jump references to static-key targets and fixups where IDA has none.
   * List BUG/WARN sites: a list with function and source file:line; Enter jumps to the site.
   * Remove annotations.
+  * Let WARN sites fall through (experimental, x86_64 only, off by default) / Remove WARN fall-through: see
+    kflow/warnflow.py.
 With the Hex-Rays decompiler, annotated sites also get a comment in pseudocode (display only, nothing saved).
 """
 import bisect
 import os
 import sys
+import time
 import traceback
 
 import ida_funcs
@@ -26,7 +29,10 @@ from kflow import __version__, idalayer  # noqa: E402
 
 ISSUES_URL = "https://github.com/nightshift-labs-ai/kflow/issues"
 # pseudo: the sites by address for the pseudocode hook (built by Annotate, rebuilt after a rebase); hx: the hook.
-STATE = {"tables": None, "pseudo": None, "hx": None, "hx_error": False}
+# wf / wf_filter: the WARN fall-through processor hook and decompiler filter, only while it is on for the open database;
+# wf_last: its last counts.
+STATE = {"tables": None, "pseudo": None, "hx": None, "hx_error": False, "wf": None, "wf_filter": None,
+         "wf_error": False, "wf_last": None}
 NOP_WINDOW = 16  # bytes: how far a static-key site without a statement of its own may be from the next one that has one
 
 
@@ -324,11 +330,161 @@ class RemoveAction(ida_kernwin.action_handler_t):
         return ida_kernwin.AST_ENABLE_ALWAYS
 
 
+def warnflow_hook(offsets=()):
+    """Install kflow's processor hook for the open database (once) and give it the sites. It lives only in memory."""
+    if STATE["wf"] is None:
+        from kflow import warnflow
+        hook = warnflow.WarnFlowHook()
+        if not hook.hook():
+            return None
+        STATE["wf"] = hook
+    STATE["wf"].offsets = set(offsets)
+    return STATE["wf"]
+
+
+def warnflow_filter(offsets):
+    """The decompiler part, if Hex-Rays is there. Fails soft: a problem is reported once, the disassembly part stays.
+    Returns what happened, for the messages."""
+    if STATE["wf_filter"] is not None:
+        STATE["wf_filter"].offsets = set(offsets)
+        return "on"
+    try:
+        from kflow import warnflow
+        STATE["wf_filter"] = warnflow.make_filter(offsets)
+    except Exception:  # noqa: BLE001  no decompiler, a decompiler that refuses the filter, or an unexpected one
+        STATE["wf_filter"] = None
+        if not STATE["wf_error"]:
+            STATE["wf_error"] = True
+            report("WARN fall-through: the decompiler part could not be installed (shown once); the disassembly part "
+                   "is not affected:\n%s" % traceback.format_exc())
+        return "not installed (error)"
+    return "on" if STATE["wf_filter"] is not None else "off (no decompiler)"
+
+
+def warnflow_stop():
+    """Unhook and remove the decompiler filter (plugin unloads, or Remove WARN fall-through)."""
+    hook, STATE["wf"] = STATE["wf"], None
+    flt, STATE["wf_filter"] = STATE["wf_filter"], None
+    STATE["wf_error"] = False
+    if hook is not None:
+        hook.offsets = set()
+        try:
+            hook.unhook()
+        except Exception:  # noqa: BLE001
+            traceback.print_exc()
+    if flt is not None:
+        try:
+            from kflow import warnflow
+            warnflow.remove_filter(flt)
+        except Exception:  # noqa: BLE001
+            traceback.print_exc()
+
+
+def warnflow_resume():
+    """At load: in a database where WARN fall-through is on, hook again (nothing else is changed) and say how many
+    sites lost their flow (reanalysed while kflow was not loaded); running the action again restores them."""
+    if not idalayer.warn_flow_recorded() or idalayer.current_arch() != "x86_64":
+        return
+    try:
+        from kflow import warnflow
+        offsets = warnflow.site_offsets(warnflow.records())
+        if warnflow_hook(offsets) is None:
+            report("WARN fall-through is on in this database, but IDA did not accept the processor hook")
+            return
+        dec = warnflow_filter(offsets)
+        lost = warnflow.missing_flow(offsets)
+        report("WARN fall-through (experimental) is on in this database: processor hook installed for %d WARN sites, "
+               "decompiler part %s; %s" % (len(offsets), dec, "%d of them have no flow now (reanalysed without kflow?): "
+                                           "run kflow: Let WARN sites fall through again to restore it" % lost
+                                           if lost else "all of them have flow"))
+    except Exception:  # noqa: BLE001  the other features must load anyway
+        report("WARN fall-through could not be turned on again:\n%s" % traceback.format_exc())
+
+
+class WarnFlowAction(ida_kernwin.action_handler_t):
+    """Experimental, x86_64 only: ordinary flow after the WARN ud2 traps listed in the kernel's __bug_table."""
+    @guarded
+    def activate(self, ctx):
+        if idalayer.current_arch() == "aarch64":
+            from kflow import warnflow
+            stops = warnflow.brk_stops()
+            report("WARN fall-through: arm64 database; IDA's ARM module marks brk as the end of flow: %s; nothing changed"
+                   % ("yes" if stops else "no"))
+            if stops:
+                ida_kernwin.info("kflow: IDA's ARM module ends code flow at brk here, but kflow's WARN fall-through "
+                                 "supports only x86_64 so far. Nothing was changed.\nPlease report it: %s" % ISSUES_URL)
+            else:
+                ida_kernwin.info("kflow: not needed on arm64: IDA continues after brk #0x800. Nothing was changed.")
+            return 0
+        t = scan_or_warn()
+        if t is None:
+            return 0
+        from kflow import warnflow
+        if not warnflow.warn_sites(t):
+            ida_kernwin.warning("kflow: no WARN trap of this kernel's __bug_table is a ud2 in code: nothing to do.")
+            return 0
+        stops = warnflow.ud2_stops()
+        hook = warnflow_hook(STATE["wf"].offsets if STATE["wf"] is not None else ())
+        if hook is None:
+            ida_kernwin.warning("kflow: IDA did not accept the processor hook; nothing was changed.")
+            return 0
+        start = time.time()
+        ida_kernwin.show_wait_box("HIDECANCEL\nkflow: letting WARN sites fall through (IDA reanalyses them)")
+        try:
+            res = warnflow.enable(t, hook)
+        finally:
+            ida_kernwin.hide_wait_box()
+        STATE["wf_last"] = res
+        dec = warnflow_filter(hook.offsets)
+        flush_pseudocode()
+        report("WARN fall-through (experimental): %d WARN ud2 sites, flow after %d of them (IDA marks ud2 as the end "
+               "of flow: %s); the %d BUG ud2 traps are left alone; function tails added: %d, next instruction already "
+               "in another function (left alone): %d, site in no function: %d, tail not added: %d; %d functions "
+               "reanalysed; decompiler part %s; %.1f s"
+               % (res["sites"], res["flow"], "yes" if stops else "no", warnflow.bug_traps(t), res["tails"],
+                  res["other_func"], res["no_func"], res["tail_failed"], res["functions"], dec, time.time() - start))
+        if res["sites"] and not res["flow"]:
+            ida_kernwin.warning("kflow: IDA added no flow after any of the %d WARN sites: the processor hook had no "
+                                "effect in this IDA version.\nPlease report it: %s\n'kflow: Remove WARN fall-through' "
+                                "undoes the rest." % (res["sites"], ISSUES_URL))
+        return 1
+
+    def update(self, ctx):
+        return ida_kernwin.AST_ENABLE_ALWAYS
+
+
+class WarnFlowOffAction(ida_kernwin.action_handler_t):
+    @guarded
+    def activate(self, ctx):
+        if not idalayer.warn_flow_recorded():
+            ida_kernwin.warning("kflow: WARN fall-through is not on in this database.")
+            return 0
+        from kflow import warnflow
+        warnflow_stop()  # first: then nothing adds the flow when IDA reanalyses the sites
+        ida_kernwin.show_wait_box("HIDECANCEL\nkflow: removing WARN fall-through (IDA reanalyses the sites)")
+        try:
+            res = warnflow.disable()
+        finally:
+            ida_kernwin.hide_wait_box()
+        STATE["wf_last"] = res
+        flush_pseudocode()
+        report("WARN fall-through removed: %d sites reanalysed, flow still after %d; function tails removed: %d%s"
+               % (res["sites"], res["flow_left"], res["tails"],
+                  "; %d tails kflow added are no longer separate tails and stay in their function" % res["tails_left"]
+                  if res["tails_left"] else ""))
+        return 1
+
+    def update(self, ctx):
+        return ida_kernwin.AST_ENABLE_ALWAYS
+
+
 ACTIONS = [
     ("kflow:annotate", "kflow: Annotate kernel sites", AnnotateAction),
     ("kflow:list", "kflow: List BUG/WARN sites", ListAction),
     ("kflow:keys", "kflow: List static-key sites", KeySitesAction),
     ("kflow:remove", "kflow: Remove annotations", RemoveAction),
+    ("kflow:warnflow", "kflow: Let WARN sites fall through (experimental)", WarnFlowAction),
+    ("kflow:warnflow_off", "kflow: Remove WARN fall-through", WarnFlowOffAction),
 ]
 
 
@@ -344,6 +500,7 @@ class KflowPlugin(ida_idaapi.plugin_t):
             ida_kernwin.register_action(ida_kernwin.action_desc_t(name, label, handler()))
             ida_kernwin.attach_action_to_menu("Edit/Plugins/", name, ida_kernwin.SETMENU_APP)
         hook_pseudocode()
+        warnflow_resume()
         report("%s loaded" % __version__)
         return ida_idaapi.PLUGIN_KEEP
 
@@ -351,6 +508,7 @@ class KflowPlugin(ida_idaapi.plugin_t):
         ida_kernwin.process_ui_action("kflow:annotate")
 
     def term(self):
+        warnflow_stop()
         unhook_pseudocode()
         for name, _, _ in ACTIONS:
             ida_kernwin.unregister_action(name)

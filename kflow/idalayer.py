@@ -18,6 +18,8 @@ BADADDR = ida_idaapi.BADADDR
 TRAP_LEN = {"x86_64": 2, "aarch64": 4}
 NODE = "$ kflow created xrefs"  # site -> target of every reference kflow itself added (offsets from the image base)
 KEY_NODE = "$ kflow created key refs"  # static-key site -> key, the data references kflow added
+WARN_NODE = "$ kflow warn flow"  # WARN fall-through (kflow/warnflow.py, experimental): offset -> bits 1 = WARN ud2 site,
+# 2 = start of a function tail kflow appended (offsets from the image base); the record exists only while it is on
 MASK = (1 << 64) - 1
 
 
@@ -413,6 +415,11 @@ def annotated():
     """True when the database carries kflow's annotations: Annotate creates the record of added references (even
     if it adds none), Remove deletes it."""
     return ida_netnode.netnode(NODE, 0, False).index() != ida_netnode.BADNODE
+
+
+def warn_flow_recorded():
+    """True when WARN fall-through (kflow/warnflow.py) is on in this database: its record exists."""
+    return ida_netnode.netnode(WARN_NODE, 0, False).index() != ida_netnode.BADNODE
 
 
 def layout():

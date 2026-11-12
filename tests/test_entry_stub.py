@@ -30,7 +30,7 @@ sys.path.insert(0, os.path.join(HERE, ".."))
 sys.modules.pop("kflow_entry", None)
 m = importlib.import_module("kflow_entry")
 p = m.PLUGIN_ENTRY()
-ACTION_NAMES = ["kflow:annotate", "kflow:list", "kflow:keys", "kflow:remove"]
+ACTION_NAMES = ["kflow:annotate", "kflow:list", "kflow:keys", "kflow:remove", "kflow:warnflow", "kflow:warnflow_off"]
 assert p.init() == 1 and [x[1] for x in log if x[0] == "reg"] == ACTION_NAMES
 assert m.STATE["hx"] is None
 assert m.AnnotateAction().activate(None) == 1

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Check every ida_* name kflow uses against the official IDAPython stubs, plus the object members and the
-signatures/return shapes the Hex-Rays pseudocode hook relies on.
+signatures/return shapes the Hex-Rays pseudocode hook and WARN fall-through rely on.
 
     python3 tests/check_ida_api.py <dir containing ida_*.pyi>
 
@@ -12,7 +12,7 @@ import re
 import sys
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
-FILES = ["kflow/idalayer.py"] + [f for f in ("kflow_entry.py",) if os.path.exists(os.path.join(ROOT, f))]
+FILES = ["kflow/idalayer.py"] + [f for f in ("kflow_entry.py", "kflow/warnflow.py") if os.path.exists(os.path.join(ROOT, f))]
 
 
 def dotted(n):
@@ -50,7 +50,10 @@ MEMBERS = [("ida_xref", "xrefblk_t", m) for m in ("first_from", "next_from", "to
     [("ida_hexrays", "cfunc_t", m) for m in ("get_eamap", "get_pseudocode", "find_item_coords", "entry_ea")] + \
     [("ida_hexrays", "eamap_t", m) for m in ("__iter__", "__getitem__")] + [("ida_hexrays", "cinsnptrvec_t", "__iter__")] + \
     [("ida_pro", "strvec_t", m) for m in ("__getitem__", "__len__")] + [("ida_kernwin", "simpleline_t", "line")] + \
-    [("ida_funcs", "func_t", "start_ea")]
+    [("ida_funcs", "func_t", m) for m in ("start_ea", "end_ea")] + \
+    [("ida_ua", "insn_t", m) for m in ("ea", "size", "itype", "add_cref")] + \
+    [("ida_idp", "IDP_Hooks", m) for m in ("__init__", "hook", "unhook", "ev_emu_insn")] + \
+    [("ida_hexrays", "udc_filter_t", m) for m in ("__init__", "init", "match")] + [("ida_hexrays", "codegen_t", "insn")]
 for mod, cls, name in MEMBERS:
     checked += 1
     src = open(os.path.join(sys.argv[1], mod + ".pyi")).read()
@@ -59,7 +62,7 @@ for mod, cls, name in MEMBERS:
         print("MISSING", "%s.%s.%s" % (mod, cls, name))
         missing += 1
 # signatures and return shapes the pseudocode hook relies on (the hook returns 0; coords are (x, y)); a class name
-# limits the search to that class's body, None to the whole module
+# limits the search to that class's body, None to the whole module (^ matches at a line start)
 SHAPES = [("ida_hexrays", "Hexrays_Hooks", r"def func_printed\(self, cfunc: cfunc_t\) -> int:"),
           ("ida_hexrays", "cfunc_t", r"find_item_coords\(item: citem_t\) -> Tuple\[int, int\]"),
           ("ida_hexrays", "cfunc_t", r"def get_eamap\(self\) -> eamap_t:"),
@@ -69,14 +72,31 @@ SHAPES = [("ida_hexrays", "Hexrays_Hooks", r"def func_printed\(self, cfunc: cfun
           ("ida_hexrays", None, r"def init_hexrays_plugin\(flags: int = 0\) -> bool:"),
           ("ida_pro", "strvec_t", r"def __getitem__\(self, i: int\) -> simpleline_t:"), ("ida_lines", None, r"def COLSTR\(str: Any, tag: Any\)"),
           ("ida_funcs", None, r"def get_func\(ea: ida_idaapi.ea_t\) -> Optional\[func_t\]:"),
-          ("ida_segment", None, r"def get_segm_qty\(\) -> int:"), ("ida_segment", None, r"def getnseg\(n: int\) -> Optional\[segment_t\]:")]
+          ("ida_segment", None, r"def get_segm_qty\(\) -> int:"), ("ida_segment", None, r"def getnseg\(n: int\) -> Optional\[segment_t\]:"),
+          # WARN fall-through (kflow/warnflow.py): the hook, flow flags, reanalysis, function tails, the microcode filter
+          ("ida_idp", "IDP_Hooks", r"def __init__\(self, _flags: int = 0, _hkcb_flags: int = 1\)"),
+          ("ida_idp", "IDP_Hooks", r"def ev_emu_insn\(self, insn: insn_t\) -> bool:"),
+          ("ida_idp", None, r"def has_insn_feature\(icode: int, bit: int\) -> bool:"),
+          ("ida_idp", None, r"^CF_STOP: int"), ("ida_allins", None, r"^NN_ud2: int  # 632"), ("ida_allins", None, r"^ARM_brk: int"),
+          ("ida_ua", "insn_t", r"def add_cref\(self, to: ida_idaapi.ea_t, opoff: int, type: cref_t\) -> None:"),
+          ("ida_xref", None, r"^fl_F: int  # 21"), ("ida_auto", None, r"def plan_ea\(ea: ida_idaapi.ea_t\) -> None:"),
+          ("ida_auto", None, r"def auto_wait\(\) -> bool:"), ("ida_bytes", None, r"def get_flags\(ea: ida_idaapi.ea_t\) -> int:"),
+          ("ida_bytes", None, r"def is_flow\(F: int\) -> bool:"), ("ida_bytes", None, r"def is_code\(F: int\) -> bool:"),
+          ("ida_funcs", None, r"def append_func_tail\(pfn: func_t, ea1: ida_idaapi.ea_t, ea2: ida_idaapi.ea_t\) -> bool:"),
+          ("ida_funcs", None, r"def remove_func_tail\(pfn: func_t, tail_ea: ida_idaapi.ea_t\) -> bool:"),
+          ("ida_funcs", None, r"def reanalyze_function\(\*args: Any\) -> None:"),
+          ("ida_hexrays", None, r"^class udc_filter_t\(microcode_filter_t\):"),
+          ("ida_hexrays", "udc_filter_t", r"def init\(self, decl: str\) -> bool:"),
+          ("ida_hexrays", "udc_filter_t", r"def match\(self, cdg: codegen_t\) -> bool:"),
+          ("ida_hexrays", None, r"def install_microcode_filter\(filter: microcode_filter_t, install: bool = True\) -> bool:"),
+          ("ida_kernwin", None, r"def info\(message: str\) -> int:")]
 for mod, cls, pattern in SHAPES:
     checked += 1
     src = open(os.path.join(sys.argv[1], mod + ".pyi")).read()
     if cls is not None:
         body = re.search(r"^class %s\b.*?(?=^class |\Z)" % cls, src, re.M | re.S)
         src = body.group(0) if body else ""
-    if not re.search(pattern, src):
+    if not re.search(pattern, src, re.M):
         print("MISSING", mod, cls or "", pattern)
         missing += 1
 print("checked", checked, "missing", missing)
