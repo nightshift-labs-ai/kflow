@@ -85,6 +85,7 @@ class Elf:
         self._starts = [x[0] for x in self.loaded]
         self.text = [(a, a + s) for t, f, a, o, s, l in self.secs if t == 1 and f & 4 and a and s]
         self.symbols = {}
+        best = {}  # address -> (rank, name): the name to show for an address
         funcs = []
         for t, f, a, o, s, link in self.secs:
             if t != 2:
@@ -98,6 +99,13 @@ class Elf:
                     value = self._symval(name, shndx, value)
                 if name and name not in self.symbols:
                     self.symbols[name] = value
+                if name and value:
+                    # prefer real objects and functions: section markers, mapping symbols ($x/$d) and zero-size
+                    # local aliases (lockdep keys, __key.N) share addresses with them; then globals over locals
+                    rank = (name.startswith(("__start_", "__stop_", "$")), size == 0, st_info & 0xF not in (1, 2),
+                            st_info >> 4 == 0)
+                    if value not in best or rank < best[value][0]:
+                        best[value] = (rank, name)
                 if st_info & 0xF == 2 and value:
                     funcs.append((value, value + size, name))
         funcs.sort()
@@ -108,12 +116,10 @@ class Elf:
                 funcs[k] = (a, min(nxt, a + 0x100000), n)
         self.funcs = funcs
         self._fstarts = [f[0] for f in funcs]
-        self.by_addr = {}
-        for n, a in self.symbols.items():
-            self.by_addr.setdefault(a, n)
+        self.by_addr = {a: n for a, (r, n) in best.items()}
 
-    # --- kernel modules (ET_REL): lay the allocated sections out from BASE in file order, put undefined symbols in
-    # 8-byte slots after them (like a disassembler's extern segment), then apply the relocations the tables need.
+    # --- kernel modules (ET_REL): lay the allocated sections out from BASE in section-header order, give undefined
+    # symbols their own slots after them (like a disassembler's extern segment), then apply the relocations.
     BASE = 0x10000
     EXTERN_SLOT = 0x100  # room for "symbol + member offset" (a tracepoint's key is __tracepoint_X + 8)
     REL = {  # type: (size, pc-relative, signed)
