@@ -362,6 +362,23 @@ def _add_key_ref(site, key, node):
     return 1
 
 
+def _drop_stale_key_refs(wanted, node):
+    """Delete the key reference an earlier Annotate recorded at a site when this Annotate points the site elsewhere
+    (a module annotated while its .ko was on disk and again after it moved, or by an older kflow): its record is
+    about to be overwritten, so Remove could no longer find it. Only a reference that is still a user reference."""
+    base = ida_nalt.get_imagebase()
+    dropped = 0
+    for site, keys in wanted.items():
+        prev = node.altval((site - base) & MASK)
+        if not prev:
+            continue
+        prev = (prev + base) & MASK
+        if prev not in keys and data_refs_from(site).get(prev):
+            ida_xref.del_dref(site, prev)
+            dropped += 1
+    return dropped
+
+
 def key_ref_target(j):
     """Where the site -> key reference points: the key, or for a module label the imported symbol itself (IDA's
     address for "import + offset" may be another import); BADADDR (no reference) if IDA has no such name."""
@@ -381,6 +398,11 @@ def annotate(t, arch=None):
     for b in t["bug"]:
         if in_text(b.addr):
             _set(b.addr, bug_comment(b), res)
+    wanted = {}  # site -> the key references this Annotate wants there (a site can carry several entries)
+    for j in t["jump"]:
+        if in_text(j.code):
+            wanted.setdefault(j.code, set()).add(key_ref_target(j))
+    res["stale_key_refs"] = _drop_stale_key_refs(wanted, knode)
     for j in t["jump"]:
         if in_text(j.code):
             _set(j.code, jump_comment(j), res)

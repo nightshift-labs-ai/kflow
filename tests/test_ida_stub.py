@@ -24,6 +24,7 @@ class PackedElf(Elf):
     here; the exact item size in real IDA is not verified), so after relocation "import + offset" (a tracepoint's
     key is __tracepoint_X + 8) lands on ANOTHER import. The command line's Elf gives each import a 64 KB slot."""
     EXTERN_SLOT = 8
+    BASE = 0x400000  # and not at the command line's base: only offsets inside a section may be compared
 
 
 SEG_XTRN = 1
@@ -251,6 +252,17 @@ def run(path):
     assert len(w["netnodes"].get(il.KEY_NODE, {})) == res["key_refs"] == len(w["drefs"]) - (pre is not None)
     assert res["key_refs"] > 0 or not t["jump"] or pre and len(t["jump"]) == 1, res
     rres = {}
+    n_drefs = len(w["drefs"])  # Annotate twice: nothing is stale, nothing is added (sites with several entries too)
+    again0 = il.annotate(t, il.current_arch())
+    assert again0["stale_key_refs"] == 0 and again0["key_refs"] == 0 and len(w["drefs"]) == n_drefs, again0
+    if elf.relocatable and il.SITE_KEY:  # Annotate again as if the .ko had moved (no labels): the key references
+        saved = dict(il.SITE_KEY)          # point elsewhere now; the earlier ones must not be left behind
+        il.SITE_KEY.clear()
+        again = il.annotate(t, il.current_arch())
+        il.SITE_KEY.update(saved)
+        moved = sum(1 for j in t["jump"] if j.entry in saved and il.in_text(j.code)
+                    and il.ida_name.get_name_ea(BAD, saved[j.entry][1]) != j.key)  # offset-0 keys do not move
+        assert (again["stale_key_refs"] > 0) == (moved > 0), (again, moved)
     removed = il.remove_annotations(t, rres)
     assert removed == res["xrefs"], (removed, res)
     assert rres["key_refs"] == res["key_refs"], (rres, res)  # every key reference kflow added is counted as removed
