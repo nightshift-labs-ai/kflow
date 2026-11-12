@@ -10,6 +10,29 @@ ffffffff8e391de7  xchg %ax,%ax   ; kflow: static key randomize_kstack_offset (st
 ffffffff8e200029  wrmsr          ; kflow: may fault -> fixup at 0xFFFFFFFF8E20002B (WRMSR)
 ```
 
+## Features
+
+- [**BUG/WARN comments**](#step-by-step): every BUG/WARN site of the kernel's `__bug_table` gets its source `file:line` and whether the kernel continues after the trap (WARN) or not (BUG).
+- [**BUG/WARN list**](#step-by-step): **kflow: List BUG/WARN sites** lists every trap with its function and `file:line`; type `userfaultfd.c:755` from a `WARNING: ... at mm/userfaultfd.c:755` log line into its filter to find the site.
+- [**Static-key comments and key references**](#step-by-step): each static-key site (a NOP or branch the kernel patches at runtime) gets its key, its branch target and when it jumps, and a jump reference to the target where IDA has none; a data reference from each site to its key makes X on a key list its sites.
+- [**Static-key chooser**](#step-by-step): **kflow: List static-key sites** shows every site with its key, `likely`/`unlikely`, `jump` / `no jump` now, the target and the function; the filter finds every site of one key.
+- [**Exception-table fixups**](#what-kflow-reads): each instruction that may fault on purpose (user-memory access, MSR reads...) gets its fixup and type, and a jump reference to the fixup.
+- [**Hex-Rays pseudocode comments**](#hex-rays-pseudocode-comments): with the decompiler, a `// kflow: ...` comment at the end of each annotated site's pseudocode line (display text only, nothing saved).
+- [**Kernel modules**](docs/modules.md) (`.ko`, `.ko.xz`, `.ko.gz`): the command line applies the module's relocations; in IDA, a key inside an imported symbol (`nf_hooks_needed+0x270` in `bridge.ko`) is named from kflow's own decode of the `.ko` when the file is still where IDA loaded it from.
+- [**Clean removal**](#step-by-step): **kflow: Remove annotations** takes out only the comments and references kflow added (also after a rebase); IDA's and yours stay.
+- [**WARN fall-through**](docs/warnflow.md) (experimental, off by default, x86_64 only): **kflow: Let WARN sites fall through (experimental)** adds ordinary flow after exactly the WARN `ud2` traps the kernel's `__bug_table` lists, so the code after them is reachable in IDA; **kflow: Remove WARN fall-through** undoes it.
+- [**Headless runner**](#headless-idalib): `python3 tools/kflow_headless.py <kernel>` annotates (or with `--remove` removes) and saves the database without the IDA window (idalib, IDA 9.0+).
+- [**Command-line decoder, no IDA needed**](#what-you-get-real-output-not-ida-screenshots): `python3 -m kflow <kernel ELF>` needs only Python 3.8+ and no packages; `--list warn`, `bug`, `jump` or `ex` lists the sites.
+- [**One-command tests**](#what-was-verified): `sh tests/run_all.sh` runs every test in about two seconds on a pinned Debian arm64 `ext4.ko` (sha256 checked) or on your own files.
+
+## Status: read this first
+
+**kflow has not yet been run inside real IDA.** It was built without access to an IDA installation. The table decoders are checked on seven real kernels and five kernel modules (below): trap bytes, branch targets and source-file names; the IDA layer is small, uses IDAPython names and object members that all appear in the official stubs (175 checks in `tests/check_ida_api.py`), and has only been exercised with fake `ida_*` modules. Bug reports are very welcome.
+
+kflow was built by an AI agent (Claude, operated by Nightshift Labs).
+
+## What kflow reads
+
 Linux kernels carry their own maps of code that a disassembler cannot see from the instructions alone:
 
 - **`__bug_table`**: every `BUG()` / `WARN()` trap (`ud2` on x86_64, `brk #0x800` on arm64; from Linux 6.19 an x86_64 WARN with a message is a call instead, and kflow says so), with the **source file and line** and a flag that says whether the kernel **continues after the trap** (WARN) or not (BUG).
@@ -18,19 +41,18 @@ Linux kernels carry their own maps of code that a disassembler cannot see from t
 
 kflow reads these tables from the database and, in IDA, comments every site and adds the jump references IDA cannot find on its own (a NOP has no branch, a fault has no visible path to its fixup). It also lists every BUG/WARN site with its function and `file:line`.
 
-## Status: read this first
-
-**kflow has not yet been run inside real IDA.** It was built without access to an IDA installation. The table decoders are checked on seven real kernels and five kernel modules (below): trap bytes, branch targets and source-file names; the IDA layer is small, uses IDAPython names and object members that all appear in the official stubs (175 checks in `tests/check_ida_api.py`), and has only been exercised with fake `ida_*` modules. Bug reports are very welcome.
-
-kflow was built by an AI agent (Claude, operated by Nightshift Labs).
-
 ## Install
 
 ```
 hcli plugin install kflow
 ```
 
-kflow is new and not yet in the plugin index: on Nov 12 we asked Hex-Rays to add it ([plugin-repository#48](https://github.com/HexRaysSA/plugin-repository/pull/48)), and once it is listed the index can still lag a day or more behind the [GitHub releases](https://github.com/nightshift-labs-ai/kflow/releases). Until `hcli plugin install kflow` works (or if `hcli plugin status` shows an older version), install a release zip directly, for example `hcli plugin install https://github.com/nightshift-labs-ai/kflow/archive/refs/tags/v0.0.2.zip`, or copy this folder into your IDA `plugins` directory. The command-line decoder needs only Python 3.8+ and no packages: `python3 -m kflow <kernel ELF>` from this folder.
+kflow is new and not yet in the plugin index: on Nov 12 we asked Hex-Rays to add it ([plugin-repository#48](https://github.com/HexRaysSA/plugin-repository/pull/48)), and once it is listed the index can still lag a day or more behind the [GitHub releases](https://github.com/nightshift-labs-ai/kflow/releases). Until `hcli plugin install kflow` works (or if `hcli plugin status` shows an older version):
+
+- install a release zip directly, for example `hcli plugin install https://github.com/nightshift-labs-ai/kflow/archive/refs/tags/v0.0.2.zip`,
+- or copy this folder into your IDA `plugins` directory.
+
+The command-line decoder needs only Python 3.8+ and no packages: `python3 -m kflow <kernel ELF>` from this folder.
 
 ## Try it
 
@@ -39,10 +61,11 @@ You need a 64-bit kernel ELF that still has the kernel's symbol names, for examp
 - a distribution's debug `vmlinux` (Debian/Ubuntu: `/usr/lib/debug/boot/vmlinux-<version>` from the `linux-image-<version>-dbg` / `-dbgsym` package);
 - the `kernel.elf` of the [MemLens demo data](https://github.com/nightshift-labs-ai/memlens/releases/tag/demo-data) (22 MB zip; a Debian 13 6.12 kernel exported from a memory image, so freed init code reads as other bytes);
 - the `vmlinuz` your Linux machine boots, or an Android GKI `Image`, turned into an ELF with kallsyms names by [vmlinux-to-elf](https://github.com/marin-m/vmlinux-to-elf) (checked on Ubuntu 24.04's x86_64 and arm64 `vmlinuz` and Debian 11's; `/boot/vmlinuz-*` is often readable only by root: copy it first, e.g. `sudo cp /boot/vmlinuz-$(uname -r) . && sudo chown $USER vmlinuz-*`, then `vmlinux-to-elf vmlinuz-<version> kernel.elf`).
-
-- a kernel module (`.ko`, or `.ko.xz` / `.ko.gz` as distributions ship them; unpack `.ko.zst` with `zstd -d` first): it may have its own `__bug_table`, `__jump_table` and `__ex_table` as relocatable sections. The command line lays the sections out from 0x10000 in section-header order, gives each undefined symbol its own 64 KB slot after them (so `__tracepoint_X + 8` still names that tracepoint and a key inside an imported array, such as `nf_hooks_needed+0x270` in `bridge.ko`, keeps its own name) and applies the relocations, so file names, keys and targets come out right; IDA relocates a `.ko` itself, and kflow then finds the tables by segment name. IDA puts a module's imports in an extern segment, probably as small items one after another (not verified), so a key at "import + offset" may land on another import's address; for those keys kflow takes the name from its own decode of the `.ko` (as above) if the file is still at the path IDA loaded it from and both decodes have the same sites at the same offsets in their sections, and the key reference then goes to that import. Tested only with fake `ida_*` modules that put the imports 8 bytes apart, on Debian 13's `bridge.ko` (14 such static-key sites using 9 keys, e.g. `tracepoint fdb_delete`); the real item size of IDA's extern segment is not verified. Addresses printed for a module are those of this layout, not necessarily IDA's.
+- a kernel module (`.ko`, or `.ko.xz` / `.ko.gz` as distributions ship them; unpack `.ko.zst` with `zstd -d` first): it may have its own `__bug_table`, `__jump_table` and `__ex_table` as relocatable sections. The command line applies the relocations; IDA relocates a `.ko` itself. Layout, imported keys and what is verified: [docs/modules.md](docs/modules.md); a one-minute example: [Try a real module](#try-a-real-module-one-minute-377-kb-download).
 
 A stripped `vmlinux` (from `extract-vmlinux`) still has `__bug_table` and `__ex_table` as sections, and kflow uses them; the static-key table has no section of its own and needs the `__start___jump_table` symbol.
+
+### Step by step
 
 1. Outside IDA, see what is there: `python3 -m kflow kernel.elf` (output below).
 2. In IDA, open the kernel and run **Edit > Plugins > kflow: Annotate kernel sites** (comments, the missing jump references, and a data reference from each static-key site to its key, so X on a key lists its sites).
@@ -50,9 +73,16 @@ A stripped `vmlinux` (from `extract-vmlinux`) still has `__bug_table` and `__ex_
    From a crash log such as `WARNING: ... at mm/userfaultfd.c:755 mfill_atomic_copy+0x674/...`: type `userfaultfd.c:755` in the list's filter (one line can have several sites: on the demo kernel four functions share this one), or press G (Jump to address) and enter `mfill_atomic_copy+0x674`. The kernel prints the address of the trap itself, so this lands on the `ud2`, where kflow's comment confirms the file and line.
 4. **kflow: List static-key sites** lists every static-key site with its key, `likely`/`unlikely`, whether the bytes there are a jump to the target now (`jump` / `no jump`), the target and the function; the chooser's filter finds every site of one key.
 5. **kflow: Remove annotations** removes kflow's comments and the references it added (Annotate records each one in the database, so Remove works after a rebase too). References that were there before, IDA's own (for example at a static-key site that is currently a jump) or yours, and your own comments are never touched.
-6. Experimental, off by default, x86_64 only: **kflow: Let WARN sites fall through (experimental)** and **kflow: Remove WARN fall-through**; see the WARN fall-through item under [Limits](#limits) before you use them.
+6. Experimental, off by default, x86_64 only: **kflow: Let WARN sites fall through (experimental)** and **kflow: Remove WARN fall-through**; read [docs/warnflow.md](docs/warnflow.md) before you use them.
 
-With the Hex-Rays decompiler, each annotated site whose address has a pseudocode statement also gets a `// kflow: ...` comment at the end of that line (BUG or WARN with `file:line`; static key and when it jumps; fixup and type). A static-key site with no statement of its own (usually a NOP) gets it on the line of the next instruction that has one, if that is at most 16 bytes on in the same function with no other kflow site in between. Display text only, nothing saved; Annotate and Remove apply to functions decompiled afterwards (press F5 in a pseudocode window that is already open). Not yet run in real IDA or the real decompiler; tested only against a fake `ida_hexrays` module.
+### Hex-Rays pseudocode comments
+
+- With the Hex-Rays decompiler, each annotated site whose address has a pseudocode statement also gets a `// kflow: ...` comment at the end of that line (BUG or WARN with `file:line`; static key and when it jumps; fixup and type).
+- A static-key site with no statement of its own (usually a NOP) gets it on the line of the next instruction that has one, if that is at most 16 bytes on in the same function with no other kflow site in between.
+- Display text only, nothing saved; Annotate and Remove apply to functions decompiled afterwards (press F5 in a pseudocode window that is already open).
+- Not yet run in real IDA or the real decompiler; tested only against a fake `ida_hexrays` module.
+
+### Headless (idalib)
 
 Without the IDA window (idalib, IDA 9.0+): `python3 tools/kflow_headless.py <kernel> [--no-analysis] [--remove]` does steps 2 and 5 and saves the database.
 
@@ -135,12 +165,14 @@ The entry layout is chosen from the data: for `__bug_table` the layout whose ent
 
 ## Limits
 
-- 64-bit little-endian kernels with relative table entries (x86_64; arm64 with `CONFIG_GENERIC_BUG_RELATIVE_POINTERS`). Not 32-bit kernels. Kernels up to 4.19 have an absolute 24-byte static-key table: kflow reports it as not decoded and still decodes the other two tables (checked on synthetic tables only).
-- Exception-type names: x86_64 from Linux 6.12, arm64 from Linux 6.1/6.12 (`asm-extable.h`, same numbers in both; Linux 6.0 renumbered them, so on arm64 5.16-5.19 the names are wrong: there 3 is UACCESS_ERR_ZERO and 4 LOAD_UNALIGNED_ZEROPAD). Other versions number some x86_64 types differently, so treat the name as a hint; arm64 kernels before 5.16 have no type field. On x86_64 before 5.16 the third field points to a handler function: kflow detects that layout and names the handler instead (checked on a synthetic table and on Debian 11's 5.10 kernel).
-- Linux 6.19+: checked only on a stripped Ubuntu mainline 7.0.0 x86_64 `vmlinux` (`__bug_table` and `__ex_table` by section name): 14,039 BUG/WARN sites with the 16-byte layout; of the 11,443 WARN sites, 9,632 are `ud2` and the other 1,811 are the flagged WARN-with-message calls; 754 exception-table entries. x86_64 6.19+ kernels built without `CONFIG_DEBUG_BUGVERBOSE` (distributions and Android GKI enable it) have entries with a message but no file and line: kflow decodes that layout (synthetic test only) and lists those sites without `file:line`.
-- **Experimental, off by default, x86_64 only, not yet run in real IDA: kflow: Let WARN sites fall through.** IDA treats `ud2` as the end of code flow. So the code after a WARN trap, where the kernel continues, is unreachable in IDA and missing from the function, and Hex-Rays prints the trap as `BUG();`, which it models as never returning. Annotate only says so in a comment. This action adds ordinary flow after exactly the WARN `ud2` traps listed in the kernel's `__bug_table` (BUG traps stay as they are; on the MemLens demo kernel that is 7,504 WARN `ud2` traps, and its 1,825 BUG `ud2` traps, the 1,825 of its 2,019 BUG entries whose trap is a `ud2` in code, are left alone). It then lets IDA reanalyse those sites, adds newly reachable code that is in no function to the trap's function as a function tail (code that already belongs to another function is left alone and counted), and reanalyses those functions. If the decompiler is present and at least one site got flow, it also asks Hex-Rays to decompile each of those traps as a call to `__WARN()` that returns and changes no register; whether Hex-Rays accepts this for `ud2` is unconfirmed. The Output window shows how many sites got flow and whether IDA's processor module marks `ud2` as the end of flow, so a log shows whether it worked. kflow records the sites in the database and installs its processor hook only for databases with that record, whenever it loads one; the hook adds a Python call for every instruction IDA analyses there. If you open the database without kflow, the added flow stays until IDA reanalyses those instructions, and the decompiler shows `BUG();` again; the next time kflow loads it says how many sites lost their flow, and running the action again restores it. **kflow: Remove WARN fall-through** undoes it: it removes each function tail kflow added that is still exactly the chunk kflow added (kflow records where each tail ends; a tail IDA has merged with its own code stays in the function, and the Output window counts it), lets IDA reanalyse the sites without the hook and deletes the record (the code after the traps stays disassembled, unreachable again). This part was written from the IDA SDK documentation and tested only on fake `ida_*` modules (`tests/test_warnflow_stub.py`); it is the part most likely to need a fix, so reports are very welcome. On arm64 it changes nothing: public Hex-Rays output of arm64 kernels shows code continuing after `brk #0x800` (IDA version unknown), and the action reports whether IDA's ARM module marks `brk` as the end of flow in your IDA. Prior art: [linux_und.py](https://git.zx2c4.com/ida-plugins/tree/linux_und.py) by Jason A. Donenfeld (2017) re-decodes every `ud0`/`ud1`/`ud2` as a custom instruction, so (as far as we can tell from its code) IDA stops ending flow at all of them, BUG traps included. kflow changes only the WARN traps the kernel lists.
+One line per limit; the full text is in [docs/limits.md](docs/limits.md).
+
+- 64-bit little-endian kernels with relative table entries only (x86_64; arm64 with `CONFIG_GENERIC_BUG_RELATIVE_POINTERS`); not 32-bit kernels. Up to 4.19 the static-key table is not decoded. [More](docs/limits.md#supported-kernels)
+- Exception-type names come from x86_64 Linux 6.12 and arm64 Linux 6.1/6.12; on other versions treat them as a hint (on arm64 5.16-5.19 they are wrong). [More](docs/limits.md#exception-type-names)
+- Linux 6.19+: checked only on a stripped Ubuntu mainline 7.0.0 x86_64 `vmlinux`. [More](docs/limits.md#linux-619-and-later)
+- WARN fall-through (experimental, off by default, x86_64 only): not yet run in real IDA, tested only on fake `ida_*` modules; the part most likely to need a fix. [More](docs/warnflow.md)
 - Static-key sites in freed init code (memory images) are decoded but not commented when they are outside code segments.
-- Kernel modules: checked on one x86_64 module (`nf_tables.ko`) and four arm64 modules (`fat.ko`, `vfat.ko`, `ext4.ko`, `jbd2.ko`). Relocations of these types are applied to every allocated section (x86_64 `R_X86_64_PC32`/`PLT32`/`PC64`/`64`/`32`/`32S`, arm64 `R_AARCH64_PREL32`/`PREL64`/`ABS64`/`ABS32`); the modules above use `R_X86_64_PC32`/`PC64` and `R_AARCH64_PREL32`/`PREL64` in their tables; the absolute types follow the same rule but are untested on real files. In IDA, kflow relies on IDA's own relocation of the `.ko` (not tried in IDA).
+- Kernel modules: checked on one x86_64 and four arm64 modules; absolute relocation types untested on real files; in IDA, kflow relies on IDA's own relocation of the `.ko` (not tried in IDA). [More](docs/modules.md#what-was-checked)
 - Alternatives (`.altinstructions`) are not handled; see [ida-linux-alternatives](https://github.com/opensrcsec/ida-linux-alternatives).
 
 ## Credits
