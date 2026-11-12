@@ -92,7 +92,7 @@ SHAPES = [("ida_hexrays", "Hexrays_Hooks", r"def func_printed\(self, cfunc: cfun
           ("ida_hexrays", "udc_filter_t", r"def init\(self, decl: str\) -> bool:"),
           ("ida_hexrays", "udc_filter_t", r"def match\(self, cdg: codegen_t\) -> bool:"),
           ("ida_hexrays", None, r"def install_microcode_filter\(filter: microcode_filter_t, install: bool = True\) -> bool:"),
-          ("ida_kernwin", None, r"def info\(message: str\) -> int:")]
+          ("ida_kernwin", None, r"def info\((message: str|\*args: Any)\) -> int:")]  # 9.5: info(message); 9.1-9.4: info(*args), printf-style: kflow's two info() texts hold no '%' once Python has formatted them (ISSUES_URL has none)
 for mod, cls, pattern in SHAPES:
     checked += 1
     src = open(os.path.join(sys.argv[1], mod + ".pyi")).read()
