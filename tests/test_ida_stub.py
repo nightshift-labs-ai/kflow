@@ -202,6 +202,17 @@ def run(path):
     w["imagebase"] = w.get("imagebase", 0) + delta
     assert il.remove_annotations({"bug": [], "jump": [], "ex": []}) == res2["xrefs"] == res["xrefs"]
     assert [k for k, u in w["xrefs"].items() if u] == ([(mine[0] + delta, mine[1] + delta)] if mine else [])
+    # rebase with the __start_/__stop_ names gone from the database: the shift comes from an anchor name it kept
+    fs = il.file_symbols()
+    anchor = next((n for n in il.ANCHORS if n in fs), None)
+    if anchor is not None:
+        assert il._shift(fs) == 0
+        keep = il.ida_name.get_name_ea
+        il.ida_name.get_name_ea = lambda base, n: fs[n] + 0x200000 if n == anchor else BAD
+        try:
+            assert il._shift(fs) == 0x200000
+        finally:
+            il.ida_name.get_name_ea = keep
     print("OK %s: found by %s; %d comments, %d user xrefs added and removed, %d IDA xrefs + %d earlier user xref kept, "
           "%d user comments kept" % (os.path.basename(path), t["found_by"], res["comments"], res["xrefs"], own,
                                      mine is not None, res["kept_user_comments"]))

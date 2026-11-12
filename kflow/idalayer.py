@@ -75,6 +75,19 @@ def file_symbols():
     return _FILE_SYMBOLS[key]
 
 
+ANCHORS = ("_text", "_stext", "stext", "startup_64", "_etext", "_sdata", "linux_banner")
+
+
+def _shift(fs):
+    """database address - file address, from the first anchor symbol both have (0 if none: not rebased)."""
+    for n in ANCHORS:
+        if n in fs:
+            ea = ida_name.get_name_ea(BADADDR, n)
+            if ea != BADADDR:
+                return ea - fs[n]
+    return 0
+
+
 def table_range(kind):
     """[start, stop) of a table from its __start_/__stop_ names in the database, else from the input file's
     symbol table (shifted like the database if __start_ is known there), else from a segment of the same name."""
@@ -84,7 +97,8 @@ def table_range(kind):
         return a, b, "names"
     fs = file_symbols()
     if s in fs and e in fs and fs[e] > fs[s]:
-        delta = a - fs[s] if a != BADADDR else 0  # the database may have been rebased
+        # the database may have been rebased: measure the shift on a name it still has
+        delta = a - fs[s] if a != BADADDR else b - fs[e] if b != BADADDR else _shift(fs)
         start, stop = fs[s] + delta, fs[e] + delta
         if ida_segment.getseg(start) is not None:
             return start, stop, "input file symbols"
