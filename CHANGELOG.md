@@ -4,13 +4,13 @@ Taken from the GitHub release notes. Newest first.
 
 ## Unreleased
 
-- Annotate (menu and `tools/kflow_headless.py`) reports its counts in words, including the static-key site -> key references: `comments: 18999, jump references added: 9006, static-key site -> key references: 9012, user comments kept: 0` on the MemLens demo kernel (fake `ida_*` modules); the headless runner printed a Python dict before.
-- `tests/run_all.sh`: every test in one command, on the pinned Debian arm64 `ext4.ko` package (377 KB download, sha256 checked) or on files you give it.
-- README: how to go from a `WARNING: ... at file:line func+0xoff` log line to the site (filter the BUG/WARN list, or G and `func+0xoff`).
 - Hex-Rays pseudocode comments: with the decompiler, each annotated BUG/WARN, static-key and exception-table site whose address has a pseudocode statement gets a display-only `// kflow: ...` comment at the end of that line; a static-key site with no statement of its own (usually a NOP) gets it on the line of the next instruction that has one if that is at most 16 bytes on in the same function with no other kflow site in between, otherwise none. Nothing is saved; Annotate and Remove apply to functions decompiled afterwards (press F5 in an open pseudocode window). Tested only against a fake `ida_hexrays` module; not yet run in the real decompiler.
 - **kflow: List static-key sites** now says when the `__jump_table` was found but could not be decoded, and why (it said "the table is empty").
 - Kernel modules in IDA: a static key inside an imported symbol at an offset (a tracepoint's key is `__tracepoint_X + 8`; arrays such as `nf_hooks_needed`) could be named after a different import if IDA packs the imports closely in its extern segment (likely; not verified); kflow now names it from its own decode of the `.ko` on disk when both decodes agree site by site, and points the key reference at that import (a key reference an earlier Annotate put elsewhere at that site is replaced, so Remove still finds every reference kflow added). Tested only on fake `ida_*` modules (Debian 13 `bridge.ko`: 14 sites, 9 keys); not yet run in real IDA.
 - **kflow: Remove annotations** (and `kflow_headless.py --remove`) also reports how many static-key site -> key references it removed; it counted only the jump references.
+- Annotate (menu and `tools/kflow_headless.py`) reports its counts in words, including the static-key site -> key references: `comments: 18999, jump references added: 9006, static-key site -> key references: 9012, user comments kept: 0` on the MemLens demo kernel (fake `ida_*` modules); the headless runner printed a Python dict before.
+- `tests/run_all.sh`: every test in one command, on the pinned Debian arm64 `ext4.ko` package (377 KB download, sha256 checked) or on files you give it.
+- README: how to go from a `WARNING: ... at file:line func+0xoff` log line to the site (filter the BUG/WARN list, or G and `func+0xoff`).
 
 ## v0.0.2 (2026-11-13)
 
