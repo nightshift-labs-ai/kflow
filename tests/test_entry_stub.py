@@ -23,71 +23,15 @@ elf = T.PackedElf(sys.argv[1]) if cli_elf.relocatable else cli_elf  # a module a
 w = T.world_from(elf)
 T.install(w)
 log = []
-kw = types.ModuleType("ida_kernwin")
-kw.msg = lambda text: log.append(("msg", text))
-kw.warning = lambda text: log.append(("warning", text))
-kw.show_wait_box = lambda text: log.append(("wait", text))
-kw.hide_wait_box = lambda: log.append(("hide", None))
-kw.jumpto = lambda ea: log.append(("jump", ea)) or True
-kw.AST_ENABLE_ALWAYS, kw.SETMENU_APP = 1, 0
-kw.register_action = lambda desc: log.append(("reg", desc.name)) or True
-kw.unregister_action = lambda name: log.append(("unreg", name)) or True
-kw.attach_action_to_menu = lambda path, name, flags: True
-kw.process_ui_action = lambda name: log.append(("ui", name)) or True
-
-
-class action_handler_t:
-    pass
-
-
-class action_desc_t:
-    def __init__(self, name, label, handler, *rest):
-        self.name, self.label, self.handler = name, label, handler
-
-
-class Choose:
-    CHCOL_HEX, NOTHING_CHANGED = 1, 0
-
-    def __init__(self, title, cols, flags=0):
-        self.title, self.cols = title, cols
-
-    def Show(self):
-        log.append(("show", self.title, self.OnGetSize()))
-        return 0
-
-
-kw.action_handler_t, kw.action_desc_t, kw.Choose = action_handler_t, action_desc_t, Choose
-fn = types.ModuleType("ida_funcs")
-fn.get_func_name = lambda ea: elf.func(ea) or ""
-FSTARTS = [f[0] for f in elf.funcs]
-
-
-def get_func(ea):  # the function's entry chunk, from the ELF's function symbols
-    i = bisect.bisect_right(FSTARTS, ea) - 1
-    if i >= 0 and elf.funcs[i][0] <= ea < elf.funcs[i][1]:
-        return types.SimpleNamespace(start_ea=elf.funcs[i][0], end_ea=elf.funcs[i][1])
-    return None
-
-
-fn.get_func = get_func
-lines_mod = types.ModuleType("ida_lines")
-lines_mod.SCOLOR_AUTOCMT = "\x04"
-lines_mod.COLSTR = lambda text, tag: "\x01" + tag + text + "\x02" + tag  # SCOLOR_ON tag text SCOLOR_OFF tag
-api = sys.modules["ida_idaapi"]
-
-
-class plugin_t:
-    pass
-
-
-api.plugin_t, api.PLUGIN_KEEP = plugin_t, 1
-sys.modules.update({"ida_kernwin": kw, "ida_funcs": fn, "ida_lines": lines_mod})
+ui = T.install_ui(w, log)  # fake ida_kernwin / ida_funcs / ida_lines / plugin_t, shared with test_warnflow_stub.py
+get_func = ui.get_func
 sys.modules["ida_hexrays"] = None  # no decompiler: "import ida_hexrays" fails, the plugin works as before
 sys.path.insert(0, os.path.join(HERE, ".."))
 sys.modules.pop("kflow_entry", None)
 m = importlib.import_module("kflow_entry")
 p = m.PLUGIN_ENTRY()
-assert p.init() == 1 and [x[1] for x in log if x[0] == "reg"] == ["kflow:annotate", "kflow:list", "kflow:keys", "kflow:remove"]
+ACTION_NAMES = ["kflow:annotate", "kflow:list", "kflow:keys", "kflow:remove"]
+assert p.init() == 1 and [x[1] for x in log if x[0] == "reg"] == ACTION_NAMES
 assert m.STATE["hx"] is None
 assert m.AnnotateAction().activate(None) == 1
 assert any(c.startswith("kflow: ") for c in w["cmts"].values())
@@ -122,7 +66,7 @@ sys.modules["ida_ida"].inf_is_64bit = lambda: False
 m.STATE["tables"] = None
 assert m.AnnotateAction().activate(None) == 0 and "not a 64-bit" in [x for x in log if x[0] == "warning"][-1][1]
 p.term()
-assert [x[1] for x in log if x[0] == "unreg"] == ["kflow:annotate", "kflow:list", "kflow:keys", "kflow:remove"]
+assert [x[1] for x in log if x[0] == "unreg"] == ACTION_NAMES
 assert not [x for x in log if x[0] == "msg" and "pseudocode" in x[1]], "no decompiler: no pseudocode messages"
 print("OK entry: plugin loads, Annotate / List (%d rows) / List static keys (%d rows) / Remove run, unsupported database warned" % (shown[0][2], len(jumps)))
 sys.modules["ida_ida"].inf_is_64bit = lambda: True

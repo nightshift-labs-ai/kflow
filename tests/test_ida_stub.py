@@ -174,6 +174,66 @@ def install(w, names=True):
     return importlib.import_module("kflow.idalayer")
 
 
+def install_ui(w, log):
+    """Fake ida_kernwin, ida_funcs (get_func from the ELF's function symbols), ida_lines and ida_idaapi.plugin_t, to
+    load kflow_entry.py (the IDA plugin). Messages, warnings, info boxes, wait boxes, jumps, registered actions and
+    choosers shown go to log. Returns the modules and get_func."""
+    elf = w["elf"]
+    kw = types.ModuleType("ida_kernwin")
+    kw.msg = lambda text: log.append(("msg", text))
+    kw.warning = lambda text: log.append(("warning", text))
+    kw.info = lambda text: log.append(("info", text)) or 0
+    kw.show_wait_box = lambda text: log.append(("wait", text))
+    kw.hide_wait_box = lambda: log.append(("hide", None))
+    kw.jumpto = lambda ea: log.append(("jump", ea)) or True
+    kw.AST_ENABLE_ALWAYS, kw.SETMENU_APP = 1, 0
+    kw.register_action = lambda desc: log.append(("reg", desc.name)) or True
+    kw.unregister_action = lambda name: log.append(("unreg", name)) or True
+    kw.attach_action_to_menu = lambda path, name, flags: True
+    kw.process_ui_action = lambda name: log.append(("ui", name)) or True
+
+    class action_handler_t:
+        pass
+
+    class action_desc_t:
+        def __init__(self, name, label, handler, *rest):
+            self.name, self.label, self.handler = name, label, handler
+
+    class Choose:
+        CHCOL_HEX, NOTHING_CHANGED = 1, 0
+
+        def __init__(self, title, cols, flags=0):
+            self.title, self.cols = title, cols
+
+        def Show(self):
+            log.append(("show", self.title, self.OnGetSize()))
+            return 0
+
+    kw.action_handler_t, kw.action_desc_t, kw.Choose = action_handler_t, action_desc_t, Choose
+    fn = types.ModuleType("ida_funcs")
+    fn.get_func_name = lambda ea: elf.func(ea) or ""
+    fstarts = [f[0] for f in elf.funcs]
+
+    def get_func(ea):  # the function's entry chunk, from the ELF's function symbols
+        i = bisect.bisect_right(fstarts, ea) - 1
+        if i >= 0 and elf.funcs[i][0] <= ea < elf.funcs[i][1]:
+            return types.SimpleNamespace(start_ea=elf.funcs[i][0], end_ea=elf.funcs[i][1])
+        return None
+
+    fn.get_func = get_func
+    lines_mod = types.ModuleType("ida_lines")
+    lines_mod.SCOLOR_AUTOCMT = "\x04"
+    lines_mod.COLSTR = lambda text, tag: "\x01" + tag + text + "\x02" + tag  # SCOLOR_ON tag text SCOLOR_OFF tag
+    api = sys.modules["ida_idaapi"]
+
+    class plugin_t:
+        pass
+
+    api.plugin_t, api.PLUGIN_KEEP = plugin_t, 1
+    sys.modules.update({"ida_kernwin": kw, "ida_funcs": fn, "ida_lines": lines_mod})
+    return types.SimpleNamespace(kw=kw, fn=fn, lines=lines_mod, get_func=get_func)
+
+
 def run(path):
     cli_elf = Elf(path)
     ref = load(cli_elf)
