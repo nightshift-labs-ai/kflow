@@ -47,6 +47,7 @@ A stripped `vmlinux` (from `extract-vmlinux`) still has `__bug_table` and `__ex_
 1. Outside IDA, see what is there: `python3 -m kflow kernel.elf` (output below).
 2. In IDA, open the kernel and run **Edit > Plugins > kflow: Annotate kernel sites** (comments, the missing jump references, and a data reference from each static-key site to its key, so X on a key lists its sites).
 3. **kflow: List BUG/WARN sites** lists every trap with its function and source line; Enter jumps to it.
+   From a crash log such as `WARNING: ... at mm/userfaultfd.c:755 mfill_atomic_copy+0x674/...`: type `userfaultfd.c:755` in the list's filter (one line can have several sites: on the demo kernel four functions share this one), or press G (Jump to address) and enter `mfill_atomic_copy+0x674`. The kernel prints the address of the trap itself, so this lands on the `ud2`, where kflow's comment confirms the file and line.
 4. **kflow: List static-key sites** lists every static-key site with its key, `likely`/`unlikely`, whether the bytes there are a jump to the target now (`jump` / `no jump`), the target and the function; the chooser's filter finds every site of one key.
 5. **kflow: Remove annotations** removes kflow's comments and the references it added (Annotate records each one in the database, so Remove works after a rebase too). References that were there before, IDA's own (for example at a static-key site that is currently a jump) or yours, and your own comments are never touched.
 

@@ -57,7 +57,7 @@ def main(argv=None):
             print("[kflow] references removed: %d jump references, %d static-key site -> key references"
                   % (removed, res["key_refs"]))
         else:
-            print("[kflow] %s" % idalayer.annotate(t, arch))
+            print("[kflow] %s" % idalayer.annotate_text(idalayer.annotate(t, arch)))
         return 0
     finally:
         idapro.close_database(True)

@@ -409,6 +409,15 @@ def annotate(t, arch=None):
     return res
 
 
+def annotate_text(res):
+    """One readable line for the counts annotate() returns (menu action and headless runner)."""
+    text = ("comments: %d, jump references added: %d, static-key site -> key references: %d, user comments kept: %d"
+            % (res["comments"], res["xrefs"], res["key_refs"], res["kept_user_comments"]))
+    if res.get("stale_key_refs"):
+        text += ", outdated key references removed: %d" % res["stale_key_refs"]
+    return text
+
+
 def annotated():
     """True when the database carries kflow's annotations: Annotate creates the record of added references (even
     if it adds none), Remove deletes it."""

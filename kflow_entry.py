@@ -222,8 +222,7 @@ class AnnotateAction(ida_kernwin.action_handler_t):
             res = idalayer.annotate(t, idalayer.current_arch())
         finally:
             ida_kernwin.hide_wait_box()
-        report("comments: %d, references added: %d, user comments kept: %d"
-               % (res["comments"], res["xrefs"], res["kept_user_comments"]))
+        report(idalayer.annotate_text(res))
         if hook_pseudocode():
             STATE["pseudo"] = pseudo_index(t, idalayer.current_arch(), idalayer.layout())
             flush_pseudocode()
