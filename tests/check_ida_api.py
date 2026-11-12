@@ -92,7 +92,13 @@ SHAPES = [("ida_hexrays", "Hexrays_Hooks", r"def func_printed\(self, cfunc: cfun
           ("ida_hexrays", "udc_filter_t", r"def init\(self, decl: str\) -> bool:"),
           ("ida_hexrays", "udc_filter_t", r"def match\(self, cdg: codegen_t\) -> bool:"),
           ("ida_hexrays", None, r"def install_microcode_filter\(filter: microcode_filter_t, install: bool = True\) -> bool:"),
-          ("ida_kernwin", None, r"def info\(message: str\) -> int:")]
+          ("ida_kernwin", None, r"def info\(message: str\) -> int:"),
+          # Go to oops/WARN line: the multi-line text dialog, the jump, and IDA's name list for name.<suffix>
+          ("ida_kernwin", None, r"def ask_text\(max_size: int, defval: str, prompt: str\) -> Union\[str, None\]:"),
+          ("ida_kernwin", None, r"def jumpto\(ea: ida_idaapi.ea_t, opnum: int = -1"),
+          ("ida_name", None, r"def get_name_ea\(_from: ida_idaapi.ea_t, name: str\) -> ida_idaapi.ea_t:"),
+          ("ida_name", None, r"def get_nlist_name\(idx: int\) -> str:"),
+          ("ida_name", None, r"def get_nlist_ea\(idx: int\) -> ida_idaapi.ea_t:")]
 for mod, cls, pattern in SHAPES:
     checked += 1
     src = open(os.path.join(sys.argv[1], mod + ".pyi")).read()
