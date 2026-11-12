@@ -12,6 +12,7 @@ Taken from the GitHub release notes. Newest first.
 - Static-key comments say when the site jumps: "jumps to X when the key is off" (`static_branch_likely` sites) or "... is on" (`static_branch_unlikely`), from the kernel's rule that a site is a jump when the key's state XOR the entry's branch bit is set (`jump_label_type()`). Found by a judge-style review.
 - Modules: a static key inside an imported array was named after the NEXT import (Debian 13 `bridge.ko`: `sprintf+0x40` for `nf_hooks_needed + 0x270`): each import now gets a 64 KB slot and a key in it is named from that import, exactly (checked against `readelf -r`). Found by a judge-style review.
 - README opens with who it is for and a before/after of three real sites (objdump instruction vs kflow's comment). Found by a judge-style review.
+- New action **kflow: List static-key sites**: every static-key site with its key, likely/unlikely, whether its bytes are a jump to the target now, the target and the function (the chooser's filter finds all sites of one key). Suggested by a judge-style review. Fake-IDA test on the demo, GKI 5.10, nf_tables.ko and a stripped vmlinux (no jump table: one warning).
 
 ## v0.0.1 (2026-11-12)
 

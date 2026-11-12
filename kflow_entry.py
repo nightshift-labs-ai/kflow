@@ -87,11 +87,14 @@ class AnnotateAction(ida_kernwin.action_handler_t):
         return ida_kernwin.AST_ENABLE_ALWAYS
 
 
+BUG_COLUMNS = [["Address", 18 | ida_kernwin.Choose.CHCOL_HEX], ["Kind", 6], ["Function", 30], ["Source", 40]]
+KEY_COLUMNS = [["Address", 18 | ida_kernwin.Choose.CHCOL_HEX], ["Key", 34], ["Kind", 8], ["Now", 7],
+               ["Target", 18 | ida_kernwin.Choose.CHCOL_HEX], ["Function", 30]]
+
+
 class SitesChooser(ida_kernwin.Choose):
-    def __init__(self, rows):
-        ida_kernwin.Choose.__init__(self, "kflow: BUG/WARN sites",
-                                    [["Address", 18 | ida_kernwin.Choose.CHCOL_HEX], ["Kind", 6],
-                                     ["Function", 30], ["Source", 40]])
+    def __init__(self, rows, title="kflow: BUG/WARN sites", columns=None):
+        ida_kernwin.Choose.__init__(self, title, columns or BUG_COLUMNS)
         self.rows = rows
 
     def OnGetSize(self):
@@ -120,6 +123,38 @@ class ListAction(ida_kernwin.action_handler_t):
         return ida_kernwin.AST_ENABLE_ALWAYS
 
 
+def key_site_rows(t):
+    """One row per static-key site: key, likely/unlikely, whether the bytes here are a jump to the target now
+    (the site jumps when the key's state XOR the entry's branch bit is set), target, function."""
+    arch = idalayer.current_arch()
+    names = {}
+    rows = []
+    for j in t["jump"]:
+        if j.key not in names:
+            names[j.key] = idalayer.key_name(j.key)
+        now = "jump" if idalayer.branches_to(j.code, j.target, arch) else "no jump"
+        rows.append((j.code, "0x%X" % j.code, names[j.key], "likely" if j.branch else "unlikely", now,
+                     "0x%X" % j.target, ida_funcs.get_func_name(j.code) or ""))
+    return rows
+
+
+class KeySitesAction(ida_kernwin.action_handler_t):
+    @guarded
+    def activate(self, ctx):
+        t = scan_or_warn()
+        if t is None:
+            return 0
+        if not t["jump"]:
+            ida_kernwin.warning("kflow: no static-key sites in this database (%s)." % (
+                "no __jump_table found" if "jump" in t["missing"] else "the table is empty"))
+            return 0
+        SitesChooser(key_site_rows(t), "kflow: static-key sites", KEY_COLUMNS).Show()
+        return 1
+
+    def update(self, ctx):
+        return ida_kernwin.AST_ENABLE_ALWAYS
+
+
 class RemoveAction(ida_kernwin.action_handler_t):
     @guarded
     def activate(self, ctx):
@@ -141,6 +176,7 @@ class RemoveAction(ida_kernwin.action_handler_t):
 ACTIONS = [
     ("kflow:annotate", "kflow: Annotate kernel sites", AnnotateAction),
     ("kflow:list", "kflow: List BUG/WARN sites", ListAction),
+    ("kflow:keys", "kflow: List static-key sites", KeySitesAction),
     ("kflow:remove", "kflow: Remove annotations", RemoveAction),
 ]
 

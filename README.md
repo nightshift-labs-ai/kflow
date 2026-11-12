@@ -47,9 +47,10 @@ A stripped `vmlinux` (from `extract-vmlinux`) still has `__bug_table` and `__ex_
 1. Outside IDA, see what is there: `python3 -m kflow kernel.elf` (output below).
 2. In IDA, open the kernel and run **Edit > Plugins > kflow: Annotate kernel sites**.
 3. **kflow: List BUG/WARN sites** lists every trap with its function and source line; Enter jumps to it.
-4. **kflow: Remove annotations** removes kflow's comments and the references it added (Annotate records each one in the database, so Remove works after a rebase too). References that were there before, IDA's own (for example at a static-key site that is currently a jump) or yours, and your own comments are never touched.
+4. **kflow: List static-key sites** lists every static-key site with its key, `likely`/`unlikely`, whether the bytes there are a jump to the target now (`jump` / `no jump`), the target and the function; the chooser's filter finds every site of one key.
+5. **kflow: Remove annotations** removes kflow's comments and the references it added (Annotate records each one in the database, so Remove works after a rebase too). References that were there before, IDA's own (for example at a static-key site that is currently a jump) or yours, and your own comments are never touched.
 
-Without the IDA window (idalib, IDA 9.0+): `python3 tools/kflow_headless.py <kernel> [--no-analysis] [--remove]` does steps 2 and 4 and saves the database.
+Without the IDA window (idalib, IDA 9.0+): `python3 tools/kflow_headless.py <kernel> [--no-analysis] [--remove]` does steps 2 and 5 and saves the database.
 
 ### Try a real module (one minute, 377 KB download)
 
@@ -112,7 +113,7 @@ The comments kflow writes in IDA, for three of the sites above (text produced by
 
 ## What was verified
 
-`tests/test_demo.py <kernel ELF>` checks the decoded tables against the instruction bytes; `tests/test_ida_stub.py <kernel ELF>` runs the IDA layer on fake `ida_*` modules backed by the same file (annotate, then remove, with IDA's own references, a reference you added and user comments in place; again after a rebase); `tests/test_headless_stub.py <kernel ELF>` does the same through the headless runner, and `tests/test_entry_stub.py <kernel ELF>` loads the plugin itself and runs its three menu actions; `python3 tests/test_core.py` covers the layouts on synthetic tables and the relocation of a synthetic module.
+`tests/test_demo.py <kernel ELF>` checks the decoded tables against the instruction bytes; `tests/test_ida_stub.py <kernel ELF>` runs the IDA layer on fake `ida_*` modules backed by the same file (annotate, then remove, with IDA's own references, a reference you added and user comments in place; again after a rebase); `tests/test_headless_stub.py <kernel ELF>` does the same through the headless runner, and `tests/test_entry_stub.py <kernel ELF>` loads the plugin itself and runs its four menu actions; `python3 tests/test_core.py` covers the layouts on synthetic tables and the relocation of a synthetic module.
 
 | Kernel (banner) | BUG/WARN sites | static-key sites | exception-table entries | what the tests check |
 |---|---|---|---|---|

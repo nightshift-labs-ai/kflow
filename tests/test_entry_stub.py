@@ -67,7 +67,7 @@ sys.path.insert(0, os.path.join(HERE, ".."))
 sys.modules.pop("kflow_entry", None)
 m = importlib.import_module("kflow_entry")
 p = m.PLUGIN_ENTRY()
-assert p.init() == 1 and [x[1] for x in log if x[0] == "reg"] == ["kflow:annotate", "kflow:list", "kflow:remove"]
+assert p.init() == 1 and [x[1] for x in log if x[0] == "reg"] == ["kflow:annotate", "kflow:list", "kflow:keys", "kflow:remove"]
 assert m.AnnotateAction().activate(None) == 1
 assert any(c.startswith("kflow: ") for c in w["cmts"].values())
 assert ("hide", None) in log and not [x for x in log if x[0] == "warning"], log[-3:]
@@ -76,6 +76,19 @@ shown = [x for x in log if x[0] == "show"]
 assert shown and shown[0][2] == len(m.STATE["tables"]["bug"]), shown
 ch = m.SitesChooser([(0x10, "0x10", "WARN", "f", "a.c:1")])
 assert ch.OnGetLine(0) == ("0x10", "WARN", "f", "a.c:1") and ch.OnSelectLine(0) == (0,) and ("jump", 0x10) in log
+keys = m.KeySitesAction().activate(None)
+jumps = m.STATE["tables"]["jump"]
+if jumps:
+    assert keys == 1, keys
+    kshown = [x for x in log if x[0] == "show"][-1]
+    assert kshown[1] == "kflow: static-key sites" and kshown[2] == len(jumps), kshown
+    rows = m.key_site_rows(m.STATE["tables"])
+    j = jumps[0]
+    assert rows[0][0] == j.code and rows[0][3] == ("likely" if j.branch else "unlikely") and rows[0][4] in ("jump", "no jump")
+    nj = sum(r[4] == "jump" for r in rows)
+    assert 0 < nj < len(rows) or len(rows) < 50, nj  # real kernels have both states
+else:
+    assert keys == 0
 assert m.RemoveAction().activate(None) == 1
 assert not any(c.startswith("kflow") for c in w["cmts"].values())
 # a database that is not a supported kernel: one warning, nothing written
@@ -83,5 +96,5 @@ sys.modules["ida_ida"].inf_is_64bit = lambda: False
 m.STATE["tables"] = None
 assert m.AnnotateAction().activate(None) == 0 and "not a 64-bit" in [x for x in log if x[0] == "warning"][-1][1]
 p.term()
-assert [x[1] for x in log if x[0] == "unreg"] == ["kflow:annotate", "kflow:list", "kflow:remove"]
-print("OK entry: plugin loads, Annotate / List (%d rows) / Remove run, unsupported database warned" % shown[0][2])
+assert [x[1] for x in log if x[0] == "unreg"] == ["kflow:annotate", "kflow:list", "kflow:keys", "kflow:remove"]
+print("OK entry: plugin loads, Annotate / List (%d rows) / List static keys (%d rows) / Remove run, unsupported database warned" % (shown[0][2], len(jumps)))
