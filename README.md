@@ -41,6 +41,33 @@ A stripped `vmlinux` (from `extract-vmlinux`) still has `__bug_table` and `__ex_
 
 Without the IDA window (idalib, IDA 9.0+): `python3 tools/kflow_headless.py <kernel> [--no-analysis] [--remove]` does steps 2 and 4 and saves the database.
 
+### Try a real module (one minute, 377 KB download)
+
+Debian's installer ships kernel modules in small packages. The arm64 `ext4.ko` has all three tables (any Linux with `curl`, `ar`, `tar` and Python 3.8+; nothing is installed):
+
+```
+curl -sO https://deb.debian.org/debian/pool/main/l/linux-signed-arm64/ext4-modules-6.12.94+deb13-arm64-di_6.12.94-1_arm64.udeb
+sha256sum ext4-modules-6.12.94+deb13-arm64-di_6.12.94-1_arm64.udeb   # f7957d08ff7b2d63775a2b97897e1934de2066b9d668cad101fa09147d35aaa0
+ar x ext4-modules-6.12.94+deb13-arm64-di_6.12.94-1_arm64.udeb && tar -xf data.tar.xz
+PYTHONPATH=/path/to/kflow python3 -m kflow lib/modules/6.12.94+deb13-arm64/kernel/fs/ext4/ext4.ko.xz --list jump --limit 3
+```
+
+(`/path/to/kflow` = this folder, e.g. the installed plugin under your IDA user directory's `plugins/kflow`). Output:
+
+```
+__bug_table (addr,file,line,flags): 484 sites, 195 WARN (resume after the trap), 289 BUG; 484 with file:line in 28 source files
+  WARN sites that are brk #0x800 here: 195; sites inside a function symbol: 484
+__jump_table: 153 static-key sites, 153 keys named (151 tracepoints, 0 pr_debug sites, 0 as symbol+offset), 153 targets in the same function
+__ex_table (insn,fixup,data): 11 faulting instructions with a fixup, 11 fixups in the same function; types UACCESS_ERR_ZERO 11
+found by section name (no __start_/__stop_ symbols): bug, jump, ex
+0x49e34 -> 0x49f14  ext4_read_block_bitmap_nowait            key tracepoint ext4_read_block_bitmap_load
+0x4cb28 -> 0x4cb68  __ext4_journal_start_sb                  key tracepoint ext4_journal_start_inode
+0x4cc0c -> 0x4cc14  __ext4_journal_start_sb                  key tracepoint ext4_journal_start_sb
+... 150 more (--limit)
+```
+
+In IDA, open the same `ext4.ko` (unpacked: `xz -dk ...ext4.ko.xz`) and run **kflow: Annotate kernel sites**.
+
 ## What you get (real output, not IDA screenshots)
 
 The MemLens demo `kernel.elf` (Debian 13, 6.12.115, x86_64):

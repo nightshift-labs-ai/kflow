@@ -267,7 +267,7 @@ def summary(elf, t):
         lines.append("not decoded: %s (%s)" % (kind, error))
     by_section = [k for k, v in t["found_by"].items() if v == "section"]
     if by_section:
-        lines.append("found by section name (no symbols): %s" % ", ".join(by_section))
+        lines.append("found by section name (no __start_/__stop_ symbols): %s" % ", ".join(by_section))
     return lines
 
 
