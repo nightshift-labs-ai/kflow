@@ -122,8 +122,14 @@ if site is not None:
     if gap is not None:  # an offset with no site: go to the log's address and list the function's sites
         r, new = ask("%s%s+%#x/%#x%s" % (reg, name, off + gap, size, modtag))
         assert r == 1 and went(new) == [site.addr + gap] and said(new, "not exact: no BUG/WARN site at %s+%#x" % (name, off + gap))
-    oops_done.append("WARNING/%s line and func+0xoff -> 0x%X (%s+%#x)%s" % (reg.split(":")[0].strip(), site.addr, name, off,
-                                                                         ", near offset" if gap is not None else ""))
+    # an offset past the end of the function here (a log from another build): its sites in a chooser, no jump
+    r, new = ask("%s%s+%#x/%#x%s" % (reg, name, size, 2 * size, modtag))
+    want = sorted(b.addr for b in bugs if start <= b.addr < start + size)
+    assert r == 1 and not went(new) and [x for x in new if x[0] == "show"] == [
+        ("show", "kflow: BUG/WARN sites in %s" % name, len(want))], new
+    assert sorted(row[0] for row in w["shown"].rows) == want and said(new, "is past the end of %s" % name), new
+    oops_done.append("WARNING/%s line and func+0xoff -> 0x%X (%s+%#x)%s; past the end -> %d rows" % (
+        reg.split(":")[0].strip(), site.addr, name, off, ", near offset" if gap is not None else "", len(want)))
 if any(b.addr == 0xFFFFFFFF8E629BC4 and b.where() == "mm/userfaultfd.c:755" for b in bugs):  # the MemLens demo kernel
     # the review's example: four functions share mm/userfaultfd.c:755; the WARNING line's func+0xoff picks one
     r, new = ask("WARNING: CPU: 1 PID: 9 at mm/userfaultfd.c:755 mfill_atomic_copy+0x674/0x...")

@@ -238,9 +238,12 @@ class SiteIndex:
 @dataclass
 class Match:
     """status: 'exact' (a site at the log's address), 'near' (no site there; candidates = the sites in that function,
-    nearest first), 'function' (the function has no site), 'line' (no function+offset; one site at file:line),
-    'ambiguous' (no usable function+offset; several sites at file:line) or 'none'.
+    those at the log's file:line first, then nearest first; when the offset is past the end of the function in this
+    file there is no address and they are in address order), 'function' (the function has no site), 'line' (no
+    function+offset; one site at file:line), 'ambiguous' (no usable function+offset; several sites at file:line) or
+    'none'.
     address: where to go (the log's address for exact/near/function, the site for line), else None.
+    site: the site found (exact, line), else None.
     label: what the candidates of 'line' / 'ambiguous' share ('mm/userfaultfd.c:755', or 'func+0x10' when functions
     of the same name each have a site there)."""
     status: str
@@ -324,10 +327,18 @@ def resolve(report, sites, symbols, module=None, is_module=False):
                 " found first"))
         if cur.size is not None and sz is not None and sz != cur.size:
             notes.append("size in the log %#x, here %#x: another build, or another function of that name" % (cur.size, sz))
-        span = cur.size or sz
-        inside = sorted(index.between(st, st + span) if span else [],
-                        key=lambda s: (not (s.line == want_line and same_file(s.file, want_file)), abs(s.addr - a)))
-        return Match("near" if inside else "function", a, inside[0] if inside else None, inside, cur, st, notes)
+        # the function as this file has it (the log's size is another build's when they differ)
+        span = sz or cur.size
+        at_line = lambda s: s.line == want_line and same_file(s.file, want_file)
+        inside = index.between(st, st + span) if span else []
+        if sz and cur.offset >= sz:  # no address of this function: list its sites, go nowhere
+            notes.append("%s+%#x is past the end of %s here (%#x bytes): a log from another build?" % (
+                cur.function, cur.offset, cur.function, sz))
+            if inside:
+                return Match("near", None, None, sorted(inside, key=lambda s: (not at_line(s), s.addr)), cur, st, notes)
+        else:
+            inside = sorted(inside, key=lambda s: (not at_line(s), abs(s.addr - a)))
+            return Match("near" if inside else "function", a, None, inside, cur, st, notes)
     if want_file and want_line is not None:
         cands = index.at_line(want_file, want_line)
         label = "%s:%d" % (want_file, want_line)
@@ -372,11 +383,17 @@ def describe(report, match, func_of):
         out += rows([match.site])
     elif st == "near":
         same = sum(1 for s in match.candidates if s.line == report.line and same_file(s.file, report.file))
-        out.append("not exact: no BUG/WARN site at %s+%#x (%#x); the %d site%s in %s, %snearest first:"
-                   % (loc.function, loc.offset, match.address, len(match.candidates),
-                      "" if len(match.candidates) == 1 else "s", loc.function,
-                      "those at %s:%d first, then " % (report.file, report.line) if same else ""))
-        out += ["%s  (%+#x)" % (r, s.addr - match.address) for r, s in zip(rows(match.candidates[:10]), match.candidates)]
+        n = len(match.candidates)
+        if match.address is None:
+            out.append("not exact: %s+%#x is past the end of %s in this file; the %d site%s in %s, %sin address order:"
+                       % (loc.function, loc.offset, loc.function, n, "" if n == 1 else "s", loc.function,
+                          "those at %s:%d first, then " % (report.file, report.line) if same else ""))
+            out += rows(match.candidates[:10])
+        else:
+            out.append("not exact: no BUG/WARN site at %s+%#x (%#x); the %d site%s in %s, %snearest first:"
+                       % (loc.function, loc.offset, match.address, n, "" if n == 1 else "s", loc.function,
+                          "those at %s:%d first, then " % (report.file, report.line) if same else ""))
+            out += ["%s  (%+#x)" % (r, s.addr - match.address) for r, s in zip(rows(match.candidates[:10]), match.candidates)]
         if len(match.candidates) > 10:
             out.append("  ... %d more" % (len(match.candidates) - 10))
     elif st == "function":

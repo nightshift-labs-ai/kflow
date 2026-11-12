@@ -331,8 +331,9 @@ class OopsAction(ida_kernwin.action_handler_t):
         m = oops.resolve(rep, t["bug"], function_starts, mod, mod is not None)
         for line in oops.describe(rep, m, ida_funcs.get_func_name):
             report(line)
-        if m.status == "ambiguous":
-            SitesChooser(bug_site_rows(m.candidates), "kflow: BUG/WARN sites at %s" % m.label).Show()
+        if m.status == "ambiguous" or (m.address is None and m.candidates):  # the candidates, no jump
+            where = "at %s" % m.label if m.label else "in %s" % m.loc.function
+            SitesChooser(bug_site_rows(m.candidates), "kflow: BUG/WARN sites %s" % where).Show()
             return 1
         if m.address is None:
             ida_kernwin.warning("kflow: no BUG/WARN site or function of this file matches the pasted text; details are "

@@ -285,7 +285,7 @@ class Resolve(unittest.TestCase):
 
     def test_near_and_function(self):
         rep, m = find("RIP: 0010:mfill_atomic_copy+0x670/0x9d0")
-        self.assertEqual((m.status, m.address, m.site.addr), ("near", 0xFFFFFFFF8E629BC0, 0xFFFFFFFF8E629BC4))
+        self.assertEqual((m.status, m.address, m.site), ("near", 0xFFFFFFFF8E629BC0, None))
         self.assertEqual([s.addr for s in m.candidates], [0xFFFFFFFF8E629BC4, 0xFFFFFFFF8E629BA9])  # nearest first
         self.assertIn("not exact: no BUG/WARN site at mfill_atomic_copy+0x670", oops.describe(rep, m, lambda ea: "")[1])
         # with the WARNING's file:line the site at that line comes first, also when another one is nearer
@@ -296,6 +296,30 @@ class Resolve(unittest.TestCase):
         self.assertEqual((m.status, m.address, m.candidates), ("function", 0xFFFFFFFF81000820, []))
         rep, m = find("RIP: 0010:mfill_atomic_copy+0x670/0x9c0")  # a size that differs from the file's: said so
         self.assertIn("size in the log 0x9c0, here 0x9d0: another build, or another function of that name", m.notes)
+        self.assertIsNone(oops.match_record(rep, m, lambda ea: "")["site"])  # near: no site claimed, only candidates
+
+    def test_function_size_from_the_file(self):
+        """The function's sites are those inside it as this file has it, whatever size the log prints."""
+        copy = [0xFFFFFFFF8E629BC4, 0xFFFFFFFF8E629BA9]  # mfill_atomic_copy's two sites, the one at :755 first
+        for size in ("0x100", "0x2000"):  # smaller than the file's 0x9d0 (its sites past it), or larger (the next
+            text = "WARNING: CPU: 1 PID: 9 at mm/userfaultfd.c:755 mfill_atomic_copy+0x10/" + size  # function's)
+            rep, m = find(text)
+            self.assertEqual((m.status, m.address, [s.addr for s in m.candidates]), ("near", 0xFFFFFFFF8E629560, copy), text)
+            self.assertIn("the 2 sites in mfill_atomic_copy, those at mm/userfaultfd.c:755 first",
+                          oops.describe(rep, m, lambda ea: "")[1])
+        # an offset past the end of the function here: another build; its sites are listed, nothing to go to
+        for off in ("0x9d0", "0xf59"):
+            rep, m = find("WARNING: CPU: 1 PID: 9 at mm/userfaultfd.c:755 mfill_atomic_copy+%s/0x1400" % off)
+            self.assertEqual((m.status, m.address, m.site, [s.addr for s in m.candidates]), ("near", None, None, copy), off)
+            self.assertIn("mfill_atomic_copy+%s is past the end of mfill_atomic_copy here (0x9d0 bytes): a log from "
+                          "another build?" % off, m.notes)
+            self.assertEqual(oops.describe(rep, m, lambda ea: "")[1],
+                             "not exact: mfill_atomic_copy+%s is past the end of mfill_atomic_copy in this file; the 2 "
+                             "sites in mfill_atomic_copy, those at mm/userfaultfd.c:755 first, then in address order:" % off)
+        rep, m = find("RIP: 0010:mfill_atomic_copy+0x9cf/0x1400")  # the last byte is still inside
+        self.assertEqual((m.status, m.address), ("near", 0xFFFFFFFF8E629F1F))
+        rep, m = find("RIP: 0010:no_sites_fn+0x100/0x200")  # past the end of a function without sites: nothing
+        self.assertEqual((m.status, m.address, m.candidates), ("none", None, []))
 
     def test_ambiguous_file_line(self):
         for text in ("mm/userfaultfd.c:755", "userfaultfd.c:755", "[  12.3] mm/userfaultfd.c:755"):
