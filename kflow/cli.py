@@ -172,7 +172,7 @@ class Elf:
                 elif not lo <= v < hi:
                     continue  # does not fit: leave the bytes alone
                 data[to + r_off:to + r_off + size] = (v & ((1 << (8 * size)) - 1)).to_bytes(size, "little")
-        self.data = bytes(data)
+        self.data = data  # patched in place: no third copy of a large module in memory
 
     def _all_symbol_values(self):
         """Index in .symtab -> address, for the relocations (section symbols = their section's address)."""
@@ -220,7 +220,7 @@ class Elf:
         if ea >= e:
             return None
         size = min(size, e - ea)
-        return self.data[o + ea - a:o + ea - a + size]
+        return bytes(self.data[o + ea - a:o + ea - a + size])
 
     def key_name(self, ea):
         return key_label(lambda a: self.by_addr.get(a, ""), ea, self.read)

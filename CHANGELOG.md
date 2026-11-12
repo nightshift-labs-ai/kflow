@@ -5,6 +5,7 @@ Taken from the GitHub release notes. Newest first.
 ## Unreleased
 
 - ELF files with extended section numbering (0xff00 or more sections: `e_shnum` 0, `e_shstrndx` `SHN_XINDEX`, symbol section indexes in `.symtab_shndx`) are read; before, kflow saw no sections in them. Synthetic test.
+- A kernel module's relocations are applied in place, so a module needs one copy less memory while kflow reads it (output unchanged on nf_tables.ko, ext4.ko and a Debian 5.10 kernel).
 
 ## v0.0.1 (2026-11-12)
 
