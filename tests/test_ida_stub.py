@@ -478,6 +478,18 @@ def other_function(path):
     assert r2["other_refs"] == 0 and chosen[0] not in w["drefs"] and chosen[0] not in w["xrefs"], r2
     il.remove_annotations(t)
     w["item_end"].pop(s0)
+    # a static-key site that is a jmp to its target now (IDA makes that reference itself): nothing added either
+    en = next(((s, d) for s, d in pairs if srcs[s] == 1 and dsts[d] == 1 and il.in_text(s) and il.in_text(d)
+               and il.branches_to(s, d, arch) and abs(d - s) >= 8
+               and not sorted(set(free(s, s + 2)) - {s, d}) and not sorted(set(free(d - 2, d + 2)) - {s, d})
+               and not any(lo < h2 and l2 < hi for lo, hi in ((s, s + 2), (d - 2, d + 2)) for l2, h2 in ranges)), None)
+    if en is not None:
+        ranges += [(en[0], en[0] + 2), (en[1] - 2, en[1] + 2)]
+        assert il.in_other_function(*en)
+        r3 = il.annotate(t, arch)
+        assert en not in w["drefs"] and en not in w["xrefs"], r3
+        il.remove_annotations(t)
+        del ranges[-2:]
     w["imagebase"] = 0x10000  # a non-zero image base, so the rebase below checks the recorded offsets
     res = il.annotate(t, arch)
     assert res["other_refs"] == 1 and w["drefs"].get(chosen[0]) is True and chosen[0] not in w["xrefs"], res
