@@ -238,19 +238,27 @@ class Elf:
         size = min(size, e - ea)
         return bytes(self.data[o + ea - a:o + ea - a + size])
 
+    def extern_of(self, ea):
+        """(imported name, offset) when ea lies in a module's extern slot, else None."""
+        if not self.externs:
+            return None
+        if not hasattr(self, "_ext_sorted"):
+            self._ext_sorted = sorted((a, n) for n, a in self.externs.items())
+        i = bisect.bisect_right(self._ext_sorted, (ea, "\uffff")) - 1
+        if i >= 0 and ea - self._ext_sorted[i][0] < self.EXTERN_SLOT:
+            base, name = self._ext_sorted[i]
+            return name, ea - base
+        return None
+
     def key_name(self, ea):
-        if self.externs:  # a module's key in an imported symbol: name it from its slot, exactly
-            if not hasattr(self, "_ext_sorted"):
-                self._ext_sorted = sorted((a, n) for n, a in self.externs.items())
-            i = bisect.bisect_right(self._ext_sorted, (ea, "\uffff")) - 1
-            if i >= 0 and ea - self._ext_sorted[i][0] < self.EXTERN_SLOT:
-                base, name = self._ext_sorted[i]
-                off = ea - base
-                if off == 0:
-                    return name
-                if name.startswith("__tracepoint_") and off == TRACEPOINT_KEY_OFFSET:
-                    return "tracepoint " + name[len("__tracepoint_"):]
-                return "%s+%#x" % (name, off)
+        ext = self.extern_of(ea)
+        if ext is not None:  # a module's key in an imported symbol: name it from its slot, exactly
+            name, off = ext
+            if off == 0:
+                return name
+            if name.startswith("__tracepoint_") and off == TRACEPOINT_KEY_OFFSET:
+                return "tracepoint " + name[len("__tracepoint_"):]
+            return "%s+%#x" % (name, off)
         return key_label(lambda a: self.by_addr.get(a, ""), ea, self.read, self._nearest)
 
     def _nearest(self, ea):

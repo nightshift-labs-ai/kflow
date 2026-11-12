@@ -109,9 +109,7 @@ def pseudo_text(p, kind, site, before=False):
         return idalayer.bug_comment(site)
     if kind == "ex":
         return idalayer.ex_comment(site, p["arch"])
-    if site.key not in p["names"]:
-        p["names"][site.key] = idalayer.key_name(site.key)
-    return idalayer.jump_pseudo_text(site, p["names"][site.key], before)
+    return idalayer.jump_pseudo_text(site, idalayer.site_key_name(site, p["names"]), before)
 
 
 def pseudocode_lines(cfunc):
@@ -279,10 +277,9 @@ def key_site_rows(t):
     names = {}
     rows = []
     for j in t["jump"]:
-        if j.key not in names:
-            names[j.key] = idalayer.key_name(j.key)
+        name = idalayer.site_key_name(j, names)
         now = "jump" if idalayer.branches_to(j.code, j.target, arch) else "no jump"
-        rows.append((j.code, "0x%X" % j.code, names[j.key], "likely" if j.branch else "unlikely", now,
+        rows.append((j.code, "0x%X" % j.code, name, "likely" if j.branch else "unlikely", now,
                      "0x%X" % j.target, ida_funcs.get_func_name(j.code) or ""))
     return rows
 

@@ -18,6 +18,16 @@ class Seg:
         self.start_ea, self.end_ea, self.perm, self.type, self.name = s, e, perm, 0, name
 
 
+class PackedElf(Elf):
+    """A module as IDA's ELF loader lays it out: the imports one after another in an extern segment (8 bytes each
+    here; the exact item size in real IDA is not verified), so after relocation "import + offset" (a tracepoint's
+    key is __tracepoint_X + 8) lands on ANOTHER import. The command line's Elf gives each import a 64 KB slot."""
+    EXTERN_SLOT = 8
+
+
+SEG_XTRN = 1
+
+
 def world_from(elf):
     segs = []
     for name, (a, e) in elf.sections.items():
@@ -26,6 +36,10 @@ def world_from(elf):
     if not segs:  # ELF without section names: one segment per loaded range
         segs = [Seg(a, e, 1 if any(a <= ta < e for ta, te in elf.text) else 4, "seg%d" % i)
                 for i, (a, e, o) in enumerate(elf.loaded)]
+    if elf.externs:  # a module's imports: IDA's extern segment
+        x = Seg(min(elf.externs.values()), max(elf.externs.values()) + elf.EXTERN_SLOT, 4, "extern")
+        x.type = SEG_XTRN
+        segs.append(x)
     segs.sort(key=lambda s: s.start_ea)
     return {"segs": segs, "starts": [s.start_ea for s in segs], "cmts": {}, "xrefs": {}, "by_from": {}, "elf": elf,
             "path": elf.path}
@@ -41,7 +55,7 @@ def install(w, names=True):
         return w["segs"][i] if i >= 0 and ea < w["segs"][i].end_ea else None
     m["ida_segment"].getseg = getseg
     m["ida_segment"].get_segm_by_name = lambda n: next((s for s in w["segs"] if s.name == n), None)
-    m["ida_segment"].SEGPERM_EXEC, m["ida_segment"].SEG_CODE = 1, 2
+    m["ida_segment"].SEGPERM_EXEC, m["ida_segment"].SEG_CODE, m["ida_segment"].SEG_XTRN = 1, 2, SEG_XTRN
     m["ida_segment"].get_segm_qty = lambda: len(w["segs"])
     m["ida_segment"].getnseg = lambda n: w["segs"][n] if 0 <= n < len(w["segs"]) else None
     m["ida_bytes"].get_bytes = lambda ea, n: elf.read(ea, n)
@@ -57,8 +71,10 @@ def install(w, names=True):
         return True
     m["ida_bytes"].set_cmt = set_cmt
     # IDA keeps ONE name per address: a symbol sharing its address with an earlier one is not in the database
-    m["ida_name"].get_name_ea = lambda base, n: (elf.symbols[n] if names and n in elf.symbols
-                                                 and elf.by_addr.get(elf.symbols[n]) == n else BAD)
+    def get_name_ea(base, n):  # a module's imports are named items of the extern segment
+        a = elf.symbols.get(n, elf.externs.get(n)) if names else None
+        return a if a is not None and elf.by_addr.get(a) == n else BAD
+    m["ida_name"].get_name_ea = get_name_ea
     m["ida_nalt"] = types.ModuleType("ida_nalt")
     m["ida_nalt"].get_input_file_path = lambda: w.get("path")
     m["ida_nalt"].get_imagebase = lambda: w.get("imagebase", 0)
@@ -157,8 +173,9 @@ def install(w, names=True):
 
 
 def run(path):
-    elf = Elf(path)
-    ref = load(elf)
+    cli_elf = Elf(path)
+    ref = load(cli_elf)
+    elf = PackedElf(path) if cli_elf.relocatable else cli_elf  # the database: imports packed like IDA's
     w = world_from(elf)
     il = install(w)
     t = il.scan()
@@ -203,6 +220,17 @@ def run(path):
     if not elf.relocatable:  # IDA's name list gives every key the same name as the command line
         bad = [hex(j.key) for j in t["jump"] if il.key_name(j.key) != (elf.key_name(j.key) or "0x%X" % j.key)]
         assert not bad, bad[:5]
+    else:  # a module: keys in imports keep their own import's name, although IDA packs the imports
+        want = [cli_elf.key_name(c.key) or "0x%X" % c.key for c in ref.get("jump", [])]
+        bad = [(hex(j.entry), il.site_key_name(j), x) for j, x in zip(t["jump"], want) if il.site_key_name(j) != x]
+        assert not bad, bad[:5]
+        offs = sum(1 for c in ref.get("jump", []) if (cli_elf.extern_of(c.key) or (0, 0))[1])
+        print("  module keys in imports: %d at import + offset, %d labels from the command line"
+              % (offs, len(il.SITE_KEY)))
+        for j in t["jump"]:  # each site's key reference goes to its own import, never a neighbour
+            hit = il.SITE_KEY.get(j.entry)
+            if hit and il.in_text(j.code):
+                assert (j.code, elf.externs[hit[1]]) in w["drefs"], (hex(j.code), hit)
     for a in filter(None, os.environ.get("KFLOW_SHOW", "").split(",")):  # print the comments at these addresses
         print("%s:  %s" % (a, w["cmts"].get(int(a, 16), "(none)")))
     if nxt is not None:

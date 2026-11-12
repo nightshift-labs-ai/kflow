@@ -1,4 +1,5 @@
 """IDA side of kflow: find the kernel's site tables in the database, comment the sites, add references."""
+import bisect
 import os
 
 import ida_bytes
@@ -76,6 +77,93 @@ def file_symbols():
     return _FILE_SYMBOLS[key]
 
 
+_MODULE = {}
+
+
+def module_elf():
+    """The input file as the command line loads it, when it is a kernel module (ET_REL) still on disk: (Elf, its
+    jump-table sites); else None. Read once per path, size and mtime."""
+    path = ida_nalt.get_input_file_path() or ""
+    try:
+        st = os.stat(path)
+        key = (path, st.st_size, st.st_mtime)
+    except OSError:
+        return None
+    if key not in _MODULE:
+        _MODULE.clear()
+        _MODULE[key] = None
+        try:
+            with open(path, "rb") as fh:
+                head = fh.read(18)
+            if head[:4] == b"\x7fELF" and head[16:18] == b"\x01\x00":
+                from .cli import Elf, load
+                elf = Elf(path)
+                _MODULE[key] = (elf, load(elf).get("jump", []))
+        except Exception:  # noqa: BLE001  (unreadable or a layout the command line rejects: no module labels)
+            _MODULE[key] = None
+    return _MODULE[key]
+
+
+def _place(ea, getseg):
+    """Offset of ea in its segment/section, or None."""
+    seg = getseg(ea)
+    return None if seg is None else ea - seg[0]
+
+
+def _outside_or_extern(ea):
+    seg = ida_segment.getseg(ea)
+    return seg is None or seg.type == ida_segment.SEG_XTRN
+
+
+def module_key_labels(jumps):
+    """{jump entry address: (key label, imported name)} for a kernel module's static keys that live in an imported
+    symbol at an offset IDA cannot name. IDA's ELF loader puts the imports one after another in its extern segment,
+    so after relocation "import + offset" (a tracepoint's key is __tracepoint_X + 8; arrays like nf_hooks_needed)
+    can land on ANOTHER import and get its name. The command line gives each import a 64 KB slot and names these
+    keys exactly; its label is used for every site whose key IDA put in an extern segment or outside all segments,
+    but only when both decodes have the same entries: same count and each site at the same offset in its section."""
+    m = module_elf()
+    if m is None or not jumps:
+        return {}
+    elf, cli_jumps = m
+    if len(cli_jumps) != len(jumps):
+        return {}
+    secs = sorted(elf.sections.values())
+    starts = [a for a, e in secs]
+
+    def cli_seg(ea):
+        i = bisect.bisect_right(starts, ea) - 1
+        return secs[i] if i >= 0 and ea < secs[i][1] else None
+
+    def ida_seg(ea):
+        seg = ida_segment.getseg(ea)
+        return None if seg is None else (seg.start_ea, seg.end_ea)
+    out = {}
+    for j, c in zip(jumps, cli_jumps):
+        a, b = _place(j.code, ida_seg), _place(c.code, cli_seg)
+        if a is None or a != b:
+            return {}  # the two decodes do not line up: keep IDA's own names
+        ext = elf.extern_of(c.key)
+        if ext is not None and _outside_or_extern(j.key):
+            out[j.entry] = (elf.key_name(c.key), ext[0])
+    return out
+
+
+SITE_KEY = {}  # jump entry address -> (label, imported name), from the last scan() of a module
+
+
+def site_key_name(j, cache=None):
+    """The static key's name for this site: the module label when there is one, else IDA's names (cached by key)."""
+    hit = SITE_KEY.get(j.entry)
+    if hit:
+        return hit[0]
+    if cache is None:
+        return key_name(j.key)
+    if j.key not in cache:
+        cache[j.key] = key_name(j.key)
+    return cache[j.key]
+
+
 ANCHORS = ("_text", "_stext", "stext", "startup_64", "_etext", "_sdata", "linux_banner")
 
 
@@ -128,6 +216,11 @@ def scan():
                 out["ex_layout"], out["ex"] = core.decode_ex_table(read, start, stop, in_text=in_text)
         except ValueError as error:
             out["errors"][kind] = str(error)
+    SITE_KEY.clear()
+    try:
+        SITE_KEY.update(module_key_labels(out["jump"]))
+    except Exception:  # noqa: BLE001  (labels are a refinement: never let them break a scan)
+        SITE_KEY.clear()
     return out
 
 
@@ -180,14 +273,14 @@ def jump_when(j):
 
 def jump_comment(j):
     kind = "static_branch_likely" if j.branch else "static_branch_unlikely"
-    return "%s: static key %s (%s): runtime-patched NOP/branch; %s" % (TAG, key_name(j.key), kind, jump_when(j))
+    return "%s: static key %s (%s): runtime-patched NOP/branch; %s" % (TAG, site_key_name(j), kind, jump_when(j))
 
 
 def jump_pseudo_text(j, name=None, before=False):
     """The pseudocode version of jump_comment: key, likely/unlikely, when the site jumps. before: the site has no
     statement of its own, so the text sits on the line of the next address that has one."""
     at = " at 0x%X, just before this line" % j.code if before else ""
-    return "%s: static key %s (%s)%s: %s" % (TAG, name or key_name(j.key), "likely" if j.branch else "unlikely", at,
+    return "%s: static key %s (%s)%s: %s" % (TAG, name or site_key_name(j), "likely" if j.branch else "unlikely", at,
                                              jump_when(j))
 
 
@@ -269,6 +362,15 @@ def _add_key_ref(site, key, node):
     return 1
 
 
+def key_ref_target(j):
+    """Where the site -> key reference points: the key, or for a module label the imported symbol itself (IDA's
+    address for "import + offset" may be another import); BADADDR (no reference) if IDA has no such name."""
+    hit = SITE_KEY.get(j.entry)
+    if not hit:
+        return j.key
+    return ida_name.get_name_ea(BADADDR, hit[1])
+
+
 def annotate(t, arch=None):
     """Comment every site; add jump references site -> static-key target and faulting insn -> fixup, and data
     references site -> key."""
@@ -283,7 +385,7 @@ def annotate(t, arch=None):
         if in_text(j.code):
             _set(j.code, jump_comment(j), res)
             res["xrefs"] += _add(j.code, j.target, node, arch)
-            res["key_refs"] += _add_key_ref(j.code, j.key, knode)
+            res["key_refs"] += _add_key_ref(j.code, key_ref_target(j), knode)
     for x in t["ex"]:
         if in_text(x.insn):
             _set(x.insn, ex_comment(x, arch), res)
