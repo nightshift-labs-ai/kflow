@@ -25,7 +25,7 @@ Experimental, off by default, x86_64 only, not yet run in real IDA: see [warnflo
 
 ## Freed init code
 
-Static-key sites in freed init code (memory images) are decoded but not commented when they are outside code segments.
+Sites in freed init code (memory images) are decoded but not commented when they are outside code segments (MemLens demo kernel, fake-IDA test: 521 of 9,850 BUG/WARN, 225 of 9,237 static-key and 13 of 671 exception-table sites).
 
 ## Kernel modules
 
