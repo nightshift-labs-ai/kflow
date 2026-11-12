@@ -63,7 +63,12 @@ _TAIL = re.compile(r"^(?:/\S*)?(?:\s+\([A-Z]+\))?\s*$")
 _CUT = re.compile(r"-+\[ cut here \]-+")
 _END = re.compile(r"-+\[ end (?:trace|Kernel panic)")
 _START = re.compile(r"(?:^|\s)(?:BUG: |Oops(?::| -)|Unable to handle kernel|Internal error:|general protection fault|"
-                    r"WARNING: |INFO: task |Kernel panic - )")
+                    r"WARNING: |INFO: task )")
+# kernel/panic.c panic() 'Kernel panic - not syncing: %s' continues the report in progress: a report that ended already
+# printed its end marker (oops_exit() before panic("Fatal exception")), and panic_on_warn panics inside __warn() before
+# the marker, so the panic line and panic()'s own stack dump (on x86 with the same trap's RIP again) follow the WARNING
+# report's call trace. It starts a report only where none is in progress, never cuts one
+_PANIC = re.compile(r"(?:^|\s)Kernel panic - ")
 
 
 @dataclass
@@ -217,7 +222,7 @@ def parse(text):
             segs.append([])
             started.append(True)
             in_trace = False
-        elif _START.search(s):
+        elif _START.search(s) or _PANIC.search(s):
             started[-1] = True
         if found is None:
             continue

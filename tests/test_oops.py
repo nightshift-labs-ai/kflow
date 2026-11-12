@@ -38,11 +38,16 @@ SITES += [BugSite(0xFFFFFFFF8E629BA9, "mm/userfaultfd.c", 861, 0),  # a BUG in m
           BugSite(0xFFFFFFFF81000310, "lib/dup.c", 20, 1),
           BugSite(0xFFFFFFFF81000444, "kernel/cfi.c", 7, 1),  # in lto_fn.cfi (the log prints lto_fn)
           BugSite(0x10A00, "net/netfilter/nf_tables_core.c", 260, 0)]  # a module's BUG (ARM64_BUG: kernel BUG at)
+# the six WARN_ONCE sites of refcount_warn_saturate on the MemLens demo kernel (lib/refcount.c, flags 0x909), POW_X86
+SITES += [BugSite(a, "lib/refcount.c", ln, 0x909) for a, ln in (
+    (0xFFFFFFFF8E8A52B5, 22), (0xFFFFFFFF8E8A52D8, 34), (0xFFFFFFFF8E8A52FB, 19), (0xFFFFFFFF8E8A531E, 28),
+    (0xFFFFFFFF8E8A5345, 25), (0xFFFFFFFF8E8A535F, 31))]
 FUNCS.update({"folio_unlock": [(0xFFFFFFFF810000A0, 0xD0)],
               "dup_fn": [(0xFFFFFFFF81000200, 0x40), (0xFFFFFFFF81000300, 0x60)],
               "lto_fn": [(0xFFFFFFFF81000600, 0x8)],  # the 8-byte CFI jump-table entry has the plain name
               "no_sites_fn": [(0xFFFFFFFF81000800, 0x100)],
-              "nft_do_chain": [(0x10600, 0x6D0)]})
+              "nft_do_chain": [(0x10600, 0x6D0)],
+              "refcount_warn_saturate": [(0xFFFFFFFF8E8A5260, 0x110)]})
 SUFFIXED = {"lto_fn": [oops.Func(0xFFFFFFFF81000400, 0x100, None, "lto_fn.cfi")]}
 # Clang LTO (Android GKI 5.10): three static functions the kernel prints as cut_fn: cut_fn, cut_fn.123 (same size) and
 # cut_fn.77 (larger), each with a WARN at +0x20; GCC: gcc_fn and gcc_fn.part.0, printed in full by the kernel
@@ -160,6 +165,132 @@ RIP: 0033:0x7f4d1c2e4ab9
 Code: 28 00 00 00 75 05 48 83 c4 28 c3 e8 c1 17 00 00 90 48 89 f8 48 89 f7 48 89 d6 48 89 ca 4d 89 c2 4d 89 c8 4c 8b
 RSP: 002b:00007ffd4e1d6c18 EFLAGS: 00000246 ORIG_RAX: 0000000000000010
  </TASK>
+"""
+
+# panic_on_warn (kernel/panic.c, 6.12): __warn() prints the WARNING report (show_regs: registers, call trace), then
+# check_panic_on_warn("kernel") calls panic() before the end marker: 'Kernel panic - not syncing: kernel: panic_on_warn
+# set ...', then panic()'s own dump_stack(), which on x86 crosses the exception frame and prints the trap's RIP again.
+# One report. Built on the MemLens demo kernel (Debian 6.12.115): the WARN_ONCE site lib/refcount.c:28 at
+# refcount_warn_saturate+0xbe, the Code: bytes, every function+offset/size (return addresses from its disassembly: the
+# kcmp syscall's call with REFCOUNT_SUB_UAF, __warn.cold / check_panic_on_warn.cold, panic's dump_stack call) and the
+# Kernel Offset are that kernel's; register values and the user-mode lines are made up
+POW_X86 = """\
+[ 4521.903101] ------------[ cut here ]------------
+[ 4521.903114] refcount_t: underflow; use-after-free.
+[ 4521.903139] WARNING: CPU: 2 PID: 48213 at lib/refcount.c:28 refcount_warn_saturate+0xbe/0x110
+[ 4521.903152] Modules linked in: nft_chain_nat nf_nat nf_conntrack nf_defrag_ipv6 nf_defrag_ipv4 nf_tables libcrc32c nfnetlink binfmt_misc virtio_net net_failover failover virtio_balloon joydev evdev button ext4 crc16 mbcache jbd2 virtio_blk virtio_pci virtio_pci_legacy_dev virtio_pci_modern_dev virtio virtio_ring
+[ 4521.903188] CPU: 2 UID: 1000 PID: 48213 Comm: kcmp-test Not tainted 6.12.115+deb13.1-amd64 #1  Debian 6.12.115-2
+[ 4521.903195] Hardware name: QEMU Standard PC (Q35 + ICH9, 2009), BIOS 1.16.3-debian-1.16.3-2 04/01/2014
+[ 4521.903199] RIP: 0010:refcount_warn_saturate+0xbe/0x110
+[ 4521.903207] Code: 01 01 e8 35 dc a1 ff 0f 0b c3 cc cc cc cc 80 3d db 65 78 01 00 75 85 48 c7 c7 68 a6 79 8f c6 05 cb 65 78 01 01 e8 12 dc a1 ff <0f> 0b c3 cc cc cc cc 80 3d b9 65 78 01 00 0f 85 5e ff ff ff 48 c7
+[ 4521.903211] RSP: 0018:ffffb37c4a8bfe08 EFLAGS: 00010286
+[ 4521.903217] RAX: 0000000000000000 RBX: ffff8f2a43a1c000 RCX: 0000000000000027
+[ 4521.903221] RDX: ffff8f2bbbd21788 RSI: 0000000000000001 RDI: ffff8f2bbbd21780
+[ 4521.903224] RBP: 0000000000000000 R08: 0000000000000000 R09: ffffb37c4a8bfc90
+[ 4521.903228] R10: ffffb37c4a8bfc88 R11: ffffffff902f1d28 R12: ffff8f2a43a1c000
+[ 4521.903231] R13: 0000000000000000 R14: 0000000000000000 R15: ffff8f2a4c3b9500
+[ 4521.903235] FS:  00007f6e2d4f9740(0000) GS:ffff8f2bbbd00000(0000) knlGS:0000000000000000
+[ 4521.903239] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[ 4521.903242] CR2: 00007f6e2d6c2000 CR3: 0000000112f6a003 CR4: 0000000000770ef0
+[ 4521.903248] Call Trace:
+[ 4521.903250]  <TASK>
+[ 4521.903253]  ? __warn.cold+0x93/0xf6
+[ 4521.903260]  ? refcount_warn_saturate+0xbe/0x110
+[ 4521.903266]  ? report_bug+0xff/0x140
+[ 4521.903272]  ? handle_bug+0x10f/0x170
+[ 4521.903277]  ? exc_invalid_op+0x17/0x70
+[ 4521.903281]  ? asm_exc_invalid_op+0x1a/0x20
+[ 4521.903286]  ? refcount_warn_saturate+0xbe/0x110
+[ 4521.903292]  __do_sys_kcmp+0x28d/0x560
+[ 4521.903298]  do_syscall_64+0x87/0x1b0
+[ 4521.903303]  entry_SYSCALL_64_after_hwframe+0x76/0x7e
+[ 4521.903308] RIP: 0033:0x7f6e2d61c88d
+[ 4521.903311] Code: 5b 41 5c c3 66 0f 1f 84 00 00 00 00 00 f3 0f 1e fa 48 89 f8 48 89 f7 48 89 d6 48 89 ca 4d 89 c2 4d 89 c8 4c 8b 4c 24 08 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 8b 0d 73 b5 0d 00 f7 d8 64 89 01 48
+[ 4521.903316] RSP: 002b:00007ffc8a1e3b58 EFLAGS: 00000246 ORIG_RAX: 0000000000000138
+[ 4521.903321] RAX: ffffffffffffffda RBX: 00007ffc8a1e3c88 RCX: 00007f6e2d61c88d
+[ 4521.903325] RDX: 0000000000000000 RSI: 000000000000bc55 RDI: 000000000000bc55
+[ 4521.903328] RBP: 00007ffc8a1e3b70 R08: 0000000000000000 R09: 00007f6e2d71a680
+[ 4521.903332] R10: 0000000000000003 R11: 0000000000000246 R12: 0000000000000000
+[ 4521.903335] R13: 00007ffc8a1e3c98 R14: 00007f6e2d75c000 R15: 000055d8c4a0fdd8
+[ 4521.903339]  </TASK>
+[ 4521.903342] Kernel panic - not syncing: kernel: panic_on_warn set ...
+[ 4521.903519] CPU: 2 UID: 1000 PID: 48213 Comm: kcmp-test Not tainted 6.12.115+deb13.1-amd64 #1  Debian 6.12.115-2
+[ 4521.903525] Hardware name: QEMU Standard PC (Q35 + ICH9, 2009), BIOS 1.16.3-debian-1.16.3-2 04/01/2014
+[ 4521.903528] Call Trace:
+[ 4521.903530]  <TASK>
+[ 4521.903532]  dump_stack_lvl+0x5d/0x80
+[ 4521.903538]  panic+0x118/0x2db
+[ 4521.903543]  check_panic_on_warn.cold+0xf/0x1e
+[ 4521.903548]  __warn.cold+0x9f/0xf6
+[ 4521.903553]  ? refcount_warn_saturate+0xbe/0x110
+[ 4521.903557]  report_bug+0xff/0x140
+[ 4521.903562]  handle_bug+0x10f/0x170
+[ 4521.903566]  exc_invalid_op+0x17/0x70
+[ 4521.903570]  asm_exc_invalid_op+0x1a/0x20
+[ 4521.903575] RIP: 0010:refcount_warn_saturate+0xbe/0x110
+[ 4521.903579] Code: 01 01 e8 35 dc a1 ff 0f 0b c3 cc cc cc cc 80 3d db 65 78 01 00 75 85 48 c7 c7 68 a6 79 8f c6 05 cb 65 78 01 01 e8 12 dc a1 ff <0f> 0b c3 cc cc cc cc 80 3d b9 65 78 01 00 0f 85 5e ff ff ff 48 c7
+[ 4521.903583] RSP: 0018:ffffb37c4a8bfe08 EFLAGS: 00010286
+[ 4521.903587] RAX: 0000000000000000 RBX: ffff8f2a43a1c000 RCX: 0000000000000027
+[ 4521.903590] RDX: ffff8f2bbbd21788 RSI: 0000000000000001 RDI: ffff8f2bbbd21780
+[ 4521.903594] RBP: 0000000000000000 R08: 0000000000000000 R09: ffffb37c4a8bfc90
+[ 4521.903597] R10: ffffb37c4a8bfc88 R11: ffffffff902f1d28 R12: ffff8f2a43a1c000
+[ 4521.903601] R13: 0000000000000000 R14: 0000000000000000 R15: ffff8f2a4c3b9500
+[ 4521.903605]  __do_sys_kcmp+0x28d/0x560
+[ 4521.903610]  do_syscall_64+0x87/0x1b0
+[ 4521.903614]  entry_SYSCALL_64_after_hwframe+0x76/0x7e
+[ 4521.903618] RIP: 0033:0x7f6e2d61c88d
+[ 4521.903621] Code: 5b 41 5c c3 66 0f 1f 84 00 00 00 00 00 f3 0f 1e fa 48 89 f8 48 89 f7 48 89 d6 48 89 ca 4d 89 c2 4d 89 c8 4c 8b 4c 24 08 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 8b 0d 73 b5 0d 00 f7 d8 64 89 01 48
+[ 4521.903625] RSP: 002b:00007ffc8a1e3b58 EFLAGS: 00000246 ORIG_RAX: 0000000000000138
+[ 4521.903629] RAX: ffffffffffffffda RBX: 00007ffc8a1e3c88 RCX: 00007f6e2d61c88d
+[ 4521.903632] RDX: 0000000000000000 RSI: 000000000000bc55 RDI: 000000000000bc55
+[ 4521.903636] RBP: 00007ffc8a1e3b70 R08: 0000000000000000 R09: 00007f6e2d71a680
+[ 4521.903639] R10: 0000000000000003 R11: 0000000000000246 R12: 0000000000000000
+[ 4521.903643] R13: 00007ffc8a1e3c98 R14: 00007f6e2d75c000 R15: 000055d8c4a0fdd8
+[ 4521.903645]  </TASK>
+[ 4521.903790] Kernel Offset: 0xd200000 from 0xffffffff81000000 (relocation range: 0xffffffff80000000-0xffffffffbfffffff)
+[ 4521.927451] ---[ end Kernel panic - not syncing: kernel: panic_on_warn set ... ]---
+"""
+# the same on arm64 (6.12 formats; offsets made up): the panic's dump has no pc line, the trap is a call-trace entry
+POW_ARM64 = """\
+<4>[  88.123450][ T2201] ------------[ cut here ]------------
+<4>[  88.123460][ T2201] WARNING: CPU: 5 PID: 2201 at mm/userfaultfd.c:755 mfill_atomic_copy+0x674/0x9d0
+<4>[  88.123470][ T2201] Modules linked in:
+<4>[  88.123480][ T2201] CPU: 5 UID: 0 PID: 2201 Comm: uffd-test Not tainted 6.12.94+deb13-arm64 #1  Debian 6.12.94-1
+<4>[  88.123485][ T2201] Hardware name: linux,dummy-virt (DT)
+<4>[  88.123490][ T2201] pstate: 60400005 (nZCv daif +PAN -UAO -TCO -DIT -SSBS BTYPE=--)
+<4>[  88.123500][ T2201] pc : mfill_atomic_copy+0x674/0x9d0
+<4>[  88.123505][ T2201] lr : mfill_atomic_copy+0x4b0/0x9d0
+<4>[  88.123510][ T2201] sp : ffff80008a3b3c40
+<4>[  88.123520][ T2201] Call trace:
+<4>[  88.123525][ T2201]  mfill_atomic_copy+0x674/0x9d0
+<4>[  88.123530][ T2201]  userfaultfd_ioctl+0x5d1/0x1e70
+<4>[  88.123535][ T2201]  __arm64_sys_ioctl+0xb4/0x100
+<0>[  88.123540][ T2201] Kernel panic - not syncing: kernel: panic_on_warn set ...
+<4>[  88.123550][ T2201] CPU: 5 UID: 0 PID: 2201 Comm: uffd-test Not tainted 6.12.94+deb13-arm64 #1  Debian 6.12.94-1
+<4>[  88.123555][ T2201] Hardware name: linux,dummy-virt (DT)
+<4>[  88.123560][ T2201] Call trace:
+<4>[  88.123565][ T2201]  dump_backtrace+0x9c/0x100
+<4>[  88.123566][ T2201]  show_stack+0x20/0x38
+<4>[  88.123570][ T2201]  dump_stack_lvl+0x38/0xd0
+<4>[  88.123575][ T2201]  dump_stack+0x18/0x28
+<4>[  88.123580][ T2201]  panic+0x3ac/0x418
+<4>[  88.123585][ T2201]  check_panic_on_warn+0x60/0xa0
+<4>[  88.123590][ T2201]  __warn+0xa0/0x1c0
+<4>[  88.123595][ T2201]  report_bug+0x118/0x1d8
+<4>[  88.123600][ T2201]  bug_handler+0x2c/0x88
+<4>[  88.123605][ T2201]  call_el1_break_hook+0x80/0xa0
+<4>[  88.123610][ T2201]  brk_handler+0x2c/0xb0
+<4>[  88.123615][ T2201]  do_debug_exception+0x70/0x170
+<4>[  88.123620][ T2201]  el1_dbg+0x64/0x80
+<4>[  88.123625][ T2201]  el1h_64_sync_handler+0x60/0xa8
+<4>[  88.123630][ T2201]  el1h_64_sync+0x64/0x68
+<4>[  88.123635][ T2201]  mfill_atomic_copy+0x674/0x9d0
+<4>[  88.123640][ T2201]  userfaultfd_ioctl+0x5d1/0x1e70
+<4>[  88.123645][ T2201]  __arm64_sys_ioctl+0xb4/0x100
+<0>[  88.123700][ T2201] SMP: stopping secondary CPUs
+<0>[  88.123710][ T2201] Kernel Offset: disabled
+<0>[  88.123730][ T2201] Memory Limit: none
+<0>[  88.123740][ T2201] ---[ end Kernel panic - not syncing: kernel: panic_on_warn set ... ]---
 """
 
 # Linux 4.9: show_regs 'RIP: %04lx:[<%016lx>] ' + printk_address ' [<%p>] %pS'; entries ' [<%p>] %s%pB'; the
@@ -321,6 +452,41 @@ class Parse(unittest.TestCase):
         rep = oops.parse("RIP: 0010:folio_unlock+0x70/0xd0\nCall Trace:\n f+0x1/0x2\nBUG: unable to handle page fault for "
                          "address: 0000000000000008\nRIP: 0010:mfill_atomic_copy+0x674/0x9d0")  # no cut / end line
         self.assertEqual((rep.reports, rep.primary.function, [f.function for f in rep.frames]), (2, "folio_unlock", ["f"]))
+
+    def test_panic_on_warn(self):
+        """review s159 NIT 2: 'Kernel panic - not syncing: ...' continues the report in progress (panic_on_warn: the
+        panic line and panic()'s stack dump, on x86 with the same trap's RIP again, follow the WARNING report): one
+        report, no 'the text holds 2 reports' note. A report that ended (oops, then 'Fatal exception') is still one, and
+        two different reports are still two."""
+        rep, m = find(POW_X86)
+        self.assertEqual((rep.reports, rep.kind, rep.file, rep.line, rep.primary.source, rep.primary.function,
+                          rep.primary.offset, rep.primary.size),
+                         (1, "WARN", "lib/refcount.c", 28, "rip", "refcount_warn_saturate", 0xBE, 0x110))
+        self.assertEqual((m.status, m.address, m.site.where()), ("exact", 0xFFFFFFFF8E8A531E, "lib/refcount.c:28"))
+        self.assertFalse([n for n in m.notes if "reports" in n], m.notes)
+        self.assertEqual([x.source for x in rep.locations if x.source != "frame"], ["warning", "rip", "rip"])
+        rep, m = find(POW_ARM64)  # arm64: the panic's dump prints no pc line
+        self.assertEqual((rep.reports, rep.primary.source, m.status, m.address), (1, "pc", "exact", 0xFFFFFFFF8E629BC4))
+        self.assertFalse([n for n in m.notes if "reports" in n], m.notes)
+        fatal = ("<4>[  222.942500][ T8817] ---[ end trace 0000000000000000 ]---\n"
+                 "<0>[  222.942510][ T8817] Kernel panic - not syncing: Fatal exception\n"
+                 "<0>[  222.943000][ T8817] Kernel Offset: disabled\n"
+                 "<0>[  222.943010][ T8817] ---[ end Kernel panic - not syncing: Fatal exception ]---\n")
+        for text in (X86_BUG + fatal, X86_BUG + fatal.split("\n", 1)[1]):  # with and without the end-trace line
+            rep, m = find(text)
+            self.assertEqual((rep.reports, rep.kind, m.status, m.address), (1, "BUG", "exact", 0xFFFFFFFF81000110))
+        # a panic with no report before it is one report (its call trace has no trap: nothing to go to)
+        rep = oops.parse("Kernel panic - not syncing: VFS: Unable to mount root fs on unknown-block(0,0)\nCall Trace:\n"
+                         " <TASK>\n dump_stack_lvl+0x5d/0x80\n panic+0x118/0x2db\n")
+        self.assertEqual((rep.reports, [f.function for f in rep.frames]), (1, ["dump_stack_lvl", "panic"]))
+        # two different reports are still two: the second one's cut-here / WARNING line starts it (also with neither
+        # the end-panic line nor the cut-here line between them)
+        for text, first in ((POW_X86 + X86_WARN, "refcount_warn_saturate"), (X86_WARN + POW_X86, "mfill_atomic_copy"),
+                            ("\n".join(POW_X86.splitlines()[:-1] + X86_WARN.splitlines()[1:]), "refcount_warn_saturate")):
+            rep, m = find(text)
+            self.assertEqual((rep.reports, rep.primary.function, m.status), (2, first, "exact"), text[:80])
+            self.assertIn("the text holds 2 reports; the first one with a WARNING / kernel BUG / RIP / pc line is used "
+                          "(paste one report to look up another)", m.notes)
 
     def test_no_trap_line(self):
         """Reports with no WARNING / kernel BUG / RIP / pc line (KASAN, hung task, lockdep) and pasted call traces: the
@@ -730,6 +896,11 @@ def whole_kernel(path):
         m = oops.resolve(oops.parse("WARNING: CPU: 1 PID: 9 at mm/userfaultfd.c:755 mfill_atomic_copy+0x674/0x..."),
                          index, elf.function_starts)
         assert (m.status, m.address, m.site.where()) == ("exact", 0xFFFFFFFF8E629BC4, "mm/userfaultfd.c:755"), m
+        # the panic_on_warn report built on this kernel (review s159 NIT 2): one report, exact, no note
+        rep = oops.parse(POW_X86)
+        m = oops.resolve(rep, index, elf.function_starts)
+        assert (rep.reports, m.status, m.address, m.site.where(), m.notes) == (
+            1, "exact", 0xFFFFFFFF8E8A531E, "lib/refcount.c:28", []), (rep.reports, m)
     # logs from other builds (review s157): an Ubuntu 6.8 x86_64 WARNING, an Android 5.10 arm64 one; where this file has
     # a site at that function+offset, it is exact only if it is the site the log's WARNING line names
     other = 0
