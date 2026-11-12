@@ -162,16 +162,54 @@ if padded is not None:
     r, new = ask("%s%s+0x0/%#x%s" % (reg, name, printed + 8, modtag))
     assert said(new, "size in the log %#x, here %#x" % (printed + 8, printed)), new
     oops_done.append("printed size %#x of %s (code %#x): no size note" % (printed, name, size))
-# a name the log prints without the suffix the database has (Linux 6.1 Clang LTO cuts names at the first dot)
-cut = next((b for b in bugs if at_addr[b.addr] == 1 and "." in ui.fn.get_func_name(b.addr)
-            and get_func(b.addr) is not None and get_func(b.addr).start_ea == elf.symbols.get(ui.fn.get_func_name(b.addr))
-            and sys.modules["ida_name"].get_name_ea(T.BAD, ui.fn.get_func_name(b.addr).split(".")[0]) == T.BAD), None)
-if cut is not None:
-    f = get_func(cut.addr)
-    base = ui.fn.get_func_name(cut.addr).split(".")[0]
-    r, new = ask("%s%s+%#x/%#x%s" % (reg, base, cut.addr - f.start_ea, f.end_ea - f.start_ea, modtag))
-    assert r == 1 and went(new) == [cut.addr] and said(new, "matched a function named %s.<suffix>" % base), new
-    oops_done.append("%s+off -> %s" % (base, ui.fn.get_func_name(cut.addr)))
+# a name the log prints without the suffix the database has (Clang LTO: the kernel cuts foo.123 at the first dot); GCC's
+# foo.isra.0 / foo.part.0 are printed in full, so the cut name must not lead there
+def cut_site(lto):
+    for b in bugs:
+        full = ui.fn.get_func_name(b.addr)
+        base = full.split(".")[0] if full else ""
+        if (at_addr[b.addr] == 1 and "." in full and m.oops.lto_suffix(full, base) == lto and get_func(b.addr) is not None
+                and get_func(b.addr).start_ea == elf.symbols.get(full)
+                and sys.modules["ida_name"].get_name_ea(T.BAD, base) == T.BAD):
+            return b, base, full
+    return None
+
+
+# the plain name exists too (Clang LTO, review s157 M1: gic_smp_init and gic_smp_init.30554): the copy holding the
+# site's offset is tried as well; with the site's own WARNING / kernel BUG line it is found, without one it is found or
+# listed among the copies, never another site
+both = next((b for b in bugs if at_addr[b.addr] == 1 and b.file and m.oops.lto_suffix(ui.fn.get_func_name(b.addr) or "",
+                                                                                    ui.fn.get_func_name(b.addr).split(".")[0])
+             and get_func(b.addr) is not None and get_func(b.addr).start_ea == elf.symbols.get(ui.fn.get_func_name(b.addr))
+             and sys.modules["ida_name"].get_name_ea(T.BAD, ui.fn.get_func_name(b.addr).split(".")[0]) != T.BAD), None)
+if both is not None:
+    f, full = get_func(both.addr), ui.fn.get_func_name(both.addr)
+    at = "%s%s+%#x/%#x%s" % (reg, full.split(".")[0], both.addr - f.start_ea, f.end_ea - f.start_ea, modtag)
+    head = ("WARNING: CPU: 1 PID: 9 at %s:%d %s\n" % (both.file, both.line, at.split(reg, 1)[1]) if both.warn else
+            "kernel BUG at %s:%d!\n" % (both.file, both.line))
+    how = []
+    for text in (head + at, at):  # copies at the same file:line (inlined code) stay candidates also with the line
+        r, new = ask(text)
+        shown = [x for x in new if x[0] == "show"]
+        assert r == 1 and (went(new) == [both.addr] or (not went(new) and shown and both.addr in [
+            row[0] for row in w["shown"].rows] and not [x for x in new if x[0] == "warning"])), new
+        how.append("%d rows" % shown[0][2] if shown else "jump")
+    oops_done.append("%s+off: %s with its own line -> %s, without -> %s" % (full.split(".")[0], full, how[0], how[1]))
+for lto in (True, False):
+    c = cut_site(lto)
+    if c is None:
+        continue
+    b, base, full = c
+    f = get_func(b.addr)
+    r, new = ask("%s%s+%#x/%#x%s" % (reg, base, b.addr - f.start_ea, f.end_ea - f.start_ea, modtag))
+    if lto:
+        assert r == 1 and went(new) == [b.addr] and said(new, "exact: the %s site at %s+%#x" % (
+            "WARN" if b.warn else "BUG", full, b.addr - f.start_ea)) and said(new, "%s in the log is %s in this file"
+                                                                             % (base, full)), new
+        oops_done.append("%s+off -> %s" % (base, full))
+    else:
+        assert r == 0 and not went(new) and said(new, "no function %s in this file" % base), new
+        oops_done.append("%s+off -> not %s (GCC prints that name in full)" % (base, full))
 # file:line only: one site -> go there; several -> the chooser with exactly those rows, Enter jumps
 per_line = collections.Counter((b.file, b.line) for b in bugs if b.file)
 one = next((k for k, n in per_line.items() if n == 1), None)

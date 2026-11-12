@@ -249,7 +249,8 @@ class Match:
     site: the site found (exact, line), else None.
     label: what the candidates of 'line' / 'ambiguous' / 'mismatch' share ('mm/userfaultfd.c:755', or 'func+0x10' when
     functions of the same name each have a site there).
-    reason: for 'mismatch', why the site at the log's address is not the one the log names."""
+    reason: for 'mismatch', why the site at the log's address is not the one the log names.
+    function: the full name of the function used in this file (foo.123 for the log's foo on a Clang LTO kernel)."""
     status: str
     address: int = None
     site: object = None
@@ -259,6 +260,7 @@ class Match:
     notes: list = field(default_factory=list)
     label: str = None
     reason: str = None
+    function: str = None
 
 
 @dataclass(frozen=True)
@@ -285,16 +287,38 @@ def _same_size(f, size):
     return size is not None and size in (f.printed, f.size)
 
 
+# the suffixes Clang LTO adds to a local function's name, which the kernel's kallsyms leaves out when it prints the
+# name (cut at the first dot): foo.llvm.123, foo.123 (also hex), foo.cfi, foo.cfi_jt. GCC's .part.N, .isra.N,
+# .constprop.N and .cold are printed in full, so foo+0x10 never means foo.part.0.
+_LTO_SUFFIX = re.compile(r"^(?:\.(?:llvm\.[0-9a-f]+|[0-9a-f]+|cfi|cfi_jt))+$")
+
+
+def lto_suffix(full, name):
+    """full is name plus suffixes that Clang LTO adds and the kernel does not print."""
+    return full.startswith(name + ".") and bool(_LTO_SUFFIX.match(full[len(name):]))
+
+
 def _starts(loc, symbols):
-    """[Func] for loc's function: the exact name first; names with a suffix the log leaves out
-    (name.cfi, name.llvm.123, an LTO number) only when no exact-name function contains the offset."""
+    """([Func] that may be loc's function, how many functions have that name). Every function that holds the offset:
+    the ones of exactly that name and those whose name only adds a Clang LTO suffix (lto_suffix; the kernel prints
+    foo.123 and foo as foo), only those whose size is the log's if any is. When none holds the offset (a log from
+    another build), the ones of exactly that name (else the suffixed ones), to list their sites."""
     exact = [_func(c) for c in symbols(loc.function) or []]
-    inside = [c for c in exact if c.size is None or loc.offset < c.size]
-    if inside:
-        return inside, False
-    more = [c for c in map(_func, symbols(loc.function, True) or []) if c.start not in {e.start for e in exact}
-            and (c.size is None or loc.offset < c.size)]
-    return (more, True) if more else (exact, False)
+    seen = {f.start for f in exact}
+    lto = [f for f in map(_func, symbols(loc.function, True) or [])
+           if f.start not in seen and (f.name is None or lto_suffix(f.name, loc.function))]
+    inside = [f for f in exact + lto if f.size is None or loc.offset < f.size]
+    if not inside:
+        return exact or lto, len(exact or lto)
+    return [f for f in inside if _same_size(f, loc.size)] or inside, len(inside)
+
+
+def _used(loc, func):
+    """A note when the function used is not named exactly as the log prints it (Clang LTO suffixes)."""
+    if func.name and func.name != loc.function:
+        return ["%s in the log is %s in this file (Clang LTO: the kernel prints the name without the suffix)" % (
+            loc.function, func.name)]
+    return []
 
 
 def _kind(site):
@@ -325,7 +349,7 @@ def _contradicts(report, site, loc, func=None):
     return None
 
 
-def _mismatch(report, index, site, loc, start, notes, why, symbols):
+def _mismatch(report, index, site, loc, func, notes, why, symbols):
     """A 'mismatch': the sites at the log's own file:line (those in a function of the log's name first), else the
     site at the log's address; nothing to go to."""
     h = report.header
@@ -338,7 +362,8 @@ def _mismatch(report, index, site, loc, start, notes, why, symbols):
     if not cands:
         cands, label = [site], ("%s+%#x" % (loc.function, loc.offset) if loc.function is not None else
                                 "0x%x" % loc.address)
-    return Match("mismatch", None, None, cands, loc, start, notes, label, why)
+    return Match("mismatch", None, None, cands, loc, func.start if func else None, notes, label, why,
+                 func.name or loc.function if func else None)
 
 
 def resolve(report, sites, symbols, module=None, is_module=False):
@@ -368,34 +393,31 @@ def resolve(report, sites, symbols, module=None, is_module=False):
     found_fn = None
     for cur in tries:
         if cur.function is not None and cur.offset is not None:
-            starts, suffixed = _starts(cur, symbols)
+            starts, count = _starts(cur, symbols)
             if not starts:
                 notes.append("no function %s in this file" % cur.function)
                 continue
             hits = [f for f in starts if f.start + cur.offset in by_addr]
-            if len(hits) > 1:  # static functions of the same name, each with a site at this offset
-                hits = [f for f in hits if _same_size(f, cur.size)] or hits
-            if len(hits) > 1 and want_file:
+            if len(hits) > 1 and want_file:  # static functions of the same name, each with a site at this offset
                 hits = [f for f in hits if by_addr[f.start + cur.offset].line == want_line
                         and same_file(by_addr[f.start + cur.offset].file, want_file)] or hits
-            if suffixed and hits:
-                notes.append("matched a function named %s.<suffix> (the log prints the name without it)" % cur.function)
             if len(hits) > 1:
                 return Match("ambiguous", None, None, [by_addr[f.start + cur.offset] for f in hits], cur, None, notes,
                              "%s+%#x" % (cur.function, cur.offset))
             if hits:
                 a = hits[0].start + cur.offset
+                notes += _used(cur, hits[0])
                 bad = _contradicts(report, by_addr[a], cur, hits[0])
                 if bad:
-                    return _mismatch(report, index, by_addr[a], cur, hits[0].start, notes, bad, symbols)
+                    return _mismatch(report, index, by_addr[a], cur, hits[0], notes, bad, symbols)
                 if cur.size is not None and hits[0].size is not None and not _same_size(hits[0], cur.size):
                     notes.append("size in the log %#x, here %#x: another build, but the log's %s line names this "
                                  "site" % (cur.size, hits[0].printed or hits[0].size,
                                            "WARNING" if report.kind == "WARN" else "kernel BUG"))
-                return Match("exact", a, by_addr[a], [by_addr[a]], cur, hits[0].start, notes)
+                return Match("exact", a, by_addr[a], [by_addr[a]], cur, hits[0].start, notes,
+                             function=hits[0].name or cur.function)
             if found_fn is None:
-                pick = [f for f in starts if _same_size(f, cur.size)] or starts
-                found_fn = (cur, pick[0], suffixed, len(starts))
+                found_fn = (cur, starts[0], count)
         elif cur.address is not None:
             if cur.address in by_addr:
                 bad = _contradicts(report, by_addr[cur.address], cur)
@@ -405,9 +427,10 @@ def resolve(report, sites, symbols, module=None, is_module=False):
             notes.append("the log has only the address 0x%x (no symbol), and no BUG/WARN site is there (with KASLR "
                          "the running kernel's addresses differ from the file's)" % cur.address)
     if found_fn is not None:
-        cur, f, suffixed, count = found_fn
+        cur, f, count = found_fn
         st, sz = f.start, f.size
         a = st + cur.offset
+        notes += _used(cur, f)
         if count > 1:
             notes.append("%d functions are named %s; the one%s is used" % (
                 count, cur.function, " whose size matches the log's" if _same_size(f, cur.size) else " found first"))
@@ -420,12 +443,14 @@ def resolve(report, sites, symbols, module=None, is_module=False):
         inside = index.between(st, st + span) if span else []
         if sz and cur.offset >= sz:  # no address of this function: list its sites, go nowhere
             notes.append("%s+%#x is past the end of %s here (%#x bytes): a log from another build?" % (
-                cur.function, cur.offset, cur.function, sz))
+                cur.function, cur.offset, f.name or cur.function, sz))
             if inside:
-                return Match("near", None, None, sorted(inside, key=lambda s: (not at_line(s), s.addr)), cur, st, notes)
+                return Match("near", None, None, sorted(inside, key=lambda s: (not at_line(s), s.addr)), cur, st, notes,
+                             function=f.name or cur.function)
         else:
             inside = sorted(inside, key=lambda s: (not at_line(s), abs(s.addr - a)))
-            return Match("near" if inside else "function", a, None, inside, cur, st, notes)
+            return Match("near" if inside else "function", a, None, inside, cur, st, notes,
+                         function=f.name or cur.function)
     if want_file and want_line is not None:
         cands = index.at_line(want_file, want_line)
         label = "%s:%d" % (want_file, want_line)
@@ -466,9 +491,10 @@ def describe(report, match, func_of):
         out.append("from the log: " + "; ".join(what))
     rows = lambda items: ["  " + site_row(s, func_of) for s in items]
     st = match.status
+    fn = match.function or loc.function if loc is not None else None
     if st == "exact":
         out.append("exact: the %s site at %s (%#x)" % ("WARN" if match.site.warn else "BUG",
-                                                         "%s+%#x" % (loc.function, loc.offset) if loc.function else
+                                                         "%s+%#x" % (fn, loc.offset) if loc.function else
                                                          "the log's address", match.address))
         out += rows([match.site])
     elif st == "near":
@@ -476,19 +502,19 @@ def describe(report, match, func_of):
         n = len(match.candidates)
         if match.address is None:
             out.append("not exact: %s+%#x is past the end of %s in this file; the %d site%s in %s, %sin address order:"
-                       % (loc.function, loc.offset, loc.function, n, "" if n == 1 else "s", loc.function,
+                       % (fn, loc.offset, fn, n, "" if n == 1 else "s", fn,
                           "those at %s:%d first, then " % (report.file, report.line) if same else ""))
             out += rows(match.candidates[:10])
         else:
             out.append("not exact: no BUG/WARN site at %s+%#x (%#x); the %d site%s in %s, %snearest first:"
-                       % (loc.function, loc.offset, match.address, n, "" if n == 1 else "s", loc.function,
+                       % (fn, loc.offset, match.address, n, "" if n == 1 else "s", fn,
                           "those at %s:%d first, then " % (report.file, report.line) if same else ""))
             out += ["%s  (%+#x)" % (r, s.addr - match.address) for r, s in zip(rows(match.candidates[:10]), match.candidates)]
         if len(match.candidates) > 10:
             out.append("  ... %d more" % (len(match.candidates) - 10))
     elif st == "function":
         out.append("not a BUG/WARN site: %s+%#x (%#x) is in a function without one (an oops, not a BUG/WARN trap?)"
-                   % (loc.function, loc.offset, match.address))
+                   % (fn, loc.offset, match.address))
     elif st == "mismatch":
         out.append("mismatch: %s (a log from another build, or two reports in one paste?); not taken as the match"
                    % match.reason)
@@ -518,6 +544,7 @@ def match_record(report, match, func_of):
                       "file": s.file, "line": s.line}
     return {"status": match.status, "address": h(match.address), "site": site(match.site) if match.site else None,
             "candidates": [site(s) for s in match.candidates], "label": match.label, "reason": match.reason,
+            "function": match.function,
             "from": match.loc.record() if match.loc else None,
             "report": {"kind": report.kind, "file": report.file, "line": report.line},
             "frames": [f.record() for f in report.frames], "notes": list(match.notes)}

@@ -42,7 +42,16 @@ FUNCS.update({"folio_unlock": [(0xFFFFFFFF810000A0, 0xD0)],
               "lto_fn": [(0xFFFFFFFF81000600, 0x8)],  # the 8-byte CFI jump-table entry has the plain name
               "no_sites_fn": [(0xFFFFFFFF81000800, 0x100)],
               "nft_do_chain": [(0x10600, 0x6D0)]})
-SUFFIXED = {"lto_fn": [(0xFFFFFFFF81000400, 0x100)]}  # lto_fn.cfi
+SUFFIXED = {"lto_fn": [oops.Func(0xFFFFFFFF81000400, 0x100, None, "lto_fn.cfi")]}
+# Clang LTO (Android GKI 5.10): three static functions the kernel prints as cut_fn: cut_fn, cut_fn.123 (same size) and
+# cut_fn.77 (larger), each with a WARN at +0x20; GCC: gcc_fn and gcc_fn.part.0, printed in full by the kernel
+FUNCS["cut_fn"] = [oops.Func(0xFFFFFFFF81002000, 0x80, 0x80, "cut_fn")]
+SUFFIXED["cut_fn"] = [oops.Func(0xFFFFFFFF81002100, 0x80, 0x80, "cut_fn.123"),
+                      oops.Func(0xFFFFFFFF81002200, 0x90, 0x90, "cut_fn.77")]
+FUNCS["gcc_fn"] = [oops.Func(0xFFFFFFFF81002400, 0x40, 0x40, "gcc_fn")]
+SUFFIXED["gcc_fn"] = FUNCS["gcc_fn.part.0"] = [oops.Func(0xFFFFFFFF81002500, 0x100, 0x100, "gcc_fn.part.0")]
+SITES += [BugSite(0xFFFFFFFF81002020, "lib/cut_a.c", 1, 1), BugSite(0xFFFFFFFF81002120, "lib/cut_b.c", 2, 1),
+          BugSite(0xFFFFFFFF81002220, "lib/cut_c.c", 3, 1), BugSite(0xFFFFFFFF81002560, "lib/gcc.c", 5, 1)]
 # the size the kernel prints is measured to the next symbol: padding after the code counts (st_size 0x9c3, prints 0x9d0)
 FUNCS["padded_fn"] = [oops.Func(0xFFFFFFFF81000900, 0x9C3, 0x9D0, "padded_fn")]
 # two static functions named pad_dup, code sizes 0x40 and 0x48, both printed as 0x50: the code size still picks
@@ -426,8 +435,10 @@ class Resolve(unittest.TestCase):
         rep, m = find("WARNING: CPU: 0 PID: 1 at lib/dup.c:10 dup_fn+0x10")  # the WARNING's file:line picks one
         self.assertEqual((m.status, m.address), ("exact", 0xFFFFFFFF81000210))
         rep, m = find("pc : lto_fn+0x44/0x100")  # the plain name is an 8-byte stub; lto_fn.cfi holds the site
-        self.assertEqual((m.status, m.address), ("exact", 0xFFFFFFFF81000444))
-        self.assertIn("matched a function named lto_fn.<suffix>", m.notes[0])
+        self.assertEqual((m.status, m.address, m.function), ("exact", 0xFFFFFFFF81000444, "lto_fn.cfi"))
+        self.assertEqual(m.notes, ["lto_fn in the log is lto_fn.cfi in this file (Clang LTO: the kernel prints the name "
+                                   "without the suffix)"])
+        self.assertEqual(oops.describe(rep, m, lambda ea: "")[1], "exact: the WARN site at lto_fn.cfi+0x44 (0xffffffff81000444)")
         rep, m = find("pc : lto_fn+0x4/0x8")  # an offset inside the stub: the plain name is used
         self.assertEqual((m.status, m.function_start), ("function", 0xFFFFFFFF81000600))
         rep, m = find("RIP: 0010:0xffffffff8e629bc4")  # no symbol: the address as printed
@@ -435,6 +446,35 @@ class Resolve(unittest.TestCase):
         rep, m = find("RIP: 0010:0xffffffffc0a01234")
         self.assertEqual(m.status, "none")
         self.assertIn("KASLR", m.notes[0])
+
+    def test_lto_names(self):
+        """Clang LTO: the kernel prints foo.123 as foo, so every function that the log's foo can be is tried (the plain
+        one too); GCC's foo.part.0 is printed in full, so foo+off never means it."""
+        for full in ("foo.llvm.12345", "foo.123", "foo.1a2f", "foo.cfi", "foo.cfi_jt", "foo.123.cfi_jt"):
+            self.assertTrue(oops.lto_suffix(full, "foo"), full)
+        for full in ("foo.part.0", "foo.isra.0", "foo.constprop.0", "foo.cold", "foo.part.0.cold", "foo_bar", "foo",
+                     "foobar.1", "foo."):
+            self.assertFalse(oops.lto_suffix(full, "foo"), full)
+        rep, m = find("pc : cut_fn+0x20/0x80")  # cut_fn and cut_fn.123: both 0x80, both a WARN at +0x20
+        self.assertEqual((m.status, m.label, [s.addr for s in m.candidates]),
+                         ("ambiguous", "cut_fn+0x20", [0xFFFFFFFF81002020, 0xFFFFFFFF81002120]))
+        rep, m = find("pc : cut_fn+0x20/0x90")  # the size picks cut_fn.77
+        self.assertEqual((m.status, m.address, m.function), ("exact", 0xFFFFFFFF81002220, "cut_fn.77"))
+        self.assertEqual(m.notes, ["cut_fn in the log is cut_fn.77 in this file (Clang LTO: the kernel prints the name "
+                                   "without the suffix)"])
+        rep, m = find("WARNING: CPU: 0 PID: 0 at lib/cut_b.c:2 cut_fn+0x20/0x80")  # the WARNING's file:line picks one
+        self.assertEqual((m.status, m.address, m.function), ("exact", 0xFFFFFFFF81002120, "cut_fn.123"))
+        rep, m = find("WARNING: CPU: 0 PID: 0 at lib/cut_a.c:1 cut_fn+0x20/0x80")  # ... also the plain-named one
+        self.assertEqual((m.status, m.address, m.function, m.notes), ("exact", 0xFFFFFFFF81002020, "cut_fn", []))
+        rep, m = find("pc : cut_fn+0x88/0x90")  # past the plain one's end, in cut_fn.77 (no site there)
+        self.assertEqual((m.status, m.function_start, m.function), ("near", 0xFFFFFFFF81002200, "cut_fn.77"))
+        self.assertIn("in cut_fn.77, nearest first", oops.describe(rep, m, lambda ea: "")[1])
+        # GCC: gcc_fn+0x60 is past the end of gcc_fn (0x40): another build; never gcc_fn.part.0's site at +0x60
+        rep, m = find("RIP: 0010:gcc_fn+0x60/0x100")
+        self.assertEqual((m.status, m.address, m.site), ("none", None, None))
+        self.assertIn("gcc_fn+0x60 is past the end of gcc_fn here (0x40 bytes): a log from another build?", m.notes)
+        rep, m = find("RIP: 0010:gcc_fn.part.0+0x60/0x100")  # printed in full: found
+        self.assertEqual((m.status, m.address, m.notes), ("exact", 0xFFFFFFFF81002560, []))
 
     def test_no_match(self):
         for text in ("hello", "RIP: 0010:missing_fn+0x10/0x20", "kernel BUG at mm/nowhere.c:1!"):
@@ -505,6 +545,27 @@ def whole_kernel(path):
                 assert m.status == "mismatch" and m.address is None and m.reason and not [
                     n for n in m.notes if "in the kernel image (no [module] after it)" not in n], (hex(b.addr), head, m)
                 contradicted += 1
+    # Clang LTO: the kernel prints foo.123 / foo.llvm.123 / foo.cfi as foo; a log of this build has the cut name. Each
+    # site in such a function is found from the cut name, alone or with its own WARNING / kernel BUG line, or listed
+    # among same-named candidates; never another site
+    cut = cut_listed = 0
+    for b in bugs:
+        name = elf.func(b.addr)
+        base = name.split(".")[0] if name else None
+        if not name or first_at[b.addr] is not b or not oops.lto_suffix(name, base):
+            continue
+        start, size, printed, _ = next(c for c in elf.function_starts(name) if c[0] <= b.addr < c[0] + c[1])
+        at = "%s%s+%#x/%#x%s" % (reg, base, b.addr - start, printed or size, tag)
+        heads = [""] + (["WARNING: CPU: 1 PID: 9 at %s:%d %s+%#x/%#x%s\n" % (b.file, b.line, base, b.addr - start,
+                                                                          printed or size, tag) if b.warn else
+                         "kernel BUG at %s:%d!\n" % (b.file, b.line)] if b.file else [])
+        for head in heads:
+            m = oops.resolve(oops.parse(head + at), index, elf.function_starts, mod, elf.relocatable)
+            assert (m.status, m.address) == ("exact", b.addr) or (m.status == "ambiguous" and b in m.candidates), (
+                hex(b.addr), name, head, m.status, m.address and hex(m.address), m.notes)
+            assert m.status != "exact" or m.function == name, (name, m.function)
+            cut_listed += m.status == "ambiguous"
+        cut += 1
     # a log line at an offset with no site, in functions whose printed size (to the next symbol) is not their ELF size:
     # no size note, as the log of this build prints that size
     padded = 0
@@ -538,10 +599,12 @@ def whole_kernel(path):
         other += m.status == "mismatch"
     print("OK oops on %s: %d of %d BUG/WARN sites in functions found from their %sfunc+0xoff/0xsize line (%d of them "
           "among same-named functions: listed as candidates); %d of them also with their own WARNING / kernel BUG line, "
-          "%d with another line or kind: mismatch; %d functions whose printed size is not their ELF size: no size note; "
+          "%d with another line or kind: mismatch; %d in functions with a Clang LTO suffix also from the name the kernel "
+          "prints (%d of the lookups listed same-named candidates); %d functions whose printed size is not their ELF size: "
+          "no size note; "
           "file:line checked for %d lines; %d logs from another build: mismatch; --oops exit status, output and --json "
-          "checked" % (os.path.basename(path), done, len(bugs), reg, same_name, headed, contradicted, padded, len(lines),
-                       other))
+          "checked" % (os.path.basename(path), done, len(bugs), reg, same_name, headed, contradicted, cut, cut_listed,
+                       padded, len(lines), other))
 
 
 def cli_check(path, elf, bugs, reg, tag):
