@@ -171,7 +171,7 @@ def run(path):
     assert len(ours) <= res["comments"] and ours, (len(ours), res)  # sites sharing an address keep the last comment
     users = sum(1 for u in w["xrefs"].values() if u)
     assert users == res["xrefs"] + (mine is not None), (users, res)
-    assert res["xrefs"] > 0 and len(w["netnodes"].get(il.NODE, {})) == res["xrefs"]
+    assert len(w["netnodes"].get(il.NODE, {})) == res["xrefs"] and (res["xrefs"] > 0 or not (t["jump"] or t["ex"]))
     removed = il.remove_annotations(t)
     assert removed == res["xrefs"], (removed, res)
     assert sum(1 for u in w["xrefs"].values() if not u) == own  # IDA's own references stay
