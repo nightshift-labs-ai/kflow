@@ -44,7 +44,10 @@ w["auto_ok"], w["code"] = False, set()
 before = (dict(w["xrefs"]), dict(w["drefs"]))
 assert m.AnnotateAction().activate(None) == 1
 assert [x for x in log if x[0] == "msg" and "auto-analysis is still running" in x[1]]
-assert [x for x in log if x[0] == "msg" and "sites are not instructions yet" in x[1]]
+# the count names static-key / exception-table sites only (BUG/WARN sites get comments, no references): a module with
+# neither table (Debian arm64 vfat.ko: 5 BUG/WARN sites) has nothing to count and no such line
+refd = bool(m.STATE["tables"].get("jump") or m.STATE["tables"].get("ex"))
+assert bool([x for x in log if x[0] == "msg" and "sites are not instructions yet" in x[1]]) == refd, refd
 assert (w["xrefs"], w["drefs"]) == before, "references added from addresses that are not instructions"
 w["auto_ok"] = True
 w.pop("code")
