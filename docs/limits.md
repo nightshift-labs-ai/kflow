@@ -1,6 +1,6 @@
 # Limits
 
-The full text of the README's [Limits](../README.md#limits) section.
+The full text of the README's [Limits](../README.md#limits) section; WARN fall-through and kernel modules have their own pages ([warnflow.md](warnflow.md), [modules.md](modules.md)).
 
 ## Supported kernels
 
