@@ -445,7 +445,10 @@ class WarnFlowAction(ida_kernwin.action_handler_t):
         finally:
             ida_kernwin.hide_wait_box()
         STATE["wf_last"] = res
-        dec = warnflow_filter(hook.offsets)
+        if res["flow"]:
+            dec = warnflow_filter(hook.offsets)
+        else:  # IDA ignored the hook: __WARN() would have no successor in the function, so no filter
+            dec = "not installed (no site got flow)"
         flush_pseudocode()
         report("WARN fall-through (experimental): %d WARN ud2 sites, flow after %d of them (IDA marks ud2 as the end "
                "of flow: %s); the %d BUG ud2 traps are left alone; function tails added: %d, next instruction already "

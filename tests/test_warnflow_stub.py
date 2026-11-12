@@ -181,6 +181,8 @@ class IDP_Hooks:
 
     def hook(self):
         assert hasattr(self, "_hk"), "IDP_Hooks.__init__ was not called"
+        if not w.get("hook_ok", True):  # an IDA that refuses the hook
+            return False
         w["listeners"].append(self)
         return True
 
@@ -223,7 +225,7 @@ def emulate(ea):
             w["by_from"][ea].discard(to)
     w["flow"].discard(ea + size)
     insn = Insn(ea, size, itype)
-    for h in list(w["listeners"]):
+    for h in ([] if w.get("ignore_hooks") else list(w["listeners"])):  # ignore_hooks: an IDA that never calls them
         if h.ev_emu_insn(insn):
             break
     else:
@@ -451,6 +453,31 @@ def annotate_remove():
 
 ar_off = annotate_remove()
 assert snap(m) == pre, "Annotate / Remove touch nothing of WARN fall-through"
+exp_tails = {h for h, (he, s) in HOLES.items() if traps[s] and (ORPHAN_FN is None or h != ORPHAN_FN[1])}
+
+# ---- 0. self-checks (review s151 item 3): IDA refuses the hook; IDA accepts it but never calls it ----
+w["hook_ok"] = False
+assert m.WarnFlowAction().activate(None) == 0
+assert msgs("kflow: IDA did not accept the processor hook; nothing was changed.")
+assert snap(m) == pre and m.STATE["wf"] is None and m.STATE["wf_filter"] is None and not w["emulated"], "nothing changed"
+w["hook_ok"] = True
+w["ignore_hooks"] = True
+assert m.WarnFlowAction().activate(None) == 1
+r0 = m.STATE["wf_last"]
+assert r0["sites"] == len(EXP_WARN) and r0["flow"] == 0 and r0["tails"] == 0, r0
+assert r0["tail_failed"] == len(exp_tails), (r0, len(exp_tails))  # the code after those traps was never reached
+assert msgs("kflow: IDA added no flow after any of the %d WARN sites: the processor hook had no effect in this IDA "
+            "version." % len(EXP_WARN))
+assert msgs("decompiler part not installed (no site got flow)")
+assert not w["filters"] and m.STATE["wf_filter"] is None, "no decompiler filter when no site got flow"
+assert len(w["listeners"]) == 1 and recorded(m, 1) == EXP_WARN and not recorded(m, 2)
+assert m.WarnFlowOffAction().activate(None) == 1, "Remove undoes the rest"
+assert snap(m) == pre and m.STATE["wf"] is None and m.STATE["wf_filter"] is None
+w["ignore_hooks"] = False
+for k in ("hooks_made", "tail_calls", "reanalysed"):
+    del w[k][:]
+del log[:]
+hx_log["flushed"] = 0
 
 # ---- 1. flow after exactly the WARN sites, never after a BUG trap ----
 assert m.WarnFlowAction().activate(None) == 1
@@ -463,7 +490,6 @@ assert not on["flow"] & {s + 2 for s in EXP_BUG}, "flow after a BUG trap"
 assert res["sites"] == res["flow"] == len(EXP_WARN), res
 tails = recorded(m, 2)
 assert recorded(m, 1) == EXP_WARN and len(on["node"]) == len(EXP_WARN | tails)
-exp_tails = {h for h, (he, s) in HOLES.items() if traps[s] and (ORPHAN_FN is None or h != ORPHAN_FN[1])}
 assert tails == exp_tails and res["tails"] == len(exp_tails), (len(tails), len(exp_tails), res)
 assert res["other_func"] == (ORPHAN_FN is not None) and res["tail_failed"] == 0, res
 assert res["no_func"] == sum(1 for s in EXP_WARN if piece_at(s) is None), res
@@ -557,6 +583,14 @@ m, p = load_plugin()
 assert msgs("processor hook installed for %d WARN sites, decompiler part on; all of them have flow" % len(EXP_WARN))
 replan(traps)
 assert w["flow"] == on["flow"]
+p.term()  # the next load: IDA refuses the hook; the record stays, nothing is installed, and the log says so
+close_database()
+w["hook_ok"] = False
+m, p = load_plugin()
+assert msgs("WARN fall-through is on in this database, but IDA did not accept the processor hook")
+assert not w["listeners"] and not w["filters"] and m.STATE["wf"] is None and m.STATE["wf_filter"] is None
+assert snap(m)["node"] == on["node"]
+w["hook_ok"] = True
 
 # ---- fail soft: Hex-Rays refuses the declaration / the filter / is not there; the disassembly part stays ----
 for how in ("udc_ok", "install_raises", "hx_ok"):
