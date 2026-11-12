@@ -395,7 +395,10 @@ def summary(elf, t):
 
 def row_count(text):
     """--limit: a whole number of rows, 0 or more (0 prints only the '... N more' line)."""
-    value = int(text)
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError("must be a whole number, 0 or more, not %r" % text) from None
     if value < 0:
         raise argparse.ArgumentTypeError("must be 0 or more, not %s" % text)
     return value

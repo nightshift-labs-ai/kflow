@@ -344,6 +344,9 @@ class CliArgs(unittest.TestCase):
     def test_limit_zero_is_allowed(self):
         from kflow import cli
         self.assertEqual((cli.row_count("0"), cli.row_count("-0"), cli.row_count("7")), (0, 0, 7))
+        import argparse
+        with self.assertRaisesRegex(argparse.ArgumentTypeError, "whole number"):
+            cli.row_count("1e3")
 
     def test_json_records_old_ex_layouts(self):
         """--json records for the pre-5.16 layouts: no data word (type null), an x86 handler (review s170 n2)."""
