@@ -322,5 +322,23 @@ class Module(unittest.TestCase):
                     Elf(q)
 
 
+class Versions(unittest.TestCase):
+    """ida-plugin.json, kflow.__version__ and the newest dated CHANGELOG heading must agree (the index keys releases
+    by the manifest version); an "Unreleased" heading may sit above the newest release."""
+
+    def test_versions_agree(self):
+        import json
+        import re
+        root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+        with open(os.path.join(root, "ida-plugin.json")) as fh:
+            manifest = json.load(fh)["plugin"]["version"]
+        with open(os.path.join(root, "kflow", "__init__.py")) as fh:
+            code = re.search(r'__version__ = "([^"]+)"', fh.read()).group(1)
+        with open(os.path.join(root, "CHANGELOG.md")) as fh:
+            heads = re.findall(r"^## (\S+)", fh.read(), re.M)
+        newest = next(h for h in heads if h != "Unreleased")
+        self.assertEqual(manifest, code)
+        self.assertEqual(newest, "v" + manifest)
+
 if __name__ == "__main__":
     unittest.main()
