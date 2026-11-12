@@ -1,26 +1,44 @@
 """WARN fall-through (kflow/warnflow.py, experimental) through the plugin's two actions, on fake ida_* modules backed by
-a kernel ELF. It proves the wiring against fakes that model what the IDA SDK documents, not that IDA behaves like them.
+a kernel ELF. It proves the wiring against fakes built from what the IDA SDK documents, with the simplifications listed
+below; it does not show that IDA behaves like them.
 
-What the fakes model (and the shortcuts they take):
+What the fakes model:
   * auto-analysis: plan_ea() queues an address; auto_wait() re-emulates each queued instruction the way the SDK says
     IDA does: first it drops the item's non-user code xrefs and the flow bit of the next item (xref.hpp: on reanalysis
     all non-user xrefs are deleted; ordinary flow lives in the flags), then it calls the hooked IDP_Hooks listeners in
     order until one returns non-zero, else the processor module's own emulation adds flow unless the instruction is a
     stop (ud2 0F 0B, jmp EB/E9, ret C3). Flow to an address makes IDA disassemble it there (it becomes code).
-  * functions: from the ELF function symbols, except that IDA builds a function from the code reachable from its
-    entry. The fake has no disassembler, so it leaves out only the clearest case: a direct jmp right after a ud2 trap
-    (the out-of-line "ud2; jmp back" pattern) that jumps back into the same function is reached only through the
-    trap, so it is not in any function and not even disassembled. Every other next instruction is taken as reached
-    from elsewhere in the function. Real IDA may leave out more (a review counted 6,740 of the demo kernel's 7,504
-    WARN sites with an unreachable next instruction), so real tail counts are likely higher. One such orphan jmp after
-    a WARN site is made a function of its own (as IDA's final pass may do) to check that kflow never takes code of
-    another function. append_func_tail fails when any byte of the range already belongs to a function or the start is
-    not code; with BADADDR the end is where the orphan code ends. remove_func_tail removes only a tail (never the
-    entry chunk) of the given function. reanalyze_function re-emulates the function's trap sites.
+  * function chunks: get_func returns the function's entry chunk, get_fchunk the chunk around an address (a tail has
+    FUNC_TAIL and owner; an entry chunk has no owner: in funcs.hpp it shares a union with the frame fields),
+    get_next_fchunk the first chunk after an address. append_func_tail fails when any byte of the range already
+    belongs to a function; with BADADDR the end is where the orphan code ends. remove_func_tail removes the whole tail
+    chunk around the address (never an entry chunk). reanalyze_function re-emulates the trap sites of the function's
+    own chunks.
   * hooks: IDP_Hooks records the hook flags it was made with, hook() appends to the listener list (twice if called
-    twice), unhook() removes. A database close drops listeners made without HKCB_GLOBAL.
+    twice; it can be told to refuse), unhook() removes. A database close drops listeners made without HKCB_GLOBAL.
   * Hex-Rays: udc_filter_t records init(decl) (it cannot parse the declaration: it accepts it unless told to refuse);
     install_microcode_filter installs/removes.
+
+Simplifications (where the fake is knowingly not IDA):
+  * functions come from the ELF function symbols, not from IDA's analysis (a stripped file has none: every site is
+    then in no function).
+  * no disassembler, so only the clearest unreachable code is left out of functions: a direct jmp right after a ud2
+    trap that jumps back into the same function (the out-of-line "ud2; jmp back" pattern), and the second trap of
+    "WARN ud2; WARN ud2; jmp back" (reached only through the first). Neither is in a function or disassembled. Every
+    other next instruction counts as reached from elsewhere in the function. Real IDA may leave out more (a review
+    counted 6,740 of the demo kernel's 7,504 WARN sites with an unreachable next instruction), so real tail counts are
+    likely higher. One orphan jmp after a WARN site is made a function of its own (as IDA's final pass may do) to
+    check that kflow never takes code of another function.
+  * adjacent chunks never merge, except in the test's merge mode ("next": an appended tail merges with the following
+    chunk of the same function; "both": with the previous one too). Whether IDA merges them is not known.
+  * append_func_tail accepts a range that is not code, and remove_func_tail does not check that pfn owns the tail:
+    the SDK does not say they refuse, so kflow's own checks are what the test exercises.
+  * flow: insn_t.add_cref(next, 0, fl_F) inside the hook is ordinary flow (the next item's flow flag; it becomes
+    code); ida_xref.add_cref(from, to, fl_F) outside a hook (test_ida_stub's fake) is only recorded as a plain code
+    xref, not as flow, so flow added outside the hook would not show here (a review made it real flow and the
+    test still caught that mutant).
+  * reanalysis re-emulates only the trap sites, not every instruction; auto_is_ok() is True unless the test sets it;
+    undo/redo is simulated by deleting/restoring the record (and calling ev_ending_undo by hand where IDA would).
 Usage: python3 tests/test_warnflow_stub.py <kernel.elf>   (SKIPs without a path)"""
 import bisect
 import importlib
