@@ -80,9 +80,10 @@ def file_symbols():
 _MODULE = {}
 
 
-def module_elf():
-    """The input file as the command line loads it, when it is a kernel module (ET_REL) still on disk: (Elf, its
-    jump-table sites); else None. Read once per path, size and mtime."""
+def module_sites():
+    """For a kernel module (ET_REL) still on disk at the input path: one (offset of the site in its section, imported
+    name or None, key label or None) per jump-table entry as the command line decodes it; else None. Only these
+    tuples are kept (not the parsed file), once per path, size and mtime."""
     path = ida_nalt.get_input_file_path() or ""
     try:
         st = os.stat(path)
@@ -98,16 +99,20 @@ def module_elf():
             if head[:4] == b"\x7fELF" and head[16:18] == b"\x01\x00":
                 from .cli import Elf, load
                 elf = Elf(path)
-                _MODULE[key] = (elf, load(elf).get("jump", []))
+                secs = sorted(elf.sections.values())
+                starts = [x[0] for x in secs]
+
+                def place(ea):
+                    i = bisect.bisect_right(starts, ea) - 1
+                    return ea - secs[i][0] if i >= 0 and ea < secs[i][1] else None
+                sites = []
+                for c in load(elf).get("jump", []):
+                    ext = elf.extern_of(c.key)
+                    sites.append((place(c.code), ext[0] if ext else None, elf.key_name(c.key) if ext else None))
+                _MODULE[key] = sites
         except Exception:  # noqa: BLE001  (unreadable or a layout the command line rejects: no module labels)
             _MODULE[key] = None
     return _MODULE[key]
-
-
-def _place(ea, getseg):
-    """Offset of ea in its segment/section, or None."""
-    seg = getseg(ea)
-    return None if seg is None else ea - seg[0]
 
 
 def _outside_or_extern(ea):
@@ -117,35 +122,24 @@ def _outside_or_extern(ea):
 
 def module_key_labels(jumps):
     """{jump entry address: (key label, imported name)} for a kernel module's static keys that live in an imported
-    symbol at an offset IDA cannot name. IDA's ELF loader puts the imports one after another in its extern segment,
-    so after relocation "import + offset" (a tracepoint's key is __tracepoint_X + 8; arrays like nf_hooks_needed)
-    can land on ANOTHER import and get its name. The command line gives each import a 64 KB slot and names these
-    keys exactly; its label is used for every site whose key IDA put in an extern segment or outside all segments,
-    but only when both decodes have the same entries: same count and each site at the same offset in its section."""
-    m = module_elf()
-    if m is None or not jumps:
+    symbol at an offset IDA cannot name. IDA's ELF loader puts the imports in an extern segment, probably one after
+    another, so after relocation "import + offset" (a tracepoint's key is __tracepoint_X + 8; arrays like
+    nf_hooks_needed) can land on ANOTHER import and get its name. The command line gives each import a 64 KB slot and
+    names these keys exactly; its label is used for every site whose key IDA put in an extern segment or outside all
+    segments, but only when both decodes have the same entries: same count and each site at the same offset in its
+    section."""
+    if not jumps:
         return {}
-    elf, cli_jumps = m
-    if len(cli_jumps) != len(jumps):
+    sites = module_sites()
+    if sites is None or len(sites) != len(jumps):
         return {}
-    secs = sorted(elf.sections.values())
-    starts = [a for a, e in secs]
-
-    def cli_seg(ea):
-        i = bisect.bisect_right(starts, ea) - 1
-        return secs[i] if i >= 0 and ea < secs[i][1] else None
-
-    def ida_seg(ea):
-        seg = ida_segment.getseg(ea)
-        return None if seg is None else (seg.start_ea, seg.end_ea)
     out = {}
-    for j, c in zip(jumps, cli_jumps):
-        a, b = _place(j.code, ida_seg), _place(c.code, cli_seg)
-        if a is None or a != b:
+    for j, (where, name, label) in zip(jumps, sites):
+        seg = ida_segment.getseg(j.code)
+        if seg is None or where is None or j.code - seg.start_ea != where:
             return {}  # the two decodes do not line up: keep IDA's own names
-        ext = elf.extern_of(c.key)
-        if ext is not None and _outside_or_extern(j.key):
-            out[j.entry] = (elf.key_name(c.key), ext[0])
+        if name is not None and _outside_or_extern(j.key):
+            out[j.entry] = (label, name)
     return out
 
 
