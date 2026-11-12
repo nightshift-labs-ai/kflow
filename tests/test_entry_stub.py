@@ -99,7 +99,7 @@ def fake_hexrays(available=True):
             hx_log["hooked"] -= 1
             return True
     hx.Hexrays_Hooks = Hexrays_Hooks
-    hx.init_hexrays_plugin = lambda flags=0: available
+    hx.init_hexrays_plugin = lambda flags=0: available() if callable(available) else available
     hx.clear_cached_cfuncs = lambda: hx_log.update(flushed=hx_log["flushed"] + 1)
     sys.modules["ida_hexrays"] = hx
 
@@ -285,13 +285,44 @@ w["netnodes"][il.NODE] = saved
 p.term()
 assert hx_log["hooked"] == 0 and m.STATE["hx"] is None and m.STATE["pseudo"] is None
 
+# a new IDA session on the annotated database in which the decompiler loads after kflow (review s158 F3): IDAPython
+# initialises its Hex-Rays bindings on ui_plugin_loaded, so init_hexrays_plugin() is False at kflow's init and True
+# later; when a plugin loads after that, the pseudocode hook goes in and the comments show without Annotate again
+hx_now = [False]
+fake_hexrays(available=lambda: hx_now[0])
+n0 = len(log)
+m, p = load_plugin()
+assert m.STATE["hx"] is None and hx_log["hooked"] == 0
+late = [x[1] for x in log[n0:] if x[0] == "ui_hook"]
+
+
+def plugin_loaded():
+    for h in late:
+        h.plugin_loaded(None)
+
+
+plugin_loaded()  # another plugin, still no decompiler: nothing
+assert m.STATE["hx"] is None and hx_log["hooked"] == 0
+hx_now[0] = True  # the decompiler loads
+plugin_loaded()
+assert m.STATE["hx"] is not None and hx_log["hooked"] == 1, "no pseudocode hook after the decompiler loaded late"
+assert msgs("decompiler loaded: pseudocode comments on")
+for kind, ea, text in exact:
+    assert decompile([ea])[ea] == text, (kind, text)
+plugin_loaded()  # more plugins later: still one hook
+assert hx_log["hooked"] == 1
+p.term()
+assert hx_log["hooked"] == 0 and [x[1] for x in log[n0:] if x[0] == "ui_unhook"] == late and len(late) == 1
+seen = len(msgs("database annotated earlier"))
+fake_hexrays()
 # a new IDA session on the annotated database: the first function printed reads the tables again
 m, p = load_plugin()
 il = m.idalayer
 assert hx_log["hooked"] == 1 and il.annotated()
+assert not [x for x in log[n0:] if x[0] == "ui_hook" and x[1] not in late], "no UI hook when the decompiler is there"
 for kind, ea, text in exact:
     assert decompile([ea])[ea] == text, (kind, text)
-assert len(msgs("database annotated earlier")) == 1
+assert len(msgs("database annotated earlier")) == seen + 1
 # rebase: the segments change, the map is rebuilt from the tables at their new addresses; old addresses show nothing
 delta = 0x200000
 real_scan, scans = il.scan, []
@@ -344,5 +375,6 @@ assert hx_log["hooked"] == 0 and not any(c.startswith("kflow") for c in w["cmts"
 for kind, ea, text in shown_texts:
     print("  pseudocode, %s site 0x%X:  %s" % (kind, ea, text))
 print("OK pseudocode: comments on BUG/WARN %s, static key %s, NOP static key %s, exception %s; none before Annotate, "
-      "after Remove or at stale addresses after a rebase; no decompiler: no hook; hook error reported once"
+      "after Remove or at stale addresses after a rebase; no decompiler: no hook; decompiler loaded after kflow: hooked "
+      "then; hook error reported once"
       % tuple("yes" if s is not None else "none in file" for s in (bug, key, nop, ex)))

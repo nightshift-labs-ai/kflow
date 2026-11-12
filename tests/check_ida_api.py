@@ -46,6 +46,7 @@ MEMBERS = [("ida_xref", "xrefblk_t", m) for m in ("first_from", "next_from", "to
     [("ida_segment", "segment_t", m) for m in ("start_ea", "end_ea", "perm", "type")] + \
     [("ida_netnode", "netnode", m) for m in ("altset", "altval", "altfirst", "altnext", "index", "kill")] + \
     [("ida_kernwin", "Choose", m) for m in ("Show", "CHCOL_HEX", "NOTHING_CHANGED")] + \
+    [("ida_kernwin", "UI_Hooks", m) for m in ("plugin_loaded", "hook", "unhook")] + \
     [("ida_hexrays", "Hexrays_Hooks", m) for m in ("func_printed", "hook", "unhook")] + \
     [("ida_hexrays", "cfunc_t", m) for m in ("get_eamap", "get_pseudocode", "find_item_coords", "entry_ea")] + \
     [("ida_hexrays", "eamap_t", m) for m in ("__iter__", "__getitem__")] + [("ida_hexrays", "cinsnptrvec_t", "__iter__")] + \
@@ -70,6 +71,7 @@ SHAPES = [("ida_hexrays", "Hexrays_Hooks", r"def func_printed\(self, cfunc: cfun
           ("ida_hexrays", "cinsnptrvec_t", r"def __getitem__\(self, i: int\) -> cinsn_t:"),
           ("ida_hexrays", None, r"def clear_cached_cfuncs\(\) -> None:"),
           ("ida_hexrays", None, r"def init_hexrays_plugin\(flags: int = 0\) -> bool:"),
+          ("ida_kernwin", "UI_Hooks", r"def plugin_loaded\(self, plugin_info: plugin_info_t\) -> None:"),
           ("ida_pro", "strvec_t", r"def __getitem__\(self, i: int\) -> simpleline_t:"), ("ida_lines", None, r"def COLSTR\(str: Any, tag: Any\)"),
           ("ida_funcs", None, r"def get_func\(ea: ida_idaapi.ea_t\) -> Optional\[func_t\]:"),
           ("ida_segment", None, r"def get_segm_qty\(\) -> int:"), ("ida_segment", None, r"def getnseg\(n: int\) -> Optional\[segment_t\]:"),

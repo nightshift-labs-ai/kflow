@@ -28,10 +28,11 @@ if HERE not in sys.path:
 from kflow import __version__, idalayer  # noqa: E402
 
 ISSUES_URL = "https://github.com/nightshift-labs-ai/kflow/issues"
-# pseudo: the sites by address for the pseudocode hook (built by Annotate, rebuilt after a rebase); hx: the hook.
+# pseudo: the sites by address for the pseudocode hook (built by Annotate, rebuilt after a rebase); hx: the hook;
+# hx_late: a UI hook that tries it again when a plugin loads, while the decompiler was not there at init.
 # wf / wf_filter: the WARN fall-through processor hook and decompiler filter, only while it is on for the open database;
 # wf_last: its last counts.
-STATE = {"tables": None, "pseudo": None, "hx": None, "hx_error": False, "wf": None, "wf_filter": None,
+STATE = {"tables": None, "pseudo": None, "hx": None, "hx_error": False, "hx_late": None, "wf": None, "wf_filter": None,
          "wf_error": False, "wf_last": None}
 NOP_WINDOW = 16  # bytes: how far a static-key site without a statement of its own may be from the next one that has one
 
@@ -195,7 +196,36 @@ def hook_pseudocode():
     return STATE["hx"] is not None
 
 
+class LateHexrays(ida_kernwin.UI_Hooks):
+    """The decompiler may load after kflow: IDAPython initialises its Hex-Rays bindings when the decompiler plugin
+    loads (ui_plugin_loaded in its py_hexrays.hpp). Until the pseudocode hook is in, try it again whenever a plugin
+    loads, so a database annotated earlier shows its comments without running Annotate again."""
+
+    def plugin_loaded(self, plugin_info):
+        try:
+            if STATE["hx"] is None and hook_pseudocode() and idalayer.annotated():
+                report("decompiler loaded: pseudocode comments on (display only)")
+        except Exception:  # noqa: BLE001  a UI hook must never break plugin loading
+            pass
+
+
+def hook_pseudocode_later():
+    """At init, when there was no decompiler yet: the UI hook above (kept until kflow unloads)."""
+    try:
+        late = LateHexrays()
+        if late.hook():
+            STATE["hx_late"] = late
+    except Exception:  # noqa: BLE001  kflow works without pseudocode comments
+        STATE["hx_late"] = None
+
+
 def unhook_pseudocode():
+    late, STATE["hx_late"] = STATE["hx_late"], None
+    if late is not None:
+        try:
+            late.unhook()
+        except Exception:  # noqa: BLE001
+            traceback.print_exc()
     hooks, STATE["hx"] = STATE["hx"], None
     STATE["pseudo"] = None
     STATE["hx_error"] = False  # a later session reports its own first error
@@ -529,7 +559,8 @@ class KflowPlugin(ida_idaapi.plugin_t):
         for name, label, handler in ACTIONS:
             ida_kernwin.register_action(ida_kernwin.action_desc_t(name, label, handler()))
             ida_kernwin.attach_action_to_menu("Edit/Plugins/", name, ida_kernwin.SETMENU_APP)
-        hook_pseudocode()
+        if not hook_pseudocode():
+            hook_pseudocode_later()
         warnflow_resume()
         report("%s loaded" % __version__)
         return ida_idaapi.PLUGIN_KEEP

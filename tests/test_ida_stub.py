@@ -247,7 +247,16 @@ def install_ui(w, log):
             log.append(("show", self.title, self.OnGetSize()))
             return 0
 
-    kw.action_handler_t, kw.action_desc_t, kw.Choose = action_handler_t, action_desc_t, Choose
+    class UI_Hooks:  # the test fires the events itself on the hooks logged as ("ui_hook", hooks)
+        def hook(self):
+            log.append(("ui_hook", self))
+            return True
+
+        def unhook(self):
+            log.append(("ui_unhook", self))
+            return True
+
+    kw.action_handler_t, kw.action_desc_t, kw.Choose, kw.UI_Hooks = action_handler_t, action_desc_t, Choose, UI_Hooks
     fn = types.ModuleType("ida_funcs")
     fn.get_func_name = lambda ea: elf.func(ea) or ""
     fstarts = [f[0] for f in elf.funcs]
