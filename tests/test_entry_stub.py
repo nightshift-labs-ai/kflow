@@ -219,6 +219,13 @@ if one is not None:
     want = next(b.addr for b in bugs if (b.file, b.line) == one)
     assert r == 1 and went(new) == [want] and said(new, "one BUG/WARN site at %s:%d" % one), new
     oops_done.append("%sfile:line (one site) -> 0x%X" % ("" if warn1 else "kernel BUG at ", want))
+    # the same line, but the log names a function this file does not have: listed, not jumped to (review s157 m2)
+    r, new = ask(("WARNING: CPU: 0 PID: 1 at %s:%d kflow_other_fn+0x10/0x20" if warn1 else
+                  "kernel BUG at %s:%d!\n" + reg + "kflow_other_fn+0x10/0x20") % one)
+    assert r == 1 and not went(new) and [x[:2] for x in new if x[0] == "show"] == [
+        ("show", "kflow: BUG/WARN sites at %s:%d" % one)] and [x for x in new if x[0] == "warning"
+                                                               and "kflow_other_fn+0x10 is not in this file" in x[1]], new
+    oops_done.append("the same with a function not in this file -> listed, no jump")
 many = max(per_line, key=per_line.get) if per_line and max(per_line.values()) > 1 else None
 if many is not None:
     want = sorted(b.addr for b in bugs if (b.file, b.line) == many)

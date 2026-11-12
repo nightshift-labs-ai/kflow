@@ -409,6 +409,16 @@ class Resolve(unittest.TestCase):
         self.assertEqual((m.status, m.address, m.reason), ("mismatch", None, "the site at mm/filemap.c:1499 is a BUG, "
                                                                              "but the log reports a WARN"))
         self.assertEqual(find("kernel BUG at mm/filemap.c:1499!")[1].status, "line")
+        # the function the log names is not in this file (another build, another file): its file:line's one site is
+        # listed, not gone to (review s157 m2)
+        for text in ("WARNING: CPU: 0 PID: 1 at lib/cut_c.c:3 missing_fn+0x10/0x20",
+                     "WARNING: CPU: 0 PID: 1 at lib/cut_c.c:3 no_sites_fn+0x100/0x200",  # past its end here
+                     "kernel BUG at mm/filemap.c:1499!\nRIP: 0010:missing_fn+0x10/0x20"):
+            rep, m = find(text)
+            fn = text.split()[-1].split("+")[0] if "missing" not in text else "missing_fn"
+            self.assertEqual((m.status, m.address, m.site, len(m.candidates)), ("mismatch", None, None, 1), text)
+            self.assertTrue(m.reason.startswith("the log's %s+0x" % fn) and "is not in this file, so the one site at "
+                            in m.reason, m.reason)
 
     def test_ambiguous_file_line(self):
         for text in ("mm/userfaultfd.c:755", "userfaultfd.c:755", "[  12.3] mm/userfaultfd.c:755"):

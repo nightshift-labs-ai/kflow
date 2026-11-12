@@ -454,9 +454,14 @@ def resolve(report, sites, symbols, module=None, is_module=False):
     if want_file and want_line is not None:
         cands = index.at_line(want_file, want_line)
         label = "%s:%d" % (want_file, want_line)
+        named = next((t for t in tries if t.function is not None and t.offset is not None), None)
         if len(cands) == 1:
             if report.kind in ("WARN", "BUG") and report.kind != _kind(cands[0]):
                 why = "the site at %s is a %s, but the log reports a %s" % (label, _kind(cands[0]), report.kind)
+                return Match("mismatch", None, None, cands, loc, None, notes, label, why)
+            if named is not None:  # the function the log names is not here: that line's site may be another one
+                why = "the log's %s+%#x is not in this file, so the one site at %s may be another one" % (
+                    named.function, named.offset, label)
                 return Match("mismatch", None, None, cands, loc, None, notes, label, why)
             return Match("line", cands[0].addr, cands[0], cands, loc, None, notes, label)
         if cands:
