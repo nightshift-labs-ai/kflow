@@ -24,7 +24,12 @@ idapro.close_database = lambda save: calls.append(("close", save))
 sys.modules["idapro"] = idapro
 import kflow_headless as H  # noqa: E402
 
-assert H.main([sys.argv[1]]) == 0
+import contextlib, io  # noqa: E402
+out = io.StringIO()
+with contextlib.redirect_stdout(out):
+    assert H.main([sys.argv[1]]) == 0
+print(out.getvalue(), end="")
+assert "jump references added: " in out.getvalue() and "static-key site -> key references: " in out.getvalue(), out.getvalue()
 assert any(c.startswith("kflow: ") for c in w["cmts"].values())
 assert H.main([sys.argv[1], "--remove", "--no-analysis"]) == 0
 assert calls == [("open", True), ("close", True), ("open", False), ("close", True)], calls
