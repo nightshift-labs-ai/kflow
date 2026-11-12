@@ -166,6 +166,46 @@ Code: 28 00 00 00 75 05 48 83 c4 28 c3 e8 c1 17 00 00 90 48 89 f8 48 89 f7 48 89
 RSP: 002b:00007ffd4e1d6c18 EFLAGS: 00000246 ORIG_RAX: 0000000000000010
  </TASK>
 """
+# syzbot symbolizes a %pS that lies in inlined code by printing its line once per inlined frame, innermost first, as
+# 'func file:line [inline]' (no address), then once with the function+offset (review s161 MAJOR 1; as in its 'WARNING
+# in hlock_class' reports): the WARNING line and the RIP line both. The WARN at mm/userfaultfd.c:755 is in mfill_atomic(),
+# which the MemLens demo kernel inlines into mfill_atomic_copy and three other functions; the caller's line is made up
+SYZBOT_INLINE = SYZBOT.replace(
+    "WARNING: CPU: 1 PID: 5850 at mm/userfaultfd.c:755 mfill_atomic_copy+0x674/0x9d0 mm/userfaultfd.c:755\n",
+    "WARNING: CPU: 1 PID: 5850 at mm/userfaultfd.c:755 mfill_atomic mm/userfaultfd.c:755 [inline]\n"
+    "WARNING: CPU: 1 PID: 5850 at mm/userfaultfd.c:755 mfill_atomic_copy+0x674/0x9d0 mm/userfaultfd.c:887\n").replace(
+    "RIP: 0010:mfill_atomic_copy+0x674/0x9d0 mm/userfaultfd.c:755\n",
+    "RIP: 0010:mfill_atomic mm/userfaultfd.c:755 [inline]\nRIP: 0010:mfill_atomic_copy+0x674/0x9d0 mm/userfaultfd.c:887\n")
+# the same with __warn()'s 6.19 format, the rest of the line after each frame (syzbot keeps what follows the symbol)
+SYZBOT_INLINE_619 = SYZBOT_INLINE.replace(
+    "WARNING: CPU: 1 PID: 5850 at mm/userfaultfd.c:755 mfill_atomic mm/userfaultfd.c:755 [inline]\n",
+    "WARNING: mm/userfaultfd.c:755 at mfill_atomic mm/userfaultfd.c:755 [inline], CPU#1: syz.0.17/5850\n").replace(
+    "WARNING: CPU: 1 PID: 5850 at mm/userfaultfd.c:755 mfill_atomic_copy+0x674/0x9d0 mm/userfaultfd.c:887\n",
+    "WARNING: mm/userfaultfd.c:755 at mfill_atomic_copy+0x674/0x9d0 mm/userfaultfd.c:887, CPU#1: syz.0.17/5850\n")
+# review s161's paste on the MemLens demo kernel: the WARN site kernel/sched/sched.h:1686 at update_rq_clock+0x13d
+# (0xffffffff8e30df4d; lockdep_assert_rq_held() inlined) and update_rq_clock's size are that kernel's; the caller's line,
+# the call trace and the register values are made up
+SYZ_SCHED = """\
+------------[ cut here ]------------
+WARNING: CPU: 0 PID: 5100 at kernel/sched/sched.h:1686 lockdep_assert_rq_held kernel/sched/sched.h:1686 [inline]
+WARNING: CPU: 0 PID: 5100 at kernel/sched/sched.h:1686 update_rq_clock+0x13d/0x1a0 kernel/sched/core.c:790
+Modules linked in:
+CPU: 0 UID: 0 PID: 5100 Comm: syz-executor104 Not tainted 6.12.0-syzkaller #0
+Hardware name: Google Google Compute Engine/Google Compute Engine, BIOS Google 09/13/2024
+RIP: 0010:lockdep_assert_rq_held kernel/sched/sched.h:1686 [inline]
+RIP: 0010:update_rq_clock+0x13d/0x1a0 kernel/sched/core.c:790
+Code: 48 8b 7c 24 10 e8 c5 f2 ff ff 49 89 c4 e9 1b fc ff ff e8 40 59 25 00 <0f> 0b 49 c7 c4 f2 ff ff ff e9 0d fc ff ff
+RSP: 0018:ffffc90003a77a80 EFLAGS: 00010293
+RAX: ffffffff81f3a1b4 RBX: 0000000000000000 RCX: ffff888028138000
+Call Trace:
+ <TASK>
+ __schedule+0x3f0/0xbe0 kernel/sched/core.c:6600
+ schedule+0x27/0xc0 kernel/sched/core.c:6781
+ do_syscall_x64 arch/x86/entry/common.c:52 [inline]
+ do_syscall_64+0xcd/0x1b0 arch/x86/entry/common.c:83
+ entry_SYSCALL_64_after_hwframe+0x77/0x7e
+ </TASK>
+"""
 
 # panic_on_warn (kernel/panic.c, 6.12): __warn() prints the WARNING report (show_regs: registers, call trace), then
 # check_panic_on_warn("kernel") calls panic() before the end marker: 'Kernel panic - not syncing: kernel: panic_on_warn
@@ -572,6 +612,33 @@ class Resolve(unittest.TestCase):
         self.assertEqual(lines[:2], ["from the log: WARNING at mm/userfaultfd.c:755; RIP: mfill_atomic_poison+0x494/0x850",
                                      "exact: the WARN site at mfill_atomic_poison+0x494 (0xffffffff8e62b164)"])
 
+    def test_syzbot_inline_lines(self):
+        """review s161 MAJOR 1: syzbot's WARNING / RIP lines repeated for each inlined frame ('func file:line [inline]',
+        no address) are one report, not two, and the WARNING line with the function+offset is the report's own."""
+        for text in (SYZBOT_INLINE, SYZBOT_INLINE_619):
+            rep, m = find(text)
+            self.assertEqual((rep.reports, rep.kind, rep.file, rep.line, rep.header.function, rep.header.offset,
+                              rep.primary.source, rep.primary.function, rep.primary.offset),
+                             (1, "WARN", "mm/userfaultfd.c", 755, "mfill_atomic_copy", 0x674, "rip", "mfill_atomic_copy",
+                              0x674), text[:200])
+            self.assertEqual((m.status, m.address, m.notes), ("exact", 0xFFFFFFFF8E629BC4, []))
+            self.assertEqual(oops.describe(rep, m, lambda ea: "")[0], "from the log: WARNING at mm/userfaultfd.c:755; "
+                                                                      "RIP: mfill_atomic_copy+0x674/0x9d0")
+            # without its RIP lines: the WARNING line with the function+offset
+            rep, m = find("\n".join(ln for ln in text.splitlines() if not ln.startswith("RIP: 0010:")))
+            self.assertEqual((rep.reports, rep.primary.source, rep.primary.function, m.status, m.address, m.notes),
+                             (1, "warning", "mfill_atomic_copy", "exact", 0xFFFFFFFF8E629BC4, []))
+        # only the inlined frame's WARNING line: its file:line, as any WARNING line without a function+offset
+        rep, m = find(SYZBOT_INLINE.splitlines()[1])
+        self.assertEqual((rep.reports, rep.kind, rep.file, rep.line, m.status, len(m.candidates)),
+                         (1, "WARN", "mm/userfaultfd.c", 755, "ambiguous", 4))
+        # two such reports, with or without the cut-here line between them, are still two (the first one is used)
+        poison = SYZBOT_INLINE.replace("mfill_atomic_copy", "mfill_atomic_poison").replace("0x674/0x9d0", "0x494/0x850")
+        for text in (SYZBOT_INLINE + poison, SYZBOT_INLINE + poison.split("\n", 1)[1]):
+            rep, m = find(text)
+            self.assertEqual((rep.reports, rep.primary.function, m.status, m.address),
+                             (2, "mfill_atomic_copy", "exact", 0xFFFFFFFF8E629BC4))
+
     def test_readme_lines(self):
         """Every WARNING line the README gives as an example to paste finds the demo kernel's site (review s157)."""
         with open(os.path.join(HERE, "..", "README.md"), encoding="utf-8") as fh:
@@ -901,6 +968,11 @@ def whole_kernel(path):
         m = oops.resolve(rep, index, elf.function_starts)
         assert (rep.reports, m.status, m.address, m.site.where(), m.notes) == (
             1, "exact", 0xFFFFFFFF8E8A531E, "lib/refcount.c:28", []), (rep.reports, m)
+        # syzbot's inline-expanded WARNING / RIP lines (review s161 MAJOR 1): one report, the line with function+offset
+        rep = oops.parse(SYZ_SCHED)
+        m = oops.resolve(rep, index, elf.function_starts)
+        assert (rep.reports, m.status, m.address, m.site.where(), m.notes) == (
+            1, "exact", 0xFFFFFFFF8E30DF4D, "kernel/sched/sched.h:1686", []), (rep.reports, m)
     # logs from other builds (review s157): an Ubuntu 6.8 x86_64 WARNING, an Android 5.10 arm64 one; where this file has
     # a site at that function+offset, it is exact only if it is the site the log's WARNING line names
     other = 0

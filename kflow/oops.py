@@ -21,7 +21,8 @@ kflow's BUG/WARN site table. The line formats are the kernel's own printk format
                                    short, -precise, -iso, -monotonic); logcat -b kernel '11-12 10:00:00.123 0 0 W tag:'
 
 syzbot reports also put the source line after a symbol ('func+0x12/0x34 mm/file.c:12') and print inlined frames
-as 'func mm/file.c:12 [inline]'. The kernel prints the address of the trap itself for a BUG/WARN (RIP / pc and the
+as 'func mm/file.c:12 [inline]', also on the WARNING and RIP lines, which they then repeat with the function+offset
+(one report, the line with the function+offset counts). The kernel prints the address of the trap itself for a BUG/WARN (RIP / pc and the
 WARNING line), so function + offset is the site's address.
 """
 import bisect
@@ -53,6 +54,10 @@ _RIP = re.compile(r"(?:^|\s)(?:RIP:?|IP:)\s+(?:(?P<cs>[0-9a-fA-F]{4}):)?(?P<rest
 _PC = re.compile(r"(?:^|\s)(?:(?P<reg>pc|lr) : |(?P<old>PC|LR) is at )(?P<rest>.*)$")
 _TRACE = re.compile(r"(?:^|\s)Call [Tt]race:")
 _INLINE = re.compile(r"^(?P<fn>[A-Za-z_.$][\w.$]*)\s+(?P<file>[\w./+-]+\.(?:c|h|S|rs)):(?P<line>\d+)\s+\[inline\]$")
+# syzbot prints a line whose %pS lies in inlined code once per inlined frame, innermost first, with 'func file:line
+# [inline]' in place of the symbol (the rest of the line kept), then once with the function+offset: such a WARNING line
+# is the same report's, and the next one has the function+offset
+_INLINE_AT = re.compile(r"^[A-Za-z_.$][\w.$]*\s+[\w./+-]+\.(?:c|h|S|rs):\d+\s+\[inline\]")
 _FILE_LINE = re.compile(r"^(?P<file>[\w./+-]+\.(?:c|h|S|rs)):(?P<line>\d+)$")
 # what may follow a call-trace entry or a bare func+0xoff line: an elided size ('/0x...', as people write it), and on
 # arm64 ' (P)', ' (C)', ' (F)'...
@@ -84,7 +89,8 @@ class Loc:
     line: int = None
     address: int = None  # the log printed an address, no symbol
     reliable: bool = True  # False: a call-trace entry printed with '? '
-    inline: bool = False  # syzbot: an inlined frame (no address of its own)
+    inline: bool = False  # syzbot: an inlined frame (no address of its own); a WARNING line printed for one: its
+    #                       function is not kept, only the line's own file:line
     text: str = ""  # the log line, prefixes removed
 
     def symbol(self):
@@ -174,7 +180,10 @@ def parse(text):
         found = None
         m = _WARN_OLD.search(s) or _WARN_26.search(s) or _WARN_NEW.search(s)
         if m:
-            found = _loc("warning", m.group("rest"), s) or Loc("warning", text=s)
+            if _INLINE_AT.match(m.group("rest").strip()):  # syzbot: an inlined frame of the trap (review s161 MAJOR 1)
+                found = Loc("warning", inline=True, text=s)
+            else:
+                found = _loc("warning", m.group("rest"), s) or Loc("warning", text=s)
             if m.group("file"):
                 found.file, found.line = m.group("file"), int(m.group("line"))
             if found.function is None and found.file is None:
@@ -217,7 +226,8 @@ def parse(text):
             if found is not None and q.group(1):
                 found.reliable = False
         header = found is not None and found.source in ("warning", "bug")
-        if (header and any(x.source in ("warning", "bug", "rip", "pc") for x in segs[-1])) or (
+        # a WARNING line after syzbot's inline-expanded one(s) of the same trap continues that report
+        if (header and any(x.source in ("warning", "bug", "rip", "pc") and not x.inline for x in segs[-1])) or (
                 not header and _START.search(s) and any(x.source in ("rip", "pc") for x in segs[-1])):  # the next one
             segs.append([])
             started.append(True)
@@ -233,7 +243,8 @@ def parse(text):
     rep.frames = [x for x in rep.locations if x.source == "frame"]
     locs = rep.locations
     first = lambda pred: next((x for x in locs if pred(x)), None)
-    rep.header = first(lambda x: x.source in ("warning", "bug"))
+    rep.header = first(lambda x: x.source in ("warning", "bug") and not x.inline) or first(
+        lambda x: x.source in ("warning", "bug"))
     rep.kind = {"warning": "WARN", "bug": "BUG"}.get(rep.header.source) if rep.header else None
     addressable = lambda x: x.offset is not None or x.address is not None
     rep.primary = (first(lambda x: x.source in ("rip", "pc") and addressable(x))
