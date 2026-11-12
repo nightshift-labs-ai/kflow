@@ -5,7 +5,7 @@ Taken from the GitHub release notes. Newest first.
 ## Unreleased
 
 - `--limit` refuses a negative number (exit 2, `must be 0 or more`); `--limit -1` used to print all rows but the last and then a wrong `... N more` count.
-- README Features: Go to oops/WARN line says that a KASAN, UBSAN or lockdep report gives no match (it names no BUG/WARN trap).
+- README Features: Go to oops/WARN line says that a KASAN, lockdep or hung-task report gives no match unless its call trace starts at a BUG/WARN site.
 
 ## v0.0.4 (2026-11-15)
 
