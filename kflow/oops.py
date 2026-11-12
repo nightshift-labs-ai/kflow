@@ -15,8 +15,10 @@ kflow's BUG/WARN site table. The line formats are the kernel's own printk format
   lib/vsprintf.c, kernel/kallsyms.c  %pS / %pB print 'symbol+0xoff/0xsize', then ' [module]' or ' [module buildid]'
                                    for module code, or '0x<address>' when no symbol is known
   kernel/printk/printk.c           prefixes '<%u>', '[%5lu.%06lu]', '[%6s]' (caller T<pid> / C<cpu>), /dev/kmsg
-                                   'level,seq,usec,flags;'; also dmesg -T '[Thu Nov 12 10:00:00 2026]' and a journal's
-                                   '<date> <host> kernel:'
+                                   'level,seq,usec,flags;'; also dmesg -T '[Thu Nov 12 10:00:00 2026]', -H
+                                   '[Nov12 10:00]' / '[  +0.000005]', -d '[  12.345678 <    0.000005>]', -x
+                                   'kern  :warn  : ', --time-format iso; a journal's '<date> <host> kernel:' (journalctl
+                                   short, -precise, -iso, -monotonic); logcat -b kernel '11-12 10:00:00.123 0 0 W tag:'
 
 syzbot reports also put the source line after a symbol ('func+0x12/0x34 mm/file.c:12') and print inlined frames
 as 'func mm/file.c:12 [inline]'. The kernel prints the address of the trap itself for a BUG/WARN (RIP / pc and the
@@ -31,10 +33,17 @@ _SYM = re.compile(r"(?P<fn>[A-Za-z_.$][\w.$]*)\+(?P<off>0x[0-9a-fA-F]+)(?:/(?P<s
 _ADDR = re.compile(r"0x(?P<addr>[0-9a-fA-F]{8,16})\b")
 _SRC = re.compile(r"\s+(?P<file>[\w./+-]+\.(?:c|h|S|rs)):(?P<line>\d+)")
 _BRACKETS = re.compile(r"^(?:\[<[0-9a-fA-F]+>\]\s*)+")  # raw addresses before a symbol (4.9 and older)
-_PREFIX = re.compile(r"^\s*(?:<\d+>|\d+,\d+,\d+,[^;]*;|\[\s*\d+\.\d+\]|\[\s*[TC]\d+\]"
-                     r"|\[[A-Z][a-z]{2} [A-Z][a-z]{2}\s+\d+ [\d:]+ \d{4}\]"  # dmesg -T
-                     r"|(?:[A-Z][a-z]{2}\s+\d+\s+\d\d:\d\d:\d\d|\d{4}-\d\d-\d\d[T ][\d:.]+(?:[+-]\d\d:?\d\d|Z)?)"
-                     r"\s+\S+\s+kernel:)")
+_PREFIX = re.compile(
+    r"^\s*(?:<\d+>|\d+,\d+,\d+,[^;]*;"
+    r"|(?:[A-Z][a-z]{2}\s+\d+\s+\d\d:\d\d:\d\d(?:\.\d+)?|\d{4}-\d\d-\d\d[T ][\d:.,]+(?:[+-]\d\d:?\d\d|Z)?"
+    r"|\[\s*\d+\.\d+\])\s+\S+\s+kernel:"  # journalctl (short, -precise, -iso, -monotonic): '<when> <host> kernel:'
+    r"|\[\s*\d+\.\d+(?:\s*<\s*\d+\.\d+>)?\]|\[\s*[TC]\d+\]"  # printk time (dmesg -d: '<delta>'), caller id
+    r"|\[[A-Z][a-z]{2} [A-Z][a-z]{2}\s+\d+ [\d:]+ \d{4}\]"  # dmesg -T
+    r"|\[[A-Z][a-z]{2}\s*\d+ \d\d:\d\d\]|\[\s*[+<]\s*\d+\.\d+>?\]"  # dmesg -H: '[Nov12 10:00]', '[  +0.000005]'
+    r"|\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[,.]\d+(?:[+-]\d\d:?\d\d|Z)?"  # dmesg --time-format iso
+    r"|(?:kern|user|mail|daemon|auth|syslog|lpr|news|uucp|cron|authpriv|ftp|local\d)\s*:\s*"
+    r"(?:emerg|alert|crit|err|warn|notice|info|debug)\s*:"  # dmesg -x
+    r"|\d\d-\d\d\s+\d\d:\d\d:\d\d\.\d+\s+\d+\s+\d+\s+[VDIWEFA]\s+[^:]*:)")  # logcat -b kernel
 _WARN_OLD = re.compile(r"WARNING: CPU: \d+ PID: \d+ at (?:(?P<file>[^\s:]+):(?P<line>\d+) )?(?P<rest>.*)$")
 _WARN_NEW = re.compile(r"WARNING: (?:(?P<file>[^\s:]+):(?P<line>\d+) )?at (?P<rest>.*)$")
 _BUG_LINE = re.compile(r"[Kk]ernel BUG at (?P<file>[^\s:!]+):(?P<line>\d+)!")

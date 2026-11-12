@@ -256,9 +256,25 @@ class Parse(unittest.TestCase):
         line = "RIP: 0010:mfill_atomic_copy+0x674/0x9d0"
         for prefix in ("", "[  152.334270] ", "<4>[  152.334270][  T123] ", "<4>[    0.000000][    C0] ",
                        "4,1234,152334270,-;", "4,1234,152334270,-,caller=T123;", "Nov 12 10:00:00 buildhost kernel: ",
-                       "2026-11-12T10:00:00.123456+00:00 buildhost kernel: ", "[Thu Nov 12 10:00:00 2026] "):
+                       "2026-11-12T10:00:00.123456+00:00 buildhost kernel: ", "[Thu Nov 12 10:00:00 2026] ",
+                       "Nov 12 10:00:00.123456 buildhost kernel: ",  # journalctl -o short-precise
+                       "[  152.334270] buildhost kernel: ",  # journalctl -o short-monotonic
+                       "kern  :warn  : [  152.334270] ", "kern  :warn  : ",  # dmesg -x
+                       "2026-11-12T10:00:00,123456+02:00 ",  # dmesg --time-format iso
+                       "[Nov12 10:00] ", "[  +0.000005] ", "[<    0.000005>] ",  # dmesg -H
+                       "[  152.334270 <    0.000005>] ",  # dmesg -d
+                       "11-12 10:00:00.123     0     0 W         : ", "11-12 10:00:00.123  0  0 I kernel  : "):  # logcat
             rep = oops.parse(prefix + line)
             self.assertEqual((rep.primary.source, rep.primary.function), ("rip", "mfill_atomic_copy"), prefix)
+            # call-trace entries and bare lines are read only when the whole prefix is gone
+            rep = oops.parse("%sCall Trace:\n%s <TASK>\n%s ? __warn+0x89/0x130\n%s userfaultfd_ioctl+0x5d1/0x1e70\n" % (
+                (prefix,) * 4))
+            self.assertEqual([(f.function, f.reliable) for f in rep.frames], [("__warn", False), ("userfaultfd_ioctl", True)],
+                             prefix)
+            rep = oops.parse(prefix + "mfill_atomic_copy+0x674/0x9d0")
+            self.assertEqual((rep.primary.source, rep.primary.offset), ("text", 0x674), prefix)
+            rep = oops.parse(prefix + "mm/userfaultfd.c:755")
+            self.assertEqual((rep.file, rep.line), ("mm/userfaultfd.c", 755), prefix)
         rep = oops.parse("<4>[  152.334305][  T123]  ? __warn+0x89/0x130")  # an entry without 'Call Trace:' above it
         self.assertEqual([(x.source, x.function, x.reliable) for x in rep.locations], [("text", "__warn", False)])
         self.assertIsNone(rep.primary)  # a '? ' entry (unreliable) is never the one to go to
