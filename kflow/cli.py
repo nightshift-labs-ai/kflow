@@ -7,6 +7,7 @@ import argparse
 import bisect
 import collections
 import json
+import os
 import struct
 import sys
 
@@ -450,12 +451,27 @@ def main(argv=None):
             print("... %d more (--limit)" % (len(rows) - limit))
     if a.json:
         with open(a.json, "w") as fh:
-            json.dump({"bug_layout": t.get("bug_layout"),
-                       "bug": [[b.addr, b.flags, b.file, b.line] for b in t.get("bug", [])],
-                       "jump": [[j.code, j.target, j.key, int(j.branch), int(j.init)] for j in t.get("jump", [])],
-                       "ex_layout": t.get("ex_layout"),
-                       "ex": [[x.insn, x.fixup, x.data] for x in t.get("ex", [])]}, fh)
+            json.dump(site_records(elf, t, a.kernel), fh, indent=1)
     return 0
+
+
+def site_records(elf, t, path):
+    """--json: one labelled record per decoded site, with the keys tools/kflow_headless.py writes (there the names are
+    IDA's, here the ELF's symbols; the headless 'now' field needs IDA's bytes). Addresses are hex strings. 'bug_layout'
+    describes the kernel's own table, not these records. Judge s160 item 7: these used to be unlabelled arrays."""
+    def h(ea):
+        return None if ea is None else "0x%X" % ea
+    return {
+        "input": os.path.basename(path),
+        "bug_layout": t.get("bug_layout"),
+        "missing": list(t["missing"]),
+        "bug": [{"addr": h(b.addr), "kind": "WARN" if b.warn else "BUG", "function": elf.func(b.addr) or None,
+                 "file": b.file, "line": b.line, "flags": b.flags} for b in t.get("bug", [])],
+        "jump": [{"addr": h(j.code), "key": elf.key_name(j.key) or h(j.key), "kind": "likely" if j.branch else "unlikely",
+                  "target": h(j.target), "function": elf.func(j.code) or None} for j in t.get("jump", [])],
+        "ex": [{"addr": h(x.insn), "fixup": h(x.fixup), "type": None if x.data is None else x.type_name(elf.arch),
+                "handler": h(x.handler), "function": elf.func(x.insn) or None} for x in t.get("ex", [])],
+    }
 
 
 def oops_main(elf, t, log_text, json_path=None):

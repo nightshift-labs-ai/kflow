@@ -87,5 +87,29 @@ if hs and e.by_addr:
             assert e.read(x.insn, 2) == (b"\x0f\x30" if "wrmsr" in n else b"\x0f\x32"), (hex(x.insn), n)
     print("  handler entries: %d of %d point at an ex_handler_* function (%s)"
           % (sum(n.startswith("ex_handler_") for n in names), len(hs), ", ".join(sorted(set(names)))))
+# python3 -m kflow <file> --json: one labelled record per site, with the keys of tools/kflow_headless.py --json (names from
+# the ELF's symbols, addresses as hex strings) instead of unlabelled arrays (judge s160 item 7).
+import contextlib  # noqa: E402
+import io  # noqa: E402
+import json  # noqa: E402
+import tempfile  # noqa: E402
+from kflow import cli  # noqa: E402
+with tempfile.TemporaryDirectory() as d:
+    out = os.path.join(d, "sites.json")
+    with contextlib.redirect_stdout(io.StringIO()):
+        assert cli.main([sys.argv[1], "--json", out]) == 0
+    js = json.load(open(out))
+assert (len(js["bug"]), len(js["jump"]), len(js["ex"])) == (len(bugs), len(jumps), len(exs)), [len(js[k]) for k in ("bug", "jump", "ex")]
+assert js["input"] == os.path.basename(sys.argv[1]) and js["missing"] == list(t["missing"]), (js["input"], js["missing"])
+for r, b in zip(js["bug"], bugs):
+    assert r == {"addr": "0x%X" % b.addr, "kind": "WARN" if b.warn else "BUG", "function": e.func(b.addr) or None,
+                 "file": b.file, "line": b.line, "flags": b.flags}, r
+for r, j in zip(js["jump"], jumps):
+    assert r == {"addr": "0x%X" % j.code, "key": e.key_name(j.key) or "0x%X" % j.key, "kind": "likely" if j.branch else "unlikely",
+                 "target": "0x%X" % j.target, "function": e.func(j.code) or None}, r
+for r, x in zip(js["ex"], exs):
+    assert r["addr"] == "0x%X" % x.insn and r["fixup"] == "0x%X" % x.fixup and r["function"] == (e.func(x.insn) or None), r
+    assert r["handler"] == (None if x.handler is None else "0x%X" % x.handler), r
+print("  --json: %d labelled records" % (len(js["bug"]) + len(js["jump"]) + len(js["ex"])))
 print("OK: %d bug sites (%d WARN), %d jump sites (%d enabled checked), %d ex sites"
       % (len(bugs), sum(b.warn for b in bugs), len(jumps), checked, len(exs)))

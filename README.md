@@ -106,7 +106,7 @@ A stripped `vmlinux` (from `extract-vmlinux`) still has `__bug_table` and `__ex_
 
 Without the IDA window (idalib, IDA 9.0+): `python3 tools/kflow_headless.py <kernel> [--no-analysis] [--remove] [--json sites.json]` does steps 2 and 5 and saves the database. Not yet run with a real idalib (tested on fake `idapro` / `ida_*` modules).
 
-`--json sites.json` also writes every decoded site with IDA's function names, for scripts (for example to match `file:line` across kernel versions when patch diffing). Addresses are hex strings. Three records from the MemLens demo kernel (fake-IDA test output; function names there come from the ELF symbols):
+`--json sites.json` also writes every decoded site with IDA's function names, for scripts (for example to match `file:line` across kernel versions when patch diffing). Addresses are hex strings. Without IDA, `python3 -m kflow <kernel> --json sites.json` writes the same records with the ELF's symbol names (no `now` field; it also gives each BUG/WARN record its `flags`): 19,758 records on the MemLens demo kernel. Three records from the MemLens demo kernel (fake-IDA test output; function names there come from the ELF symbols):
 
 ```
 {"addr": "0xFFFFFFFF8E629BC4", "kind": "WARN", "function": "mfill_atomic_copy", "file": "mm/userfaultfd.c", "line": 755}

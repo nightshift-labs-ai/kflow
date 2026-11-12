@@ -5,6 +5,7 @@ Taken from the GitHub release notes. Newest first.
 ## Unreleased
 
 - `--limit` refuses a negative number (exit 2, `must be 0 or more`); `--limit -1` used to print all rows but the last and then a wrong `... N more` count.
+- `python3 -m kflow <kernel> --json out.json` writes one labelled record per site (`addr`, `kind`, `function`, `file`, `line`, `flags` / `key`, `target` / `fixup`, `type`, `handler`), the keys `tools/kflow_headless.py --json` uses, with the ELF's symbol names and hex-string addresses; it wrote unlabelled arrays before, in a different order from the `bug_layout` it printed. 19,758 records on the MemLens demo kernel.
 - README Features: Go to oops/WARN line says that a KASAN, lockdep or hung-task report gives no match unless its call trace starts at a BUG/WARN site.
 
 ## v0.0.4 (2026-11-15)
