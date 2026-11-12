@@ -3,6 +3,7 @@ Usage: python3 tests/test_ida_stub.py <kernel.elf> [<stripped vmlinux>]   (SKIPs
 import bisect
 import importlib
 import os
+import re
 import sys
 import types
 
@@ -242,7 +243,7 @@ def run(path):
         assert w["cmts"][note] == "my note"
     ours = [c for c in w["cmts"].values() if c.startswith("kflow: ")]
     assert len(ours) <= res["comments"] and ours, (len(ours), res)  # sites sharing an address keep the last comment
-    dummy = [c for c in ours if "unk_" in c]  # the fake get_name() returns IDA-style placeholder names: never show them
+    dummy = [c for c in ours if re.search(r"\bunk_[0-9A-F]+\b", c)]  # IDA-style placeholders (the fake get_name() returns them), not "chunk_"
     assert not dummy, dummy[:3]
     users = sum(1 for u in w["xrefs"].values() if u)
     assert users == res["xrefs"] + (mine is not None), (users, res)
