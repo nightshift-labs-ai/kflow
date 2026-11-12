@@ -6,8 +6,8 @@ Taken from the GitHub release notes. Newest first.
 
 - `tools/reach.py` measures what kflow's references add (results in `tools/reach_results.md`, rules checked by `tests/test_reach.py`): on the MemLens demo kernel, 96% of the 8,349 static-key NOP sites jump to code that no direct branch targets and no instruction falls into (8,011 out-of-line blocks, 264 KB), so kflow's reference is the only one that leads there; the same holds after 90% of the 7,504 WARN traps (1.7 instructions on average up to the next jump or join). x86_64, needs objdump; about 15 s per kernel.
 - `--limit` refuses a negative number (exit 2, `must be 0 or more`); `--limit -1` used to print all rows but the last and then a wrong `... N more` count.
-- `python3 -m kflow <kernel> --json out.json` writes one labelled record per site (`addr`, `kind`, `function`, `file`, `line`, `flags` / `key`, `target` / `fixup`, `type`, `handler`), the keys `tools/kflow_headless.py --json` uses, with the ELF's symbol names and hex-string addresses; it wrote unlabelled arrays before, in a different order from the `bug_layout` it printed. 19,758 records on the MemLens demo kernel.
-- README Features: Go to oops/WARN line says that a KASAN, lockdep or hung-task report gives no match unless its call trace starts at a BUG/WARN site.
+- `python3 -m kflow <kernel> --json out.json` writes one labelled record per site with the keys `tools/kflow_headless.py --json` uses (BUG/WARN: `addr`, `kind`, `function`, `file`, `line`, plus `flags`; static key: `addr`, `key`, `kind`, `target`, `function`, without the headless `now`, which needs IDA; exception table: `addr`, `fixup`, `type`, `handler`, `function`), with the ELF's symbol names and hex-string addresses. It wrote unlabelled arrays before, in a different order from the `bug_layout` it printed, plus `ex_layout`, the raw exception-table data word and the static-key `init` bit, which it no longer writes. 19,758 records on the MemLens demo kernel.
+- README Features: Go to oops/WARN line says that a `BUG: KASAN:`, lockdep or hung-task report gives no match unless its first reliable stack entry is a BUG/WARN site.
 
 ## v0.0.4 (2026-11-15)
 

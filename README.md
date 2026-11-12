@@ -18,7 +18,7 @@ ffffffff8e200029  wrmsr          ; kflow: may fault -> fixup at 0xFFFFFFFF8E2000
 
 - [**BUG/WARN comments**](#step-by-step): every BUG/WARN site of the kernel's `__bug_table` gets its source `file:line` (where the kernel recorded one) and whether the kernel continues after the trap (WARN) or not (BUG).
 - [**BUG/WARN list**](#step-by-step): **kflow: List BUG/WARN sites** lists every trap with its function and `file:line`; Enter jumps to it.
-- [**Go to oops/WARN line**](#step-by-step): **kflow: Go to oops/WARN line** takes pasted log text (a `WARNING:`, `kernel BUG at`, `RIP:` or `pc :` line, a whole oops or syzbot report, `func+0xoff` or `file:line`) and jumps to the trap it names (a KASAN, lockdep or hung-task report names no BUG/WARN trap, so it gives no match unless its call trace starts at one); when only `file:line` is known and several traps share it, it lists just those. `python3 -m kflow <kernel> --oops <log>` does the same outside IDA (the IDA action is tested only with fake `ida_*` modules). Real command-line output on the MemLens demo kernel; the log line is in the kernel's `__warn()` format, written for this site, not taken from a real crash:
+- [**Go to oops/WARN line**](#step-by-step): **kflow: Go to oops/WARN line** takes pasted log text (a `WARNING:`, `kernel BUG at`, `RIP:` or `pc :` line, a whole oops or syzbot report, `func+0xoff` or `file:line`) and jumps to the trap it names (a `BUG: KASAN:`, lockdep or hung-task report names no BUG/WARN trap, so it gives no match unless its first reliable stack entry is one); when only `file:line` is known and several traps share it, it lists just those. `python3 -m kflow <kernel> --oops <log>` does the same outside IDA (the IDA action is tested only with fake `ida_*` modules). Real command-line output on the MemLens demo kernel; the log line is in the kernel's `__warn()` format, written for this site, not taken from a real crash:
 
   ```
   $ python3 -m kflow kernel.elf --list warn --limit 100000 | grep userfaultfd.c:755     # before: file:line alone
@@ -106,7 +106,7 @@ A stripped `vmlinux` (from `extract-vmlinux`) still has `__bug_table` and `__ex_
 
 Without the IDA window (idalib, IDA 9.0+): `python3 tools/kflow_headless.py <kernel> [--no-analysis] [--remove] [--json sites.json]` does steps 2 and 5 and saves the database. Not yet run with a real idalib (tested on fake `idapro` / `ida_*` modules).
 
-`--json sites.json` also writes every decoded site with IDA's function names, for scripts (for example to match `file:line` across kernel versions when patch diffing). Addresses are hex strings. Without IDA, `python3 -m kflow <kernel> --json sites.json` writes the same records with the ELF's symbol names (no `now` field; it also gives each BUG/WARN record its `flags`): 19,758 records on the MemLens demo kernel. Three records from the MemLens demo kernel (fake-IDA test output; function names there come from the ELF symbols):
+`--json sites.json` also writes every decoded site with IDA's function names, for scripts (for example to match `file:line` across kernel versions when patch diffing). Addresses are hex strings. Without IDA, `python3 -m kflow <kernel> --json sites.json` writes the same records with the ELF's symbol names and file addresses (a module's are kflow's own section layout, [not necessarily IDA's](docs/modules.md)), without the `now` field and with each BUG/WARN record's `flags`: 19,758 records on the MemLens demo kernel. Three records from the MemLens demo kernel (fake-IDA test output; function names there come from the ELF symbols):
 
 ```
 {"addr": "0xFFFFFFFF8E629BC4", "kind": "WARN", "function": "mfill_atomic_copy", "file": "mm/userfaultfd.c", "line": 755}
@@ -114,7 +114,7 @@ Without the IDA window (idalib, IDA 9.0+): `python3 tools/kflow_headless.py <ker
 {"addr": "0xFFFFFFFF8E200029", "fixup": "0xFFFFFFFF8E20002B", "type": "WRMSR", "handler": null, "function": "sev_es_terminate"}
 ```
 
-The file has the lists `bug`, `jump` and `ex` of such records, plus `input`, `bug_layout` and `missing` (tables not found).
+The file has the lists `bug`, `jump` and `ex` of such records, plus `input`, `bug_layout` (the field order of the kernel's own `__bug_table` entries, not of these records) and `missing` (tables not found).
 
 ### Try a real module (one minute, 377 KB download)
 

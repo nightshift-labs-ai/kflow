@@ -108,8 +108,8 @@ for r, j in zip(js["jump"], jumps):
     assert r == {"addr": "0x%X" % j.code, "key": e.key_name(j.key) or "0x%X" % j.key, "kind": "likely" if j.branch else "unlikely",
                  "target": "0x%X" % j.target, "function": e.func(j.code) or None}, r
 for r, x in zip(js["ex"], exs):
-    assert r["addr"] == "0x%X" % x.insn and r["fixup"] == "0x%X" % x.fixup and r["function"] == (e.func(x.insn) or None), r
-    assert r["handler"] == (None if x.handler is None else "0x%X" % x.handler), r
+    assert r == {"addr": "0x%X" % x.insn, "fixup": "0x%X" % x.fixup, "type": None if x.data is None else x.type_name(e.arch),
+                 "handler": None if x.handler is None else "0x%X" % x.handler, "function": e.func(x.insn) or None}, r
 print("  --json: %d labelled records" % (len(js["bug"]) + len(js["jump"]) + len(js["ex"])))
 print("OK: %d bug sites (%d WARN), %d jump sites (%d enabled checked), %d ex sites"
       % (len(bugs), sum(b.warn for b in bugs), len(jumps), checked, len(exs)))

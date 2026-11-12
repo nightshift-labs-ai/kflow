@@ -341,6 +341,28 @@ class Versions(unittest.TestCase):
         self.assertEqual(newest, "v" + manifest)
 
 class CliArgs(unittest.TestCase):
+    def test_limit_zero_is_allowed(self):
+        from kflow import cli
+        self.assertEqual((cli.row_count("0"), cli.row_count("-0"), cli.row_count("7")), (0, 0, 7))
+
+    def test_json_records_old_ex_layouts(self):
+        """--json records for the pre-5.16 layouts: no data word (type null), an x86 handler (review s170 n2)."""
+        from kflow import cli, core
+
+        class E:
+            arch = "x86_64"
+
+            def func(self, ea):
+                return None
+
+            def key_name(self, ea):
+                return None
+        t = {"missing": [], "bug_layout": "addr,file,line,flags", "bug": [], "jump": [],
+             "ex": [core.ExSite(insn=1, fixup=2, data=None, entry=0, handler=0x30), core.ExSite(insn=3, fixup=4, data=None, entry=0)]}
+        js = cli.site_records(E(), t, "/x/k")
+        self.assertEqual([(r["type"], r["handler"]) for r in js["ex"]], [(None, "0x30"), (None, None)])
+        self.assertEqual((js["input"], js["bug_layout"]), ("k", "addr,file,line,flags"))
+
     def test_negative_limit_is_refused(self):
         """--limit -1 used to print all rows but the last, then '... 9 more' for an 8-row table (judge s160 item 5):
         a negative count is an argument error (exit 2), before any file is read."""
