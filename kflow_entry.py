@@ -229,6 +229,10 @@ class AnnotateAction(ida_kernwin.action_handler_t):
         finally:
             ida_kernwin.hide_wait_box()
         report(idalayer.annotate_text(res))
+        import ida_auto
+        if not ida_auto.auto_is_ok():
+            report("IDA's auto-analysis is still running: run Annotate again when it has finished, so that targets inside "
+                   "other functions get data references instead of jump references")
         if hook_pseudocode():
             STATE["pseudo"] = pseudo_index(t, idalayer.current_arch(), idalayer.layout())
             flush_pseudocode()
@@ -320,7 +324,8 @@ class RemoveAction(ida_kernwin.action_handler_t):
             removed = idalayer.remove_annotations(t, res)
         finally:
             ida_kernwin.hide_wait_box()
-        report("references removed: %d jump references, %d static-key site -> key references" % (removed, res.get("key_refs", 0)))
+        report("references removed: %d jump references, %d static-key site -> key references, %d data references to targets"
+               " inside another function" % (removed, res.get("key_refs", 0), res.get("other_refs", 0)))
         STATE["pseudo"] = None
         flush_pseudocode()
         return 1

@@ -1,6 +1,7 @@
 """Runs kflow's IDA layer on fake ida_* modules backed by a real kernel ELF.
 Usage: python3 tests/test_ida_stub.py <kernel.elf> [<stripped vmlinux>]   (SKIPs without a path)"""
 import bisect
+import collections
 import importlib
 import os
 import re
@@ -49,7 +50,12 @@ def world_from(elf):
 
 def install(w, names=True):
     elf = w["elf"]
-    m = {n: types.ModuleType(n) for n in "ida_bytes ida_ida ida_idaapi ida_name ida_segment ida_xref".split()}
+    m = {n: types.ModuleType(n) for n in "ida_bytes ida_ida ida_idaapi ida_name ida_segment ida_xref ida_funcs".split()}
+    # functions as the plugin's IDA layer sees them: none, unless a test sets w["func_of"] (ea -> (start, end) or None)
+    m["ida_funcs"].get_func = lambda ea: (lambda r: types.SimpleNamespace(start_ea=r[0], end_ea=r[1]) if r else None)(
+        w["func_of"](ea) if "func_of" in w else None)
+    m["ida_funcs"].func_contains = lambda f, ea: f.start_ea <= ea < f.end_ea or ea in w.get("shared", {}).get(f.start_ea, ())
+    m["ida_funcs"].get_func_name = lambda ea: w.get("func_names", {}).get(ea, "")
     m["ida_idaapi"].BADADDR = BAD
 
     def getseg(ea):
@@ -96,6 +102,9 @@ def install(w, names=True):
         def altset(self, i, v):
             store[self.name][i] = v
             return True
+
+        def altdel(self, i):
+            return store.get(self.name, {}).pop(i, None) is not None
 
         def altval(self, i):
             return store.get(self.name, {}).get(i, 0)
@@ -231,6 +240,10 @@ def install_ui(w, log):
 
     api.plugin_t, api.PLUGIN_KEEP = plugin_t, 1
     sys.modules.update({"ida_kernwin": kw, "ida_funcs": fn, "ida_lines": lines_mod})
+    if "ida_auto" not in sys.modules:  # Annotate asks whether auto-analysis has finished
+        auto = types.ModuleType("ida_auto")
+        auto.auto_is_ok = lambda: w.get("auto_ok", True)
+        sys.modules["ida_auto"] = auto
     return types.SimpleNamespace(kw=kw, fn=fn, lines=lines_mod, get_func=get_func)
 
 
@@ -378,9 +391,125 @@ def run(path):
     return t, w
 
 
+def other_function(path):
+    """A static-key target or fixup inside ANOTHER function (not at its start) gets a data reference, recorded and
+    removed like the rest; at another function's start, in the same function or in no function: a jump reference."""
+    cli_elf = Elf(path)
+    elf = PackedElf(path) if cli_elf.relocatable else cli_elf
+    w = world_from(elf)
+    il = install(w)
+    t = il.scan()
+    arch = il.current_arch()
+    pairs = [(x.insn, x.fixup) for x in t["ex"]] + [(j.code, j.target) for j in t["jump"]]
+    srcs = collections.Counter(s for s, _ in pairs)
+    dsts = collections.Counter(d for _, d in pairs)  # fixups often share a landing pad: use targets of one site only
+    pts = sorted({a for p in pairs for a in p})
+
+    def free(lo, hi):  # no other site or target inside [lo, hi)
+        i = bisect.bisect_left(pts, lo)
+        return [a for a in pts[i:bisect.bisect_left(pts, hi)]]
+    chosen, ranges = [], []
+    for s, d in pairs:
+        if (srcs[s] != 1 or dsts[d] != 1 or not il.in_text(s) or not il.in_text(d) or il.branches_to(s, d, arch) or d == s + 1
+                or abs(d - s) < 8 or abs(d - s) > 0x100):
+            continue
+        case = len(chosen)
+        want = ([(s, s + 2), (d - 2, d + 2)] if case == 0 else [(s, s + 2), (d, d + 2)] if case == 1
+                else [(min(s, d), max(s, d) + 2)])
+        if any(sorted(set(free(lo, hi)) - {s, d}) for lo, hi in want) or any(
+                lo < h2 and l2 < hi for lo, hi in want for l2, h2 in ranges):
+            continue
+        chosen.append((s, d))
+        ranges += want
+        if len(chosen) == 3:
+            break
+    if len(chosen) < 3:
+        print("  other-function check skipped: no three separate sites in %s" % os.path.basename(path))
+        return
+    first = il.annotate(t, arch)  # before IDA has made the functions: jump references everywhere
+    assert first["other_refs"] == 0 and w["xrefs"].get(chosen[0]) is True
+    w["func_of"] = lambda ea: next(((lo, hi) for lo, hi in ranges if lo <= ea < hi), None)
+    assert [p for p in pairs if il.in_other_function(*p)] == [chosen[0]], "only the first pair is in another function"
+    s0, d0 = chosen[0]
+    # re-Annotate after analysis: kflow's own jump reference becomes a data reference; and back when that changes
+    conv = il.annotate(t, arch)
+    assert conv["changed_refs"] == 1 and conv["other_refs"] == 1 and chosen[0] not in w["xrefs"], conv
+    assert w["drefs"].get(chosen[0]) is True and il.NODE in w["netnodes"]
+    keep = w["func_of"]
+    w["func_of"] = lambda ea: None if ea == d0 else keep(ea)
+    back = il.annotate(t, arch)
+    assert back["changed_refs"] == 1 and back["xrefs"] == 1 and chosen[0] not in w["drefs"] and w["xrefs"].get(chosen[0]) is True
+    assert not w["netnodes"].get(il.OTHER_NODE)
+    w["func_of"] = keep
+    assert il.annotate(t, arch)["changed_refs"] == 1  # other function again
+    assert il.remove_annotations(t) >= 0 and chosen[0] not in w["drefs"] and not any(w["xrefs"].values())
+    # source in no function: still another function's middle -> data reference; a tail the source function shares,
+    # and the source function's own .cold part -> jump reference
+    w["func_of"] = lambda ea: None if s0 <= ea < s0 + 2 else keep(ea)
+    assert il.in_other_function(s0, d0)
+    w["func_of"] = keep
+    w["shared"] = {s0: {d0}}
+    assert not il.in_other_function(s0, d0)
+    w.pop("shared")
+    w["func_names"] = {s0: "foo.isra.0", d0 - 2: "foo.isra.0.cold"}
+    assert not il.in_other_function(s0, d0)
+    w["func_names"] = {s0: "foo", d0 - 2: "foobar.cold"}
+    assert il.in_other_function(s0, d0)
+    w.pop("func_names")
+    # a data reference that is there already (IDA's own, not a user one): nothing added, Remove leaves it
+    w["drefs"][chosen[0]] = False
+    w.setdefault("dref_keys", {}).setdefault(s0, set()).add(chosen[0])
+    r0 = il.annotate(t, arch)
+    assert r0["other_refs"] == 0 and not w["netnodes"].get(il.OTHER_NODE) and chosen[0] not in w["xrefs"], r0
+    il.remove_annotations(t)
+    assert w["drefs"].get(chosen[0]) is False
+    w["drefs"].pop(chosen[0])
+    w["dref_keys"][s0].discard(chosen[0])
+    # IDA's own jump reference at the pair (e.g. analysis found it): no data reference is added next to it
+    w["xrefs"][chosen[0]] = False
+    w["by_from"].setdefault(s0, set()).add(d0)
+    r1 = il.annotate(t, arch)
+    assert r1["other_refs"] == 0 and chosen[0] not in w["drefs"] and w["xrefs"][chosen[0]] is False, r1
+    il.remove_annotations(t)
+    assert w["xrefs"].pop(chosen[0]) is False
+    w["by_from"][s0].discard(d0)
+    w["imagebase"] = 0x10000  # a non-zero image base, so the rebase below checks the recorded offsets
+    res = il.annotate(t, arch)
+    assert res["other_refs"] == 1 and w["drefs"].get(chosen[0]) is True and chosen[0] not in w["xrefs"], res
+    assert w["xrefs"].get(chosen[1]) is True and w["xrefs"].get(chosen[2]) is True  # function start; same function
+    assert len(w["netnodes"].get(il.OTHER_NODE, {})) == 1
+    assert "inside another function: 1" in il.annotate_text(res)
+    again = il.annotate(t, arch)
+    assert again["other_refs"] == 0 and again["xrefs"] == 0, again
+    w["drefs"][chosen[0]] = False  # no longer a user reference (IDA's own now): Remove leaves it
+    assert il.remove_annotations(t, {}) == res["xrefs"] and w["drefs"].get(chosen[0]) is False
+    w["drefs"].pop(chosen[0])
+    res = il.annotate(t, arch)
+    assert res["other_refs"] == 1 and w["drefs"].get(chosen[0]) is True
+    rres = {}
+    delta = 0x200000  # rebase between Annotate and Remove: the data reference is still found
+    w["xrefs"] = {(f + delta, to + delta): u for (f, to), u in w["xrefs"].items()}
+    w["by_from"] = {}
+    for f, to in w["xrefs"]:
+        w["by_from"].setdefault(f, set()).add(to)
+    w["drefs"] = {(f + delta, to + delta): u for (f, to), u in w["drefs"].items()}
+    w["dref_keys"] = {}
+    for k in w["drefs"]:
+        w["dref_keys"].setdefault(k[0], set()).add(k)
+    w["imagebase"] = w.get("imagebase", 0) + delta
+    removed = il.remove_annotations({"bug": [], "jump": [], "ex": []}, rres)
+    assert removed == res["xrefs"] and rres["other_refs"] == 1, (removed, rres)
+    assert not any(w["drefs"].values()) and il.OTHER_NODE not in w["netnodes"] and not any(w["xrefs"].values())
+    print("OK other function: data reference into another function (also from a source in no function) added, changed"
+          " back and forth when IDA's functions change, removed after a rebase; jump references at a function start,"
+          " inside the same function, a shared tail, the function's .cold part and outside functions; IDA's own data"
+          " reference kept (%s)" % os.path.basename(path))
+
+
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("SKIP: pass a kernel ELF path")
         sys.exit(0)
     for p in sys.argv[1:]:
         run(p)
+        other_function(p)

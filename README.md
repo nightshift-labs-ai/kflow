@@ -18,9 +18,9 @@ ffffffff8e200029  wrmsr          ; kflow: may fault -> fixup at 0xFFFFFFFF8E2000
 
 - [**BUG/WARN comments**](#step-by-step): every BUG/WARN site of the kernel's `__bug_table` gets its source `file:line` (where the kernel recorded one) and whether the kernel continues after the trap (WARN) or not (BUG).
 - [**BUG/WARN list**](#step-by-step): **kflow: List BUG/WARN sites** lists every trap with its function and `file:line`; type `userfaultfd.c:755` from a `WARNING: ... at mm/userfaultfd.c:755` log line into its filter to find the site.
-- [**Static-key comments and key references**](#step-by-step): each static-key site (a NOP or branch the kernel patches at runtime) gets its key, its branch target and when it jumps, and a jump reference to the target where IDA has none; a data reference from each site to its key makes X on a key list its sites.
+- [**Static-key comments and key references**](#step-by-step): each static-key site (a NOP or branch the kernel patches at runtime) gets its key, its branch target and when it jumps, and a jump reference to the target where IDA has none (a data reference if the target is inside another function); a data reference from each site to its key makes X on a key list its sites.
 - [**Static-key chooser**](#step-by-step): **kflow: List static-key sites** shows every site with its key, `likely`/`unlikely`, `jump` / `no jump` now, the target and the function; the filter finds every site of one key.
-- [**Exception-table fixups**](#what-kflow-reads): each instruction that may fault on purpose (user-memory access, MSR reads...) gets its fixup and type (or handler), and a jump reference to the fixup.
+- [**Exception-table fixups**](#what-kflow-reads): each instruction that may fault on purpose (user-memory access, MSR reads...) gets its fixup and type (or handler), and a jump reference to the fixup (a data reference if it is inside another function).
 - [**Hex-Rays pseudocode comments**](#hex-rays-pseudocode-comments): with the decompiler, a `// kflow: ...` comment at the end of the site's pseudocode line where it has one (display text only, nothing saved; tested only against a fake `ida_hexrays` module).
 - [**Kernel modules**](docs/modules.md) (`.ko`, `.ko.xz`, `.ko.gz`): the command line applies the module's relocations; in IDA, a key inside an imported symbol (`nf_hooks_needed+0x270` in `bridge.ko`) is named from kflow's own decode of the `.ko` when the file is still where IDA loaded it from and both decodes line up (IDA's extern-segment layout is not verified; tested only with fake `ida_*` modules).
 - [**Clean removal**](#step-by-step): **kflow: Remove annotations** takes out only the comments and references kflow added (also after a rebase); IDA's and yours stay.
@@ -31,7 +31,7 @@ ffffffff8e200029  wrmsr          ; kflow: may fault -> fixup at 0xFFFFFFFF8E2000
 
 ## Status: read this first
 
-**kflow has not yet been run inside real IDA.** It was built without access to an IDA installation. The table decoders are checked on seven real kernels and five kernel modules (below): trap bytes, branch targets and source-file names; the IDA layer is small, uses IDAPython names and object members that all appear in the official stubs (175 checks in `tests/check_ida_api.py`), and has only been exercised with fake `ida_*` modules. Bug reports are very welcome.
+**kflow has not yet been run inside real IDA.** It was built without access to an IDA installation. The table decoders are checked on seven real kernels and five kernel modules (below): trap bytes, branch targets and source-file names; the IDA layer is small, uses IDAPython names and object members that all appear in the official stubs (178 checks in `tests/check_ida_api.py`), and has only been exercised with fake `ida_*` modules. Bug reports are very welcome.
 
 kflow was built by an AI agent (Claude, operated by Nightshift Labs).
 
@@ -72,7 +72,7 @@ A stripped `vmlinux` (from `extract-vmlinux`) still has `__bug_table` and `__ex_
 ### Step by step
 
 1. Outside IDA, see what is there: `python3 -m kflow kernel.elf` (output below).
-2. In IDA, open the kernel and run **Edit > Plugins > kflow: Annotate kernel sites** (comments, the missing jump references, and a data reference from each static-key site to its key, so X on a key lists its sites).
+2. In IDA, open the kernel and run **Edit > Plugins > kflow: Annotate kernel sites** (comments, the missing jump references, and a data reference from each static-key site to its key, so X on a key lists its sites). Run it after IDA's auto-analysis has finished: a static-key target or fixup that lies inside another function (not at its start, not that function's own `.cold` part) then gets a data reference instead of a jump reference, so that IDA is not asked to treat that function's code as flow of this one; it is still listed under X. Running Annotate again later changes earlier references to match IDA's current functions.
 3. **kflow: List BUG/WARN sites** lists every trap with its function and source line; Enter jumps to it.
    From a crash log such as `WARNING: ... at mm/userfaultfd.c:755 mfill_atomic_copy+0x674/...`: type `userfaultfd.c:755` in the list's filter (one line can have several sites: on the demo kernel four functions share this one), or press G (Jump to address) and enter `mfill_atomic_copy+0x674`. The kernel prints the address of the trap itself, so this lands on the `ud2`, where kflow's comment confirms the file and line.
 4. **kflow: List static-key sites** lists every static-key site with its key, `likely`/`unlikely`, whether the bytes there are a jump to the target now (`jump` / `no jump`), the target and the function; the chooser's filter finds every site of one key.

@@ -35,6 +35,11 @@ assert p.init() == 1 and [x[1] for x in log if x[0] == "reg"] == ACTION_NAMES
 assert m.STATE["hx"] is None
 assert m.AnnotateAction().activate(None) == 1
 assert [x for x in log if x[0] == "msg" and "jump references added: " in x[1] and "static-key site -> key references: " in x[1]], "Annotate reports its counts"
+assert not [x for x in log if x[0] == "msg" and "auto-analysis is still running" in x[1]]
+w["auto_ok"] = False  # Annotate while auto-analysis still runs: it works and says to run it again afterwards
+assert m.AnnotateAction().activate(None) == 1
+assert [x for x in log if x[0] == "msg" and "auto-analysis is still running" in x[1]]
+w["auto_ok"] = True
 assert any(c.startswith("kflow: ") for c in w["cmts"].values())
 assert ("hide", None) in log and not [x for x in log if x[0] == "warning"], log[-3:]
 assert m.ListAction().activate(None) == 1

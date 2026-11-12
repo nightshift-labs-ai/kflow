@@ -89,10 +89,13 @@ def main(argv=None):
         if args.remove:
             res = {}
             removed = idalayer.remove_annotations(t, res)
-            print("[kflow] references removed: %d jump references, %d static-key site -> key references"
-                  % (removed, res["key_refs"]))
+            print("[kflow] references removed: %d jump references, %d static-key site -> key references, %d data references"
+                  " to targets inside another function" % (removed, res["key_refs"], res["other_refs"]))
         else:
             print("[kflow] %s" % idalayer.annotate_text(idalayer.annotate(t, arch)))
+            if args.no_analysis:
+                print("[kflow] --no-analysis: IDA has not made the functions yet, so targets inside other functions kept "
+                      "jump references; run again without --no-analysis to change them")
         return 0
     finally:
         idapro.close_database(True)

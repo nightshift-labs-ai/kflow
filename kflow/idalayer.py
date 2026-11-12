@@ -3,6 +3,7 @@ import bisect
 import os
 
 import ida_bytes
+import ida_funcs
 import ida_ida
 import ida_idaapi
 import ida_nalt
@@ -18,6 +19,8 @@ BADADDR = ida_idaapi.BADADDR
 TRAP_LEN = {"x86_64": 2, "aarch64": 4}
 NODE = "$ kflow created xrefs"  # site -> target of every reference kflow itself added (offsets from the image base)
 KEY_NODE = "$ kflow created key refs"  # static-key site -> key, the data references kflow added
+OTHER_NODE = "$ kflow created other-function refs"  # site -> target inside ANOTHER function: kflow adds a data
+# reference there instead of a jump reference (offsets from the image base)
 WARN_NODE = "$ kflow warn flow"  # WARN fall-through (kflow/warnflow.py, experimental): offset -> bits 1 = WARN ud2 site,
 # 2 = start of a function tail kflow appended (offsets from the image base); the record exists only while it is on
 MASK = (1 << 64) - 1
@@ -335,6 +338,57 @@ def _add(src, dst, node, arch=None):
     return 1
 
 
+def in_other_function(src, dst):
+    """True when dst lies inside a function other than src's and is not that function's start. A user jump
+    reference there would make IDA treat the other function's code as flow of this one (it can then try to attach
+    it as a tail chunk), so kflow adds a data reference instead: it is still listed under X at the target."""
+    g = ida_funcs.get_func(dst)
+    if g is None or g.start_ea == dst:
+        return False
+    f = ida_funcs.get_func(src)
+    if f is None:
+        return True
+    if f.start_ea == g.start_ea or ida_funcs.func_contains(f, dst):  # same function, or a tail it shares
+        return False
+    # GCC's foo.cold part, which IDA may make a function of its own: foo's own jumps already go into its middle
+    fname = ida_funcs.get_func_name(f.start_ea) or ""
+    return not (fname and (ida_funcs.get_func_name(g.start_ea) or "").startswith(fname + ".cold"))
+
+
+def _add_other(src, dst, node, arch=None):
+    """The data reference src -> dst for a target inside another function (see in_other_function); skipped when a
+    reference is already there or the instruction branches there itself; recorded so Remove deletes only these."""
+    if not in_text(dst) or dst in data_refs_from(src) or dst in code_refs_from(src) or branches_to(src, dst, arch):
+        return 0
+    if dst == ida_bytes.get_item_end(src):
+        return 0
+    if not ida_xref.add_dref(src, dst, ida_xref.dr_O | ida_xref.XREF_USER):
+        return 0
+    base = ida_nalt.get_imagebase()
+    node.altset((src - base) & MASK, (dst - base) & MASK)
+    return 1
+
+
+def _ref(src, dst, node, onode, arch, res):
+    """A jump reference src -> dst, or a data reference when dst is inside another function. A reference of the
+    other kind that an earlier Annotate recorded for this pair (before IDA made the functions, or by an older kflow)
+    is replaced, so re-running Annotate after auto-analysis fixes it and Remove still finds everything."""
+    base = ida_nalt.get_imagebase()
+    key, val = (src - base) & MASK, (dst - base) & MASK
+    if in_other_function(src, dst):
+        if node.altval(key) == val and code_refs_from(src).get(dst):
+            ida_xref.del_cref(src, dst, False)
+            node.altdel(key)
+            res["changed_refs"] += 1
+        res["other_refs"] += _add_other(src, dst, onode, arch)
+    else:
+        if onode.altval(key) == val and data_refs_from(src).get(dst):
+            ida_xref.del_dref(src, dst)
+            onode.altdel(key)
+            res["changed_refs"] += 1
+        res["xrefs"] += _add(src, dst, node, arch)
+
+
 def data_refs_from(ea):
     """{target: is_user} for the data references from ea."""
     out = {}
@@ -387,9 +441,10 @@ def key_ref_target(j):
 def annotate(t, arch=None):
     """Comment every site; add jump references site -> static-key target and faulting insn -> fixup, and data
     references site -> key."""
-    res = {"comments": 0, "xrefs": 0, "key_refs": 0, "kept_user_comments": 0}
+    res = {"comments": 0, "xrefs": 0, "other_refs": 0, "changed_refs": 0, "key_refs": 0, "kept_user_comments": 0}
     node = _created()
     knode = _created(KEY_NODE)
+    onode = _created(OTHER_NODE)
     arch = arch or current_arch()
     for b in t["bug"]:
         if in_text(b.addr):
@@ -402,12 +457,12 @@ def annotate(t, arch=None):
     for j in t["jump"]:
         if in_text(j.code):
             _set(j.code, jump_comment(j), res)
-            res["xrefs"] += _add(j.code, j.target, node, arch)
+            _ref(j.code, j.target, node, onode, arch, res)
             res["key_refs"] += _add_key_ref(j.code, key_ref_target(j), knode)
     for x in t["ex"]:
         if in_text(x.insn):
             _set(x.insn, ex_comment(x, arch), res)
-            res["xrefs"] += _add(x.insn, x.fixup, node, arch)
+            _ref(x.insn, x.fixup, node, onode, arch, res)
     return res
 
 
@@ -415,6 +470,10 @@ def annotate_text(res):
     """One readable line for the counts annotate() returns (menu action and headless runner)."""
     text = ("comments: %d, jump references added: %d, static-key site -> key references: %d, user comments kept: %d"
             % (res["comments"], res["xrefs"], res["key_refs"], res["kept_user_comments"]))
+    if res.get("other_refs"):
+        text += ", data references to targets inside another function: %d" % res["other_refs"]
+    if res.get("changed_refs"):
+        text += ", references changed between jump and data reference (IDA's functions changed): %d" % res["changed_refs"]
     if res.get("stale_key_refs"):
         text += ", outdated key references removed: %d" % res["stale_key_refs"]
     return text
@@ -452,7 +511,8 @@ def code_refs_from(ea):
 def remove_annotations(t, res=None):
     """Remove our comments and the references kflow added (as recorded by annotate; references that existed
     before, IDA's own or the user's, stay). Returns how many jump references were removed; if res is a dict,
-    res["key_refs"] is set to how many site -> key data references were removed."""
+    res["key_refs"] is set to how many site -> key data references were removed and res["other_refs"] to how many
+    data references to targets inside another function."""
     for ea in [b.addr for b in t["bug"]] + [j.code for j in t["jump"]] + [x.insn for x in t["ex"]]:
         old = ida_bytes.get_cmt(ea, False)
         if old and old.startswith(TAG + ": "):
@@ -469,8 +529,20 @@ def remove_annotations(t, res=None):
                 key_refs += 1
             off = knode.altnext(off)
         knode.kill()
+    other = 0
+    onode = ida_netnode.netnode(OTHER_NODE, 0, False)
+    if onode.index() != ida_netnode.BADNODE:
+        off = onode.altfirst()
+        while off != ida_netnode.BADNODE:
+            f, to = (off + base) & MASK, (onode.altval(off) + base) & MASK
+            if data_refs_from(f).get(to):  # still there and still a user reference
+                ida_xref.del_dref(f, to)
+                other += 1
+            off = onode.altnext(off)
+        onode.kill()
     if res is not None:
         res["key_refs"] = key_refs
+        res["other_refs"] = other
     node = ida_netnode.netnode(NODE, 0, False)
     if node.index() == ida_netnode.BADNODE:  # never annotated
         return 0

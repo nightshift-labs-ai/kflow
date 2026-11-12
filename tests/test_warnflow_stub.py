@@ -493,9 +493,11 @@ def annotate_remove():
     """Annotate then Remove annotations: what they write and leave (to compare with WARN fall-through on and off)."""
     assert m.AnnotateAction().activate(None) == 1
     a = (dict(w["cmts"]), dict(w["xrefs"]), dict(w["drefs"]), dict(w["netnodes"].get(il.NODE, {})),
-         dict(w["netnodes"].get(il.KEY_NODE, {})), [x[1] for x in log if x[0] == "msg"][-1])
+         dict(w["netnodes"].get(il.KEY_NODE, {})), dict(w["netnodes"].get(il.OTHER_NODE, {})),
+         [x[1] for x in log if x[0] == "msg"][-1])
     assert m.RemoveAction().activate(None) == 1
     r = (dict(w["cmts"]), dict(w["xrefs"]), dict(w["drefs"]), il.NODE in w["netnodes"], il.KEY_NODE in w["netnodes"],
+         il.OTHER_NODE in w["netnodes"],
          [x[1] for x in log if x[0] == "msg"][-1])
     return a, r
 

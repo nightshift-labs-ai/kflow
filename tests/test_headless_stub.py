@@ -26,9 +26,9 @@ import kflow_headless as H  # noqa: E402
 import json  # noqa: E402
 import tempfile  # noqa: E402
 
-if "ida_funcs" not in sys.modules or not hasattr(sys.modules["ida_funcs"], "get_func_name"):
+if "ida_funcs" not in sys.modules:
     sys.modules["ida_funcs"] = types.ModuleType("ida_funcs")
-    sys.modules["ida_funcs"].get_func_name = lambda ea: elf.func(ea) or ""
+sys.modules["ida_funcs"].get_func_name = lambda ea: elf.func(ea) or ""  # function names for --json, from the ELF
 
 import contextlib, io  # noqa: E402
 out = io.StringIO()
