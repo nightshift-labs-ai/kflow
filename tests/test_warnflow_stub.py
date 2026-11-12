@@ -39,7 +39,7 @@ from kflow.cli import Elf, load  # noqa: E402
 
 BAD = T.BAD
 NN_UD2, NN_CALL, NN_JMP, NN_RETN, ARM_BRK = 632, 16, 86, 159, 542  # ida_allins.pyi values
-FL_F, CF_STOP, FF_CODE, FF_FLOW = 21, 1, 0x600, 0x10000  # ida_xref / ida_idp / ida_bytes.pyi values
+FL_F, CF_STOP, FF_CODE, FF_FLOW, FUNC_TAIL = 21, 1, 0x600, 0x10000, 0x8000  # ida_xref/_idp/_bytes/_funcs.pyi values
 UD2 = b"\x0f\x0b"
 
 elf = Elf(sys.argv[1])
@@ -256,6 +256,20 @@ def get_func(ea):
     return types.SimpleNamespace(start_ea=pc[2], end_ea=entry[1])
 
 
+def chunk(pc):
+    """func_t of one chunk: a tail has FUNC_TAIL and owner; an entry chunk has no owner (a union with frame fields)."""
+    if pc is None:
+        return None
+    if pc[0] == pc[2]:
+        return types.SimpleNamespace(start_ea=pc[0], end_ea=pc[1], flags=0)
+    return types.SimpleNamespace(start_ea=pc[0], end_ea=pc[1], flags=FUNC_TAIL, owner=pc[2])
+
+
+def get_next_fchunk(ea):
+    i = bisect.bisect_right(PS, ea)  # the first chunk that starts after ea
+    return chunk(P[i]) if i < len(P) else None
+
+
 def free_end(ea1):
     if ea1 in HOLES:
         return HOLES[ea1][0]
@@ -275,17 +289,25 @@ def append_func_tail(pfn, ea1, ea2):
     if ok:
         P.insert(i, [ea1, ea2, owner])
         PS.insert(i, ea1)
+        if w.get("merge") and i + 1 < len(P) and P[i + 1][0] == ea2 and P[i + 1][2] == owner:  # with the next chunk
+            P[i][1] = P[i + 1][1]
+            del P[i + 1], PS[i + 1]
+        if w.get("merge") == "both" and i > 0 and P[i - 1][1] == ea1 and P[i - 1][2] == owner:  # with the previous one
+            P[i - 1][1] = P[i][1]
+            del P[i], PS[i]
     w["tail_calls"].append(("append", owner, ea1, ea2, ok))
     return ok
 
 
 def remove_func_tail(pfn, tail_ea):
+    """Removes the whole tail chunk around tail_ea (ida_funcs.pyi: "any address inside the tail"), never an entry
+    chunk. The SDK does not say it refuses a pfn that does not own the tail, so the fake does not check: kflow must."""
     pc = piece_at(tail_ea)
-    ok = pc is not None and pc[2] == pfn.start_ea and pc[0] != pc[2]
+    ok = pc is not None and pc[0] != pc[2]
     if ok:
         i = bisect.bisect_left(PS, pc[0])
         del P[i], PS[i]
-    w["tail_calls"].append(("remove", pfn.start_ea, tail_ea, ok))
+    w["tail_calls"].append(("remove", pfn.start_ea, tail_ea) + ((pc[0], pc[1]) if ok else (None, None)) + (ok,))
     return ok
 
 
@@ -297,6 +319,8 @@ def reanalyze_function(pfn, *rest):
 
 fn.get_func, fn.append_func_tail, fn.remove_func_tail, fn.reanalyze_function = \
     get_func, append_func_tail, remove_func_tail, reanalyze_function
+fn.get_fchunk, fn.get_next_fchunk = lambda ea: chunk(piece_at(ea)), get_next_fchunk
+fn.is_func_tail = lambda pfn: pfn is not None and bool(pfn.flags & FUNC_TAIL)
 fn.get_func_name = lambda ea: elf.func(ea - w["shift"]) or ""
 hx_log = {"hooked": 0, "flushed": 0}
 
@@ -493,9 +517,10 @@ assert recorded(m, 1) == EXP_WARN and len(on["node"]) == len(EXP_WARN | tails)
 assert tails == exp_tails and res["tails"] == len(exp_tails), (len(tails), len(exp_tails), res)
 assert res["other_func"] == (ORPHAN_FN is not None) and res["tail_failed"] == 0, res
 assert res["no_func"] == sum(1 for s in EXP_WARN if piece_at(s) is None), res
-for h in tails:  # each tail is the orphan jmp, now a tail of the site's own function
+for h in tails:  # each tail is the orphan jmp, now a tail of the site's own function; its end is recorded too
     pc = piece_at(h)
     assert pc == [h, HOLES[h][0], piece_at(HOLES[h][1])[2]] and pc[0] != pc[2], pc
+    assert on["node"][(h - w["imagebase"]) & (2 ** 64 - 1)] >> 8 == HOLES[h][0] - h, "tail length (its end) recorded"
 new_pieces = set(on["pieces"]) - set(pre["pieces"])
 assert set(pre["pieces"]) <= set(on["pieces"]) and {p0 for p0, _, _ in new_pieces} == tails, "no function lost code"
 for h, (pc, code) in holes_before.items():
@@ -634,6 +659,102 @@ replan(traps)
 assert w["flow"] == pre["flow"]
 assert m.WarnFlowOffAction().activate(None) == 0 and msgs("not on in this database")
 assert annotate_remove() == ar_off
+
+# ---- 7. Remove takes out only a chunk that is still exactly the tail kflow added (review s151 item 2) ----
+# remove_func_tail removes the whole chunk around the address, so a tail that IDA merged with its own code must stay.
+
+
+def rec_val(ea):
+    return w["netnodes"].get(il.WARN_NODE, {}).get((ea - w["imagebase"]) & (2 ** 64 - 1), 0)
+
+
+def kept(pieces):
+    """Every chunk of the list is still whole in the same function (inside a chunk that may now be larger)."""
+    return all(piece_at(a) is not None and piece_at(a)[2] == o and piece_at(a)[1] >= e for a, e, o in pieces)
+
+
+def restore_pieces():
+    P[:] = [list(x) for x in pre["pieces"]]
+    PS[:] = [x[0] for x in P]
+
+
+def enable_appended():
+    n0 = len(w["tail_calls"])
+    assert m.WarnFlowAction().activate(None) == 1
+    return {c[2:4] for c in w["tail_calls"][n0:] if c[0] == "append" and c[-1]}
+
+
+def remove_checked(appended):
+    n0 = len(w["tail_calls"])
+    assert m.WarnFlowOffAction().activate(None) == 1
+    r = m.STATE["wf_last"]
+    removed = [c[3:5] for c in w["tail_calls"][n0:] if c[0] == "remove" and c[-1]]
+    assert all(x in appended for x in removed), "Remove took out a chunk larger than the tail kflow added"
+    assert kept(pre["pieces"]), "IDA's own code stays in its function"
+    assert r["tails"] == len(removed) and r["tails"] + r["tails_left"] == len(exp_tails) and r["flow_left"] == 0, r
+    st = snap(m)
+    assert st["flow"] == pre["flow"] and st["node"] is None and not st["filters"] and not st["listeners"]
+    if r["tails_left"]:
+        assert msgs("%d tails kflow added were not removed (merged with IDA's own code or refused; kflow removes only "
+                    "a chunk that is still exactly the tail it added)" % r["tails_left"])
+    return r
+
+
+changed, merged = [], {}
+if exp_tails:
+    appended = enable_appended()
+    assert snap(m) == on and appended == {(h, HOLES[h][0]) for h in exp_tails}
+    by_start, used = sorted(exp_tails), set()
+
+    def pick(ok):
+        """A recorded tail whose chunk and neighbours no earlier change touched, and ok(prev, chunk, next)."""
+        for h in by_start:
+            i = bisect.bisect_left(PS, h)
+            prv, nx = P[i - 1] if i else None, P[i + 1] if i + 1 < len(P) else None
+            near = {x[0] for x in (prv, P[i], nx) if x is not None}
+            if not near & used and ok(prv, P[i], nx):
+                used.update(near)
+                changed.append(h)
+                return i, prv, P[i], nx
+        return None
+
+    same = lambda a, b: a is not None and b is not None and a[2] == b[2]  # noqa: E731
+    if pick(lambda prv, pc, nx: True):  # a record without the tail's end (as kflow wrote it before): never removed
+        w["netnodes"][il.WARN_NODE][(changed[-1] - w["imagebase"]) & (2 ** 64 - 1)] &= 0xFF
+    got = pick(lambda prv, pc, nx: same(pc, nx) and nx[0] == pc[1])
+    if got:  # IDA later merged the tail with the function's next chunk: same start, larger end
+        i, prv, pc, nx = got
+        pc[1] = nx[1]
+        del P[i + 1], PS[i + 1]
+    got = pick(lambda prv, pc, nx: same(prv, pc) and prv[1] == pc[0] and prv[0] != prv[2])
+    if got:  # ... with the function's previous tail chunk: same end, earlier start
+        i, prv, pc, nx = got
+        prv[1] = pc[1]
+        del P[i], PS[i]
+    got = pick(lambda prv, pc, nx: True)
+    if got:  # the tail now belongs to another function (a user moved it)
+        got[2][2] = next(x[0] for x in P if x[0] == x[2] and x[0] != got[2][2])
+    got = pick(lambda prv, pc, nx: True)
+    if got:  # the tail is now a function of its own (an entry chunk)
+        got[2][2] = got[2][0]
+    left = [list(piece_at(h)) for h in changed]
+    r7 = remove_checked(appended)
+    assert r7["tails_left"] == len(changed) and r7["tails"] == len(exp_tails) - len(changed), r7
+    assert [piece_at(h) for h in changed] == left, "those chunks stay as they are"
+    restore_pieces()
+    for mode in ("next", "both"):  # a fake IDA that merges an appended tail with adjacent chunks of the same function
+        w["merge"] = mode
+        appended = enable_appended()
+        r = m.STATE["wf_last"]
+        assert r["flow"] == len(EXP_WARN) and r["tails"] == len(appended) == len(exp_tails), r
+        assert all(rec_val(h) >> 8 in (0, HOLES[h][0] - h) for h in exp_tails), "never records a merged chunk's end"
+        unknown = sum(1 for h in exp_tails if not rec_val(h) >> 8)
+        assert unknown, "some tails were merged"
+        r = remove_checked(appended)
+        assert r["tails_left"] == unknown > 0, (r, unknown)
+        merged[mode] = (r["tails"], r["tails_left"])
+        restore_pieces()
+    w["merge"] = None
 p.term()
 m, p = load_plugin()
 assert not w["listeners"] and not w["filters"], "no record: the next load installs nothing"
@@ -642,5 +763,7 @@ assert hx_log["hooked"] == 0
 print("OK warnflow %s: %d WARN ud2 sites, %d BUG ud2 sites; flow after %d WARN sites and 0 BUG sites; tails %d; "
       "other_func %d; site in no function %d; %d functions reanalysed; idempotent; term unhooks, the next load hooks "
       "from the record and reports lost flow; rebase; Remove restores flow, tails, record, filter; Annotate/Remove "
-      "unchanged; filter matches only WARN sites; decompiler part fails soft"
-      % (name, len(EXP_WARN), len(EXP_BUG), res["flow"], res["tails"], res["other_func"], res["no_func"], res["functions"]))
+      "unchanged; filter matches only WARN sites; decompiler part fails soft; Remove takes out only exact tails "
+      "(%d changed tails left; merge modes, removed/left: %s)"
+      % (name, len(EXP_WARN), len(EXP_BUG), res["flow"], res["tails"], res["other_func"], res["no_func"], res["functions"],
+         len(changed), ", ".join("%s %d/%d" % (k, a, b) for k, (a, b) in merged.items()) or "no tails"))

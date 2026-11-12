@@ -26,6 +26,7 @@ UD2 = b"\x0f\x0b"
 UD2_LEN = len(UD2)
 NN_UD2 = ida_allins.NN_ud2
 SITE, TAIL = 1, 2  # record bits: a WARN ud2 that falls through; the start of a function tail kflow appended
+LEN_SHIFT = 8  # a TAIL record also holds the tail's length (its end) from this bit; 0 = end not known: never removed
 DECL = "void __spoils<> __WARN(void);"  # returns and changes no register; __WARN() is the kernel's own name for the trap
 
 
@@ -115,6 +116,30 @@ def missing_flow(offsets):
     return sum(1 for off in offsets if not ida_bytes.is_flow(ida_bytes.get_flags(_ea(off, base) + UD2_LEN)))
 
 
+def _tail_length(nxt, limit):
+    """Length of the tail kflow just appended at nxt, or 0 when IDA merged it with a chunk it already had (the chunk
+    at nxt starts before nxt, or reaches past limit, where the next chunk started before the append)."""
+    c = ida_funcs.get_fchunk(nxt)
+    if c is None or c.start_ea != nxt or c.end_ea > limit or c.end_ea <= nxt:
+        return 0
+    return c.end_ea - nxt
+
+
+def _own_tail(rec, off, base):
+    """The site's function if the chunk at a recorded tail is still exactly the tail kflow appended to it: a tail chunk
+    that starts at the recorded start, ends at the recorded end and is owned by that function; else None."""
+    n, site = rec[off] >> LEN_SHIFT, (off - UD2_LEN) & MASK  # the tail starts right after its WARN site
+    if not n or not rec.get(site, 0) & SITE:
+        return None  # end not recorded (a record from before kflow recorded it, or IDA merged the tail on append)
+    ea = _ea(off, base)
+    f = ida_funcs.get_func(_ea(site, base))
+    c = ida_funcs.get_fchunk(ea)  # the chunk around ea; remove_func_tail would remove all of it
+    if (f is None or c is None or not ida_funcs.is_func_tail(c) or c.start_ea != ea or c.end_ea != _ea(off + n, base)
+            or c.owner != f.start_ea):
+        return None
+    return f
+
+
 def _reanalyze(funcs):
     for fea in sorted(funcs):
         pfn = ida_funcs.get_func(fea)
@@ -150,9 +175,11 @@ def enable(t, hook):
         nxt = ea + UD2_LEN
         g = ida_funcs.get_func(nxt)
         if g is None:
+            c = ida_funcs.get_next_fchunk(nxt)
+            limit = c.start_ea if c is not None else BADADDR
             if ida_bytes.is_code(ida_bytes.get_flags(nxt)) and ida_funcs.append_func_tail(f, nxt, BADADDR):
                 off = _offset(nxt, base)
-                node.altset(off, node.altval(off) | TAIL)
+                node.altset(off, (node.altval(off) & SITE) | TAIL | (_tail_length(nxt, limit) << LEN_SHIFT))
                 res["tails"] += 1
             else:
                 res["tail_failed"] += 1
@@ -166,27 +193,30 @@ def enable(t, hook):
 
 
 def disable():
-    """Undo enable(); the caller unhooks first, so nothing adds the flow any more. Removes the function tails kflow
-    appended (where still a tail of a function), lets IDA reanalyse the sites (IDA then drops their flow), reanalyses
-    the functions and deletes the record. The code after a site stays code, unreachable again.
-    Returns counts, or None when WARN fall-through is off in this database."""
+    """Undo enable(); the caller unhooks first, so nothing adds the flow any more. Removes each function tail kflow
+    appended only where it is still exactly that chunk: a tail chunk that starts and ends where kflow's did and belongs
+    to the site's function (remove_func_tail removes the whole chunk around the address, so a tail IDA merged with
+    its own code, or one whose end was not recorded, stays and is counted in tails_left). Then lets IDA reanalyse
+    the sites (IDA drops their flow), reanalyses the functions and deletes the record. The code after a site stays
+    code, unreachable again. Returns counts, or None when WARN fall-through is off in this database."""
     rec = records()
     if rec is None:
         return None
     base = ida_nalt.get_imagebase()
     sites = sorted(_ea(off, base) for off, bits in rec.items() if bits & SITE)
-    tails = sorted(_ea(off, base) for off, bits in rec.items() if bits & TAIL)
+    tails = sorted(off for off, bits in rec.items() if bits & TAIL)
     res = {"sites": len(sites), "tails": 0, "tails_left": 0, "flow_left": 0}
     funcs = set()
-    for ea in tails:
-        f = ida_funcs.get_func(ea)
-        if f is None:
+    for off in tails:
+        ea = _ea(off, base)
+        if ida_funcs.get_func(ea) is None:
             continue  # no function there any more: nothing to take back
-        if not f.start_ea <= ea < f.end_ea and ida_funcs.remove_func_tail(f, ea):
+        f = _own_tail(rec, off, base)
+        if f is not None and ida_funcs.remove_func_tail(f, ea):
             res["tails"] += 1
             funcs.add(f.start_ea)
         else:
-            res["tails_left"] += 1  # now inside the function's main chunk, or IDA refused
+            res["tails_left"] += 1  # merged with IDA's own code, end not recorded, moved to another function, or refused
     for ea in sites:
         ida_auto.plan_ea(ea)
         f = ida_funcs.get_func(ea)

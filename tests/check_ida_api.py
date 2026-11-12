@@ -50,7 +50,7 @@ MEMBERS = [("ida_xref", "xrefblk_t", m) for m in ("first_from", "next_from", "to
     [("ida_hexrays", "cfunc_t", m) for m in ("get_eamap", "get_pseudocode", "find_item_coords", "entry_ea")] + \
     [("ida_hexrays", "eamap_t", m) for m in ("__iter__", "__getitem__")] + [("ida_hexrays", "cinsnptrvec_t", "__iter__")] + \
     [("ida_pro", "strvec_t", m) for m in ("__getitem__", "__len__")] + [("ida_kernwin", "simpleline_t", "line")] + \
-    [("ida_funcs", "func_t", m) for m in ("start_ea", "end_ea")] + \
+    [("ida_funcs", "func_t", m) for m in ("start_ea", "end_ea", "owner")] + \
     [("ida_ua", "insn_t", m) for m in ("ea", "size", "itype", "add_cref")] + \
     [("ida_idp", "IDP_Hooks", m) for m in ("__init__", "hook", "unhook", "ev_emu_insn")] + \
     [("ida_hexrays", "udc_filter_t", m) for m in ("__init__", "init", "match")] + [("ida_hexrays", "codegen_t", "insn")]
@@ -84,6 +84,9 @@ SHAPES = [("ida_hexrays", "Hexrays_Hooks", r"def func_printed\(self, cfunc: cfun
           ("ida_bytes", None, r"def is_flow\(F: int\) -> bool:"), ("ida_bytes", None, r"def is_code\(F: int\) -> bool:"),
           ("ida_funcs", None, r"def append_func_tail\(pfn: func_t, ea1: ida_idaapi.ea_t, ea2: ida_idaapi.ea_t\) -> bool:"),
           ("ida_funcs", None, r"def remove_func_tail\(pfn: func_t, tail_ea: ida_idaapi.ea_t\) -> bool:"),
+          ("ida_funcs", None, r"def get_fchunk\(ea: ida_idaapi.ea_t\) -> Optional\[func_t\]:"),
+          ("ida_funcs", None, r"def get_next_fchunk\(ea: ida_idaapi.ea_t\) -> Optional\[func_t\]:"),
+          ("ida_funcs", None, r"def is_func_tail\(pfn: func_t\) -> bool:"),
           ("ida_funcs", None, r"def reanalyze_function\(\*args: Any\) -> None:"),
           ("ida_hexrays", None, r"^class udc_filter_t\(microcode_filter_t\):"),
           ("ida_hexrays", "udc_filter_t", r"def init\(self, decl: str\) -> bool:"),

@@ -488,7 +488,8 @@ class WarnFlowOffAction(ida_kernwin.action_handler_t):
         flush_pseudocode()
         report("WARN fall-through removed: %d sites reanalysed, flow still after %d; function tails removed: %d%s"
                % (res["sites"], res["flow_left"], res["tails"],
-                  "; %d tails kflow added were not removed (now part of the function's main chunk, or IDA refused) and stay in their function" % res["tails_left"]
+                  "; %d tails kflow added were not removed (merged with IDA's own code or refused; kflow removes only a "
+                  "chunk that is still exactly the tail it added) and stay where they are" % res["tails_left"]
                   if res["tails_left"] else ""))
         return 1
 
