@@ -111,6 +111,7 @@ def install(w, names=True):
 
     def add_dref(f, t, k):
         w["drefs"][(f, t)] = bool(k & 32)
+        w.setdefault("dref_keys", {}).setdefault(f, set()).add((f, t))
         return True
     x.add_dref = add_dref
     x.del_dref = lambda f, t: w["drefs"].pop((f, t), None) and None
@@ -128,8 +129,9 @@ def install(w, names=True):
 
     class xrefblk_t:
         def first_from(self, ea, flags):
-            if flags == 2:  # XREF_DATA
-                self._it = iter(sorted((t, u) for (f, t), u in w["drefs"].items() if f == ea))
+            if flags == 2:  # XREF_DATA (one key per site here, so look up the few candidates directly)
+                self._it = iter(sorted((t, u) for (f, t), u in w["drefs"].items() if f == ea)) if len(w["drefs"]) < 64 \
+                    else iter(sorted((k[1], w["drefs"][k]) for k in w["dref_keys"].get(ea, ()) if k in w["drefs"]))
             else:
                 self._it = iter(sorted((t, w["xrefs"][(ea, t)]) for t in w["by_from"].get(ea, ())))
             return self.next_from()
@@ -189,6 +191,7 @@ def run(path):
     pre = next(((j.code, j.key) for j in t["jump"] if il.in_text(j.code)), None)
     if pre:
         w["drefs"][pre] = True  # the user's own reference site -> key: kept, not recorded
+        w.setdefault("dref_keys", {}).setdefault(pre[0], set()).add(pre)
     res = il.annotate(t, il.current_arch())
     if not elf.relocatable:  # IDA's name list gives every key the same name as the command line
         bad = [hex(j.key) for j in t["jump"] if il.key_name(j.key) != (elf.key_name(j.key) or "0x%X" % j.key)]
@@ -227,6 +230,9 @@ def run(path):
     for f, to in w["xrefs"]:
         w["by_from"].setdefault(f, set()).add(to)
     w["drefs"] = {(f + delta, to + delta): u for (f, to), u in w["drefs"].items()}
+    w["dref_keys"] = {}
+    for k in w["drefs"]:
+        w["dref_keys"].setdefault(k[0], set()).add(k)
     w["imagebase"] = w.get("imagebase", 0) + delta
     assert il.remove_annotations({"bug": [], "jump": [], "ex": []}) == res2["xrefs"] == res["xrefs"]
     assert list(w["drefs"]) == ([(pre[0] + delta, pre[1] + delta)] if pre else []), "key refs follow a rebase"
