@@ -44,7 +44,9 @@ _PC = re.compile(r"(?:^|\s)(?:(?P<reg>pc|lr) : |(?P<old>PC|LR) is at )(?P<rest>.
 _TRACE = re.compile(r"(?:^|\s)Call [Tt]race:")
 _INLINE = re.compile(r"^(?P<fn>[A-Za-z_.$][\w.$]*)\s+(?P<file>[\w./+-]+\.(?:c|h|S|rs)):(?P<line>\d+)\s+\[inline\]$")
 _FILE_LINE = re.compile(r"^(?P<file>[\w./+-]+\.(?:c|h|S|rs)):(?P<line>\d+)$")
-_TAIL = re.compile(r"^(?:\s+\([A-Z]+\))?\s*$")  # arm64 call-trace entries end in ' (P)', ' (C)', ' (F)', ...
+# what may follow a call-trace entry or a bare func+0xoff line: an elided size ('/0x...', as people write it), and on
+# arm64 ' (P)', ' (C)', ' (F)'...
+_TAIL = re.compile(r"^(?:/\S*)?(?:\s+\([A-Z]+\))?\s*$")
 
 
 @dataclass

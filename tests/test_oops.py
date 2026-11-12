@@ -246,6 +246,10 @@ class Parse(unittest.TestCase):
         for text in ("mm/userfaultfd.c:755", "userfaultfd.c:755"):
             rep = oops.parse(text)
             self.assertEqual((rep.primary.function, rep.file, rep.line), (None, text.split(":")[0], 755))
+        p = oops.parse("mfill_atomic_copy+0x674/0x...").primary  # the size elided, as in the review's text
+        self.assertEqual((p.source, p.function, p.offset, p.size), ("text", "mfill_atomic_copy", 0x674, None))
+        # other text after the symbol: not a call-trace entry or a bare location
+        self.assertIsNone(oops.parse("mfill_atomic_copy+0x674/0x9d0 is where it stopped").primary)
 
     def test_nothing(self):
         for text in ("", "hello, world", "WARNING: possible circular locking dependency detected",
