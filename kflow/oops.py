@@ -130,7 +130,8 @@ class Report:
     line: int = None
     frames: list = field(default_factory=list)  # call-trace entries in order, '? ' ones with reliable=False
     locations: list = field(default_factory=list)  # every location found in that report, in the order of the text
-    reports: int = 0  # how many reports the text holds (the first one with a WARNING / kernel BUG / RIP / pc is used)
+    reports: int = 0  # how many reports the text holds (the first one with a WARNING / kernel BUG / trap RIP / pc is
+    #                   used)
 
 
 def strip_prefix(line):
@@ -168,8 +169,8 @@ def _loc(source, rest, text, whole=False):
 
 def parse(text):
     """Every location in the pasted text (one line or a whole report) and the one to go to: see Report. A text with
-    several reports is cut into them and the first one with a WARNING / kernel BUG / RIP / pc line is used (a later
-    report's RIP is not mixed with an earlier one's WARNING line)."""
+    several reports is cut into them and the first one with a WARNING / kernel BUG line or a trap RIP / pc line is used
+    (a later report's RIP is not mixed with an earlier one's WARNING line)."""
     rep = Report()
     in_trace = False
     # the report's own RIP / pc line comes before its call trace; one after 'Call Trace:' (x86 show_regs_if_on_stack: the
@@ -508,8 +509,8 @@ def resolve(report, sites, symbols, module=None, is_module=False):
                      + not_traps(report))
     m = _resolve(report, sites, symbols, module, is_module)
     if report.reports > 1:
-        m.notes.append("the text holds %d reports; the first one with a WARNING / kernel BUG / RIP / pc line is used "
-                       "(paste one report to look up another)" % report.reports)
+        m.notes.append("the text holds %d reports; the first one with a WARNING / kernel BUG line or a trap RIP / pc "
+                       "line is used (paste one report to look up another)" % report.reports)
     if loc.source in ("frame", "text") and len(report.locations) > 1 and m.status not in ("exact", "ambiguous"):
         # a call trace or a list of lines (KASAN, lockdep, hung task...): its first entry is a caller, not a trap
         return Match("none", loc=loc, notes=m.notes + not_traps(report) + [

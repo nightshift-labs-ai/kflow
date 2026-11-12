@@ -660,7 +660,7 @@ class Parse(unittest.TestCase):
         self.assertEqual((rep.reports, rep.primary.function, rep.header.function, m.status, m.address),
                          (2, "mfill_atomic_copy", "mfill_atomic_copy", "exact", 0xFFFFFFFF8E629BC4))
         self.assertEqual(len(rep.frames), 10)
-        self.assertIn("the text holds 2 reports; the first one with a WARNING / kernel BUG / RIP / pc line is used "
+        self.assertIn("the text holds 2 reports; the first one with a WARNING / kernel BUG line or a trap RIP / pc line is used "
                       "(paste one report to look up another)", m.notes)
         rep = oops.parse(NEW_WARN + "\n" + OLD_WARN_NO_FILE.replace("copy+0x674", "poison+0x494"))  # no cut-here line
         self.assertEqual((rep.reports, rep.primary.offset, rep.file), (2, 0x674, "mm/userfaultfd.c"))
@@ -709,7 +709,7 @@ class Parse(unittest.TestCase):
                             ("\n".join(POW_X86.splitlines()[:-1] + X86_WARN.splitlines()[1:]), "refcount_warn_saturate")):
             rep, m = find(text)
             self.assertEqual((rep.reports, rep.primary.function, m.status), (2, first, "exact"), text[:80])
-            self.assertIn("the text holds 2 reports; the first one with a WARNING / kernel BUG / RIP / pc line is used "
+            self.assertIn("the text holds 2 reports; the first one with a WARNING / kernel BUG line or a trap RIP / pc line is used "
                           "(paste one report to look up another)", m.notes)
 
     def test_executive_summary(self):
@@ -792,6 +792,10 @@ class Parse(unittest.TestCase):
         rep, m = find(HUNG_NMI + poison.split("\n", 1)[1])
         self.assertEqual((rep.reports, rep.primary.function, m.status, m.address),
                          (2, "mfill_atomic_poison", "exact", 0xFFFFFFFF8E62B164))
+        # the note says which report is used: the first with a trap line, not the first with any RIP line (claims s163
+        # Finding 3)
+        self.assertIn("the text holds 2 reports; the first one with a WARNING / kernel BUG line or a trap RIP / pc line "
+                      "is used (paste one report to look up another)", m.notes)
         # Linux 4.9's executive summary 'RIP  [<%p>] %pS' follows the call trace and is the trap's RIP
         rep, m = find(OLD_X86.split("\n", 1)[1] + OLD_SUMMARY)
         self.assertEqual((rep.primary.source, m.status, m.address), ("rip", "exact", 0xFFFFFFFF8E629BC4))
