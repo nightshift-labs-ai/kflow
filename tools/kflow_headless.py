@@ -41,6 +41,7 @@ def site_records(t, arch, path):
         "input": os.path.basename(path),
         "bug_layout": t.get("bug_layout"),
         "missing": list(t["missing"]),
+        "errors": {k: str(v) for k, v in t.get("errors", {}).items()},   # a table found but not decoded (its list is empty)
         "bug": [{"addr": h(b.addr), "kind": "WARN" if b.warn else "BUG", "function": fn(b.addr), "file": b.file,
                  "line": b.line} for b in t["bug"]],
         "jump": [{"addr": h(j.code), "key": idalayer.site_key_name(j, names), "kind": "likely" if j.branch else "unlikely",

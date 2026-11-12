@@ -465,6 +465,7 @@ def site_records(elf, t, path):
         "input": os.path.basename(path),
         "bug_layout": t.get("bug_layout"),
         "missing": list(t["missing"]),
+        "errors": {k: str(v) for k, v in t.get("errors", {}).items()},   # a table found but not decoded (its list is empty)
         "bug": [{"addr": h(b.addr), "kind": "WARN" if b.warn else "BUG", "function": elf.func(b.addr) or None,
                  "file": b.file, "line": b.line, "flags": b.flags} for b in t.get("bug", [])],
         "jump": [{"addr": h(j.code), "key": elf.key_name(j.key) or h(j.key), "kind": "likely" if j.branch else "unlikely",

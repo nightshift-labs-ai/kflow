@@ -114,7 +114,7 @@ Without the IDA window (idalib, IDA 9.0+): `python3 tools/kflow_headless.py <ker
 {"addr": "0xFFFFFFFF8E200029", "fixup": "0xFFFFFFFF8E20002B", "type": "WRMSR", "handler": null, "function": "sev_es_terminate"}
 ```
 
-The file has the lists `bug`, `jump` and `ex` of such records, plus `input`, `bug_layout` (the field order of the kernel's own `__bug_table` entries, not of these records) and `missing` (tables not found).
+The file has the lists `bug`, `jump` and `ex` of such records, plus `input`, `bug_layout` (the field order of the kernel's own `__bug_table` entries, not of these records) `missing` (tables not found) and `errors` (tables found but not decoded, whose list is then empty).
 
 ### Try a real module (one minute, 377 KB download)
 

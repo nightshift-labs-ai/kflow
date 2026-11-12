@@ -360,6 +360,8 @@ class CliArgs(unittest.TestCase):
         t = {"missing": [], "bug_layout": "addr,file,line,flags", "bug": [], "jump": [],
              "ex": [core.ExSite(insn=1, fixup=2, data=None, entry=0, handler=0x30), core.ExSite(insn=3, fixup=4, data=None, entry=0)]}
         js = cli.site_records(E(), t, "/x/k")
+        self.assertEqual(js["errors"], {})
+        self.assertEqual(cli.site_records(E(), dict(t, errors={"bug": ValueError("bad entry size")}), "k")["errors"], {"bug": "bad entry size"})
         self.assertEqual([(r["type"], r["handler"]) for r in js["ex"]], [(None, "0x30"), (None, None)])
         self.assertEqual((js["input"], js["bug_layout"]), ("k", "addr,file,line,flags"))
 
