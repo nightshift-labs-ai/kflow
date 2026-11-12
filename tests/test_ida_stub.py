@@ -105,7 +105,15 @@ def install(w, names=True):
     m["ida_ida"].inf_is_64bit = lambda: True
     m["ida_ida"].inf_get_procname = lambda: "metapc" if elf.arch == "x86_64" else "ARM"
     x = m["ida_xref"]
-    x.fl_JN, x.XREF_USER, x.XREF_FAR = 19, 32, 1
+    x.fl_JN, x.XREF_USER, x.XREF_FAR, x.XREF_DATA, x.dr_O = 19, 32, 1, 2, 1
+    w.setdefault("drefs", {})
+    m["ida_bytes"].is_mapped = lambda ea: any(s.start_ea <= ea < s.end_ea for s in w["segs"])
+
+    def add_dref(f, t, k):
+        w["drefs"][(f, t)] = bool(k & 32)
+        return True
+    x.add_dref = add_dref
+    x.del_dref = lambda f, t: w["drefs"].pop((f, t), None) and None
 
     def add_cref(f, t, k):
         w["xrefs"][(f, t)] = bool(k & 32)
@@ -120,7 +128,10 @@ def install(w, names=True):
 
     class xrefblk_t:
         def first_from(self, ea, flags):
-            self._it = iter(sorted((t, w["xrefs"][(ea, t)]) for t in w["by_from"].get(ea, ())))
+            if flags == 2:  # XREF_DATA
+                self._it = iter(sorted((t, u) for (f, t), u in w["drefs"].items() if f == ea))
+            else:
+                self._it = iter(sorted((t, w["xrefs"][(ea, t)]) for t in w["by_from"].get(ea, ())))
             return self.next_from()
 
         def next_from(self):
@@ -175,6 +186,9 @@ def run(path):
     other = next((b.addr for b in t["bug"] if il.in_text(b.addr) and b.addr != note), None)
     if other is not None:
         w["cmts"][other] = "kflow-like note by the user"  # starts with "kflow" but is not ours
+    pre = next(((j.code, j.key) for j in t["jump"] if il.in_text(j.code)), None)
+    if pre:
+        w["drefs"][pre] = True  # the user's own reference site -> key: kept, not recorded
     res = il.annotate(t, il.current_arch())
     if not elf.relocatable:  # IDA's name list gives every key the same name as the command line
         bad = [hex(j.key) for j in t["jump"] if il.key_name(j.key) != (elf.key_name(j.key) or "0x%X" % j.key)]
@@ -193,8 +207,11 @@ def run(path):
     users = sum(1 for u in w["xrefs"].values() if u)
     assert users == res["xrefs"] + (mine is not None), (users, res)
     assert len(w["netnodes"].get(il.NODE, {})) == res["xrefs"] and (res["xrefs"] > 0 or not (t["jump"] or t["ex"]))
+    assert len(w["netnodes"].get(il.KEY_NODE, {})) == res["key_refs"] == len(w["drefs"]) - (pre is not None)
+    assert res["key_refs"] > 0 or not t["jump"] or pre and len(t["jump"]) == 1, res
     removed = il.remove_annotations(t)
     assert removed == res["xrefs"], (removed, res)
+    assert list(w["drefs"]) == ([pre] if pre else []) and il.KEY_NODE not in w["netnodes"]  # only the user's own stays
     assert sum(1 for u in w["xrefs"].values() if not u) == own  # IDA's own references stay
     assert [k for k, u in w["xrefs"].items() if u] == ([mine] if mine else []), "only the user's own reference stays"
     assert il.NODE not in w["netnodes"]
@@ -209,8 +226,10 @@ def run(path):
     w["by_from"] = {}
     for f, to in w["xrefs"]:
         w["by_from"].setdefault(f, set()).add(to)
+    w["drefs"] = {(f + delta, to + delta): u for (f, to), u in w["drefs"].items()}
     w["imagebase"] = w.get("imagebase", 0) + delta
     assert il.remove_annotations({"bug": [], "jump": [], "ex": []}) == res2["xrefs"] == res["xrefs"]
+    assert list(w["drefs"]) == ([(pre[0] + delta, pre[1] + delta)] if pre else []), "key refs follow a rebase"
     assert [k for k, u in w["xrefs"].items() if u] == ([(mine[0] + delta, mine[1] + delta)] if mine else [])
     # rebase with the __start_/__stop_ names gone from the database: the shift comes from an anchor name it kept
     fs = il.file_symbols()

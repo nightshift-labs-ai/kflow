@@ -16,6 +16,7 @@ TAG = "kflow"
 BADADDR = ida_idaapi.BADADDR
 TRAP_LEN = {"x86_64": 2, "aarch64": 4}
 NODE = "$ kflow created xrefs"  # site -> target of every reference kflow itself added (offsets from the image base)
+KEY_NODE = "$ kflow created key refs"  # static-key site -> key, the data references kflow added
 MASK = (1 << 64) - 1
 
 
@@ -190,8 +191,8 @@ def _set(ea, text, res):
     res["comments"] += 1
 
 
-def _created():
-    return ida_netnode.netnode(NODE, 0, True)
+def _created(name=NODE):
+    return ida_netnode.netnode(name, 0, True)
 
 
 def branches_to(src, dst, arch):
@@ -228,10 +229,35 @@ def _add(src, dst, node, arch=None):
     return 1
 
 
+def data_refs_from(ea):
+    """{target: is_user} for the data references from ea."""
+    out = {}
+    xb = ida_xref.xrefblk_t()
+    ok = xb.first_from(ea, ida_xref.XREF_DATA)
+    while ok:
+        out[xb.to] = bool(xb.user)
+        ok = xb.next_from()
+    return out
+
+
+def _add_key_ref(site, key, node):
+    """A user data reference static-key site -> key, so the key's cross references list its sites; recorded like
+    the jump references, so Remove deletes only these."""
+    if not ida_bytes.is_mapped(key) or key in data_refs_from(site):
+        return 0
+    if not ida_xref.add_dref(site, key, ida_xref.dr_O | ida_xref.XREF_USER):
+        return 0
+    base = ida_nalt.get_imagebase()
+    node.altset((site - base) & MASK, (key - base) & MASK)
+    return 1
+
+
 def annotate(t, arch=None):
-    """Comment every site; add jump references site -> static-key target and faulting insn -> fixup."""
-    res = {"comments": 0, "xrefs": 0, "kept_user_comments": 0}
+    """Comment every site; add jump references site -> static-key target and faulting insn -> fixup, and data
+    references site -> key."""
+    res = {"comments": 0, "xrefs": 0, "key_refs": 0, "kept_user_comments": 0}
     node = _created()
+    knode = _created(KEY_NODE)
     arch = arch or current_arch()
     for b in t["bug"]:
         if in_text(b.addr):
@@ -240,6 +266,7 @@ def annotate(t, arch=None):
         if in_text(j.code):
             _set(j.code, jump_comment(j), res)
             res["xrefs"] += _add(j.code, j.target, node, arch)
+            res["key_refs"] += _add_key_ref(j.code, j.key, knode)
     for x in t["ex"]:
         if in_text(x.insn):
             _set(x.insn, ex_comment(x, arch), res)
@@ -266,10 +293,19 @@ def remove_annotations(t):
         old = ida_bytes.get_cmt(ea, False)
         if old and old.startswith(TAG + ": "):
             ida_bytes.set_cmt(ea, "", False)
+    base = ida_nalt.get_imagebase()  # offsets survive a rebase of the database
+    knode = ida_netnode.netnode(KEY_NODE, 0, False)
+    if knode.index() != ida_netnode.BADNODE:
+        off = knode.altfirst()
+        while off != ida_netnode.BADNODE:
+            f, to = (off + base) & MASK, (knode.altval(off) + base) & MASK
+            if data_refs_from(f).get(to):  # still there and still a user reference
+                ida_xref.del_dref(f, to)
+            off = knode.altnext(off)
+        knode.kill()
     node = ida_netnode.netnode(NODE, 0, False)
     if node.index() == ida_netnode.BADNODE:  # never annotated
         return 0
-    base = ida_nalt.get_imagebase()  # offsets survive a rebase of the database
     removed = 0
     off = node.altfirst()
     while off != ida_netnode.BADNODE:
