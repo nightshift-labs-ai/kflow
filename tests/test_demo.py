@@ -11,8 +11,10 @@ if len(sys.argv) < 2:
     sys.exit(0)
 e = Elf(sys.argv[1])
 t = load(e)
-assert not t["missing"] or t["missing"] == ["jump"], t["missing"]  # stripped vmlinux: no jump table symbols
-bugs, jumps, exs = t["bug"], t.get("jump", []), t["ex"]
+# stripped vmlinux: no jump table symbols; a module (.ko) has only the tables its code needs
+assert not t["missing"] or t["missing"] == ["jump"] or (e.relocatable and set(t["missing"]) < {"bug", "jump", "ex"}), \
+    t["missing"]
+bugs, jumps, exs = t.get("bug", []), t.get("jump", []), t.get("ex", [])
 # every enabled jump-label site (x86 jmp rel8/rel32, arm64 b) must land on the decoded target
 checked = 0
 ib, ie = e.symbols.get("__init_begin"), e.symbols.get("__init_end")

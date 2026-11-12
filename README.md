@@ -10,7 +10,7 @@ kflow reads these tables from the database and, in IDA, comments every site and 
 
 ## Status: read this first
 
-**kflow has not yet been run inside real IDA.** It was built without access to an IDA installation. The table decoders are checked on five real kernels (below): trap bytes, branch targets and source-file names; the IDA layer is small, uses 54 IDAPython names and object members, all present in the official stubs (`tests/check_ida_api.py`), and has only been exercised with fake `ida_*` modules. Bug reports are very welcome.
+**kflow has not yet been run inside real IDA.** It was built without access to an IDA installation. The table decoders are checked on five real kernels and one kernel module (below): trap bytes, branch targets and source-file names; the IDA layer is small, uses 54 IDAPython names and object members, all present in the official stubs (`tests/check_ida_api.py`), and has only been exercised with fake `ida_*` modules. Bug reports are very welcome.
 
 kflow was built by an AI agent (Claude, operated by Nightshift Labs).
 
@@ -29,6 +29,8 @@ You need a 64-bit kernel ELF that still has the kernel's symbol names, for examp
 - a distribution's debug `vmlinux` (Debian/Ubuntu: `/usr/lib/debug/boot/vmlinux-<version>` from the `linux-image-<version>-dbg` / `-dbgsym` package);
 - the `kernel.elf` of the [MemLens demo data](https://github.com/nightshift-labs-ai/memlens/releases/tag/demo-data) (22 MB zip; a Debian 13 6.12 kernel exported from a memory image, so freed init code reads as other bytes);
 - an Android GKI `Image` turned into an ELF with kallsyms names by [vmlinux-to-elf](https://github.com/marin-m/vmlinux-to-elf).
+
+- a kernel module (`.ko`): it has its own `__bug_table` and `__jump_table` (and `__ex_table` if its code touches user memory) as relocatable sections. The command line lays the sections out from 0x10000 in file order, puts undefined symbols in 8-byte slots after them and applies the relocations, so file names, keys and targets come out right; IDA relocates a `.ko` itself, and kflow then finds the tables by segment name. Addresses printed for a module are those of this layout, not necessarily IDA's.
 
 A stripped `vmlinux` (from `extract-vmlinux`) still has `__bug_table` and `__ex_table` as sections, and kflow uses them; the static-key table has no section of its own and needs the `__start___jump_table` symbol.
 
@@ -73,7 +75,7 @@ The comments kflow writes in IDA, for three of the sites above (text produced by
 
 ## What was verified
 
-`tests/test_demo.py <kernel ELF>` checks the decoded tables against the instruction bytes; `tests/test_ida_stub.py <kernel ELF>` runs the IDA layer on fake `ida_*` modules backed by the same file (annotate, then remove, with IDA's own references, a reference you added and user comments in place; again after a rebase); `tests/test_headless_stub.py <kernel ELF>` does the same through the headless runner, and `tests/test_entry_stub.py <kernel ELF>` loads the plugin itself and runs its three menu actions; `python3 tests/test_core.py` covers the layouts on synthetic tables.
+`tests/test_demo.py <kernel ELF>` checks the decoded tables against the instruction bytes; `tests/test_ida_stub.py <kernel ELF>` runs the IDA layer on fake `ida_*` modules backed by the same file (annotate, then remove, with IDA's own references, a reference you added and user comments in place; again after a rebase); `tests/test_headless_stub.py <kernel ELF>` does the same through the headless runner, and `tests/test_entry_stub.py <kernel ELF>` loads the plugin itself and runs its three menu actions; `python3 tests/test_core.py` covers the layouts on synthetic tables and the relocation of a synthetic module.
 
 | Kernel (banner) | BUG/WARN sites | static-key sites | exception-table entries | what the tests check |
 |---|---|---|---|---|
@@ -81,6 +83,7 @@ The comments kflow writes in IDA, for three of the sites above (text produced by
 | 6.12.115+deb13.1-cloud-amd64, x86_64, stripped `vmlinux` | 9,993 (7,615 WARN) | needs symbols | 630 | tables found by section name; file names are kernel paths (the trap-byte check needs function symbols, so the CLI's "7,615 WARN sites are ud2" is not a test) |
 | 5.10.198-android12-9, arm64 (vmlinux-to-elf) | 24,386 (17,374 WARN, all `brk #0x800`) | 75,316 | 1,488 (8-byte, no type) | the 54,896 sites outside init code compiled as a `b` branch to the decoded target (most are `static_branch_likely` sites, not keys switched on); the rest are `nop`; file pointers here are entry-relative (before Linux 5.19) |
 | 5.10.0-32-amd64 (Debian 11, 5.10.223), x86_64 (vmlinux-to-elf) | 6,573 (4,671 WARN) | 3,820 | 548 (12-byte, third field = handler function) | WARN/BUG sites are `ud2`; the 169 sites compiled as a `jmp` branch to the decoded target; file pointers are entry-relative; all 548 handlers are the kernel's `ex_handler_*` functions (288 `ex_handler_uaccess`, 114 `ex_handler_default`, ...), and the 49 MSR handlers sit on `rdmsr`/`wrmsr` |
+| module `nf_tables.ko` from 6.12.115+deb13.1-cloud-amd64, x86_64 (relocations applied by the command line) | 141 (138 WARN) | 8 | none in this module | WARN/BUG sites are `ud2`; the 2 sites compiled as a `jmp` branch to the decoded target; all 141 `file:line` pairs checked against the v6.12.115 sources: 133 lines hold a `WARN`/`BUG` macro, the other 8 a `memcpy` (fortified copies warn on overflow); keys named, e.g. `nft_trace_enabled` |
 | 6.1.57-android14-11, arm64 (vmlinux-to-elf) | 12,223 (8,792 WARN, all `brk #0x800`) | 10,629 | 1,043 (12-byte: 1,022 UACCESS_ERR_ZERO, 12 LOAD_UNALIGNED_ZEROPAD, 9 KACCESS_ERR_ZERO) | the 1,099 `b` sites outside init code branch to the decoded target; the rest are `nop` |
 
 The entry layout is chosen from the data: for `__bug_table` the layout whose entries name source files, for `__ex_table` the layout that gives the address-sorted list the kernel build produces (arm64 before 5.16 has 8-byte entries).
@@ -91,6 +94,7 @@ The entry layout is chosen from the data: for `__bug_table` the layout whose ent
 - Exception-type names: x86_64 from Linux 6.12, arm64 from Linux 6.1/6.12 (`asm-extable.h`, same numbers in both). Other versions number some x86_64 types differently, so treat the name as a hint; arm64 kernels before 5.16 have no type field. On x86_64 before 5.16 the third field points to a handler function: kflow detects that layout and names the handler instead (checked on a synthetic table and on Debian 11's 5.10 kernel).
 - kflow does not change how IDA treats a WARN `ud2` (IDA may still end the block there); the comment says that execution continues. Not tried in IDA.
 - Static-key sites in freed init code (memory images) are decoded but not commented when they are outside code segments.
+- Kernel modules: checked on one x86_64 module (`nf_tables.ko`). The arm64 relocation types (`R_AARCH64_PREL32`/`PREL64`/`ABS64`/`ABS32`) are applied the same way but have not been tried on a real arm64 module. In IDA, kflow relies on IDA's own relocation of the `.ko` (not tried in IDA).
 - Alternatives (`.altinstructions`) are not handled; see [ida-linux-alternatives](https://github.com/opensrcsec/ida-linux-alternatives).
 
 ## Credits

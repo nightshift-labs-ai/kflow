@@ -112,5 +112,65 @@ class Tables(unittest.TestCase):
             decode_ex_table(m.read, BASE, BASE + 13)
 
 
+def module_elf(path):
+    """A minimal x86_64 relocatable ELF (.ko) with one BUG entry and one static-key entry, both only meaningful
+    after relocation: .text = ud2 + 2-byte NOP, .rodata.str = "\\0a/b.c\\0", the key is an undefined symbol."""
+    text, rodata = b"\x0f\x0b\x66\x90", b"\0a/b.c\0"
+    bug, jump = bytes(12), bytes(16)
+    struct_bug = bytearray(bug)
+    struct.pack_into("<HH", struct_bug, 8, 42, 1 << 0)  # line 42, BUGFLAG_WARNING
+    strtab = b"\0my_key\0"
+    names = [b"", b".text", b".rodata.str", b"__bug_table", b".rela__bug_table", b"__jump_table",
+             b".rela__jump_table", b".symtab", b".strtab", b".shstrtab"]
+    shstr = b"\0".join(names) + b"\0"
+    off = {n: shstr.index(b"\0" + n + b"\0") + 1 if n else 0 for n in names}
+    # symbols: 0 null, 1 section .text, 2 section .rodata.str, 3 undefined my_key (global)
+    sym = bytes(24) + struct.pack("<IBBHQQ", 0, 3, 0, 1, 0, 0) + struct.pack("<IBBHQQ", 0, 3, 0, 2, 0, 0) \
+        + struct.pack("<IBBHQQ", 1, 0x10, 0, 0, 0, 0)
+    rela = lambda o, s, t, a: struct.pack("<QQq", o, (s << 32) | t, a)  # noqa: E731
+    rbug = rela(0, 1, 2, 0) + rela(4, 2, 2, 1)  # PC32: insn -> .text+0, file -> .rodata.str+1
+    rjump = rela(0, 1, 2, 2) + rela(4, 1, 2, 4) + rela(8, 3, 24, 0)  # code .text+2, target .text+4, key my_key (PC64)
+    blobs = [b"", text, rodata, bytes(struct_bug), rbug, jump, rjump, sym, strtab, shstr]
+    body, offs = b"", []
+    for b in blobs:
+        body += bytes((-len(body)) % 8)
+        offs.append(64 + len(body))
+        body += b
+    shoff = 64 + len(body) + ((-(64 + len(body))) % 8)
+    body += bytes(shoff - 64 - len(body))
+    # (name, type, flags, info, link, entsize)
+    spec = [(b"", 0, 0, 0, 0, 0), (b".text", 1, 6, 0, 0, 0), (b".rodata.str", 1, 2, 0, 0, 0), (b"__bug_table", 1, 3, 0, 0, 0),
+            (b".rela__bug_table", 4, 0x40, 3, 7, 24), (b"__jump_table", 1, 3, 0, 0, 0),
+            (b".rela__jump_table", 4, 0x40, 5, 7, 24), (b".symtab", 2, 0, 3, 8, 24), (b".strtab", 3, 0, 0, 0, 0),
+            (b".shstrtab", 3, 0, 0, 0, 0)]
+    sh = b""
+    for i, (n, t, f, info, link, ent) in enumerate(spec):
+        sh += struct.pack("<IIQQQQIIQQ", off[n], t, f, 0, offs[i] if i else 0, len(blobs[i]), link, info, 8 if i else 0, ent)
+    hdr = b"\x7fELF" + bytes([2, 1, 1]) + bytes(9) + struct.pack("<HHIQQQIHHHHHH", 1, 62, 1, 0, 0, shoff, 0, 64, 0, 0,
+                                                                   64, len(spec), len(spec) - 1)
+    with open(path, "wb") as fh:
+        fh.write(hdr + body + sh)
+
+
+class Module(unittest.TestCase):
+    def test_relocated_module(self):
+        import tempfile
+        from kflow.cli import Elf, load
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "toy.ko")
+            module_elf(p)
+            e = Elf(p)
+            t = load(e)
+        self.assertTrue(e.relocatable)
+        text = e.sections[".text"][0]
+        self.assertEqual(t["missing"], ["ex"])
+        (b,) = t["bug"]
+        self.assertEqual((b.addr, b.file, b.line, b.warn), (text, "a/b.c", 42, True))
+        (j,) = t["jump"]
+        self.assertEqual((j.code, j.target, j.key), (text + 2, text + 4, e.symbols["my_key"]))  # PC64 key: also checks 8-byte relocations
+        self.assertEqual(e.by_addr[j.key], "my_key")
+        self.assertGreater(j.key, max(end for a, end in e.sections.values()))  # extern slot after the sections
+
+
 if __name__ == "__main__":
     unittest.main()

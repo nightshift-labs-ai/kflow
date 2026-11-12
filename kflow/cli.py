@@ -1,4 +1,4 @@
-"""kflow command line: decode the site tables of a kernel ELF (vmlinux, or a MemLens kernel.elf).
+"""kflow command line: decode the site tables of a kernel ELF (vmlinux, a MemLens kernel.elf, or a module .ko).
 
     python3 -m kflow <kernel.elf> [--list bug|warn|jump|ex] [--limit N] [--json out.json]
 """
@@ -29,20 +29,27 @@ class Elf:
         shoff, = struct.unpack_from("<Q", d, 0x28)
         shentsize, shnum, shstrndx = struct.unpack_from("<HHH", d, 0x3A)
         machine, = struct.unpack_from("<H", d, 0x12)
+        etype, = struct.unpack_from("<H", d, 0x10)
         self.arch = {62: "x86_64", 183: "aarch64"}.get(machine, "machine %d" % machine)
-        self.secs, names = [], []
+        self.secs, names, extra = [], [], []
         for i in range(shnum):
-            name, typ, flags, addr, off, size, link = struct.unpack_from("<IIQQQQI", d, shoff + i * shentsize)
+            name, typ, flags, addr, off, size, link, info, align = struct.unpack_from("<IIQQQQIIQ", d, shoff + i * shentsize)
             self.secs.append((typ, flags, addr, off, size, link))
             names.append(name)
-        self.sections = {}
+            extra.append((info, align))
+        self.secnames = []
         if shstrndx < len(self.secs):
             so = self.secs[shstrndx][3]
-            for i, n in enumerate(names):
-                nm = d[so + n:d.index(b"\0", so + n)].decode("utf-8", "replace")
-                t, f, a, o, s, l = self.secs[i]
-                if nm and a and s:
-                    self.sections.setdefault(nm, (a, a + s))
+            self.secnames = [d[so + n:d.index(b"\0", so + n)].decode("utf-8", "replace") for n in names]
+        self.relocatable = etype == 1  # a kernel module (.ko): sections get addresses here and relocations are applied
+        self.externs = {}
+        if self.relocatable:
+            self._layout(extra)
+        self.sections = {}
+        for i, nm in enumerate(self.secnames):
+            t, f, a, o, s, l = self.secs[i]
+            if nm and a and s:
+                self.sections.setdefault(nm, (a, a + s))
         self.loaded = sorted((a, a + s, o) for t, f, a, o, s, l in self.secs if t == 1 and a and s)
         self._starts = [x[0] for x in self.loaded]
         self.text = [(a, a + s) for t, f, a, o, s, l in self.secs if t == 1 and f & 4 and a and s]
@@ -53,9 +60,11 @@ class Elf:
                 continue
             stro = self.secs[link][3]
             for k in range(s // 24):
-                st_name, st_info, _, _, value, size = struct.unpack_from("<IBBHQQ", d, o + 24 * k)
+                st_name, st_info, _, shndx, value, size = struct.unpack_from("<IBBHQQ", d, o + 24 * k)
                 end = d.index(b"\0", stro + st_name)
                 name = d[stro + st_name:end].decode("utf-8", "replace")
+                if self.relocatable:
+                    value = self._symval(name, shndx, value)
                 if name and name not in self.symbols:
                     self.symbols[name] = value
                 if st_info & 0xF == 2 and value:
@@ -71,6 +80,79 @@ class Elf:
         self.by_addr = {}
         for n, a in self.symbols.items():
             self.by_addr.setdefault(a, n)
+
+    # --- kernel modules (ET_REL): lay the allocated sections out from BASE in file order, put undefined symbols in
+    # 8-byte slots after them (like a disassembler's extern segment), then apply the relocations the tables need.
+    BASE = 0x10000
+    REL = {  # type: (size, pc-relative, signed)
+        "x86_64": {1: (8, False, False), 2: (4, True, True), 4: (4, True, True), 10: (4, False, False),
+                   11: (4, False, True), 24: (8, True, True)},
+        "aarch64": {257: (8, False, False), 258: (4, False, True), 260: (8, True, True), 261: (4, True, True)},
+    }
+
+    def _layout(self, extra):
+        addr = self.BASE
+        for i, (t, f, a, o, s, l) in enumerate(self.secs):
+            if f & 2 and s and t in (1, 8):  # SHF_ALLOC, PROGBITS or NOBITS
+                al = max(extra[i][1], 1)
+                addr = (addr + al - 1) // al * al
+                self.secs[i] = (t, f, addr, o, s, l)
+                addr += s
+        self._ext_next = (addr + 0xFFF) // 0x1000 * 0x1000
+        data = bytearray(self.data)
+        symvals = self._all_symbol_values()
+        rules = self.REL.get(self.arch, {})
+        for i, (t, f, a, o, s, l) in enumerate(self.secs):
+            if t != 4:  # SHT_RELA
+                continue
+            target = extra[i][0]
+            if target >= len(self.secs):
+                continue
+            tt, tf, ta, to, ts, tl = self.secs[target]
+            if not (tf & 2) or tt != 1:
+                continue
+            for k in range(s // 24):
+                r_off, r_info, addend = struct.unpack_from("<QQq", self.data, o + 24 * k)
+                rule = rules.get(r_info & 0xFFFFFFFF)
+                if rule is None or r_off + rule[0] > ts:
+                    continue
+                size, pcrel, signed = rule
+                v = symvals.get(r_info >> 32, 0) + addend - ((ta + r_off) if pcrel else 0)
+                lo, hi = (-(1 << (8 * size - 1)), 1 << (8 * size - 1)) if signed else (0, 1 << (8 * size))
+                if size == 8:
+                    v &= (1 << 64) - 1
+                elif not lo <= v < hi:
+                    continue  # does not fit: leave the bytes alone
+                data[to + r_off:to + r_off + size] = (v & ((1 << (8 * size)) - 1)).to_bytes(size, "little")
+        self.data = bytes(data)
+
+    def _all_symbol_values(self):
+        """Index in .symtab -> address, for the relocations (section symbols = their section's address)."""
+        out = {}
+        for t, f, a, o, s, link in self.secs:
+            if t != 2:
+                continue
+            stro = self.secs[link][3]
+            for k in range(s // 24):
+                st_name, st_info, _, shndx, value, size = struct.unpack_from("<IBBHQQ", self.data, o + 24 * k)
+                name = self.data[stro + st_name:self.data.index(b"\0", stro + st_name)].decode("utf-8", "replace")
+                out[k] = self._symval(name, shndx, value)
+            break
+        return out
+
+    def _symval(self, name, shndx, value):
+        if shndx == 0 or shndx == 0xFFF2:  # undefined or common: an extern slot, one per name
+            if not name:
+                return 0
+            if name not in self.externs:
+                self.externs[name] = self._ext_next
+                self._ext_next += 8
+            return self.externs[name]
+        if shndx == 0xFFF1:  # absolute
+            return value
+        if shndx < len(self.secs):
+            return self.secs[shndx][2] + value
+        return value
 
     def read(self, ea, size):
         i = bisect.bisect_right(self._starts, ea) - 1
