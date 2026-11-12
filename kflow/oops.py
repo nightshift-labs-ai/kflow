@@ -49,7 +49,7 @@ _WARN_OLD = re.compile(r"WARNING: CPU: \d+ PID: \d+ at (?:(?P<file>[^\s:]+):(?P<
 _WARN_NEW = re.compile(r"WARNING: (?:(?P<file>[^\s:]+):(?P<line>\d+) )?at (?P<rest>.*)$")
 _WARN_26 = re.compile(r"WARNING: at (?P<file>[^\s:]+):(?P<line>\d+) (?P<rest>.*)$")  # 2.6 / 3.x: 'WARNING: at %s:%d %pS()'
 _BUG_LINE = re.compile(r"[Kk]ernel BUG at (?P<file>[^\s:!]+):(?P<line>\d+)!")
-_BUG_SYM = re.compile(r"[Kk]ernel BUG at (?P<rest>.*?)\s*\[verbose debug info unavailable\]")
+_BUG_SYM = re.compile(r"[Kk]ernel BUG at (?P<rest>.{0,300}?)\s*\[verbose debug info unavailable\]")  # bounded: no quadratic scan on a long line
 _RIP = re.compile(r"(?:^|\s)(?P<tag>RIP:?|IP:)\s+(?:(?P<cs>[0-9a-fA-F]{4}):)?(?P<rest>.*)$")
 _PC = re.compile(r"(?:^|\s)(?:(?P<reg>pc|lr) : |(?P<old>PC|LR) is at )(?P<rest>.*)$")
 _TRACE = re.compile(r"(?:^|\s)Call [Tt]race:")
@@ -505,7 +505,7 @@ def resolve(report, sites, symbols, module=None, is_module=False):
     for the notes."""
     loc = report.primary
     if loc is None:
-        return Match("none", notes=["no WARNING / kernel BUG / RIP / pc line, func+0xoff or file:line in the text"]
+        return Match("none", notes=["no WARNING / kernel BUG line, trap RIP / pc line, func+0xoff or file:line in the text"]
                      + not_traps(report))
     m = _resolve(report, sites, symbols, module, is_module)
     if report.reports > 1:
@@ -514,7 +514,7 @@ def resolve(report, sites, symbols, module=None, is_module=False):
     if loc.source in ("frame", "text") and len(report.locations) > 1 and m.status not in ("exact", "ambiguous"):
         # a call trace or a list of lines (KASAN, lockdep, hung task...): its first entry is a caller, not a trap
         return Match("none", loc=loc, notes=m.notes + not_traps(report) + [
-            "no BUG/WARN trap in this report (no WARNING / kernel BUG / RIP / pc line), and no BUG/WARN site at its "
+            "no BUG/WARN trap in this report (no WARNING / kernel BUG line or trap RIP / pc line), and no BUG/WARN site at its "
             "first %s %s" % ("call-trace entry" if loc.source == "frame" else "line", loc.symbol() or loc.where())])
     return m
 

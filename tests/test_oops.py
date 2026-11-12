@@ -744,7 +744,7 @@ class Parse(unittest.TestCase):
                      "[  152.334340]  mfill_atomic_copy+0x670/0x9d0\n[  152.334345]  userfaultfd_ioctl+0x5d1/0x1e70\n"):
             rep, m = find(text)
             self.assertEqual((m.status, m.address, m.candidates), ("none", None, []), text)
-            self.assertTrue(m.notes[-1].startswith("no BUG/WARN trap in this report (no WARNING / kernel BUG / RIP / pc "
+            self.assertTrue(m.notes[-1].startswith("no BUG/WARN trap in this report (no WARNING / kernel BUG line or trap RIP / pc "
                                                    "line), and no BUG/WARN site at its first "), m.notes)
             self.assertNotIn("__warn", m.notes[-1])  # a '? ' entry is never used
         rep, m = find("Call Trace:\n mfill_atomic_copy+0x674/0x9d0\n userfaultfd_ioctl+0x5d1/0x1e70")  # a site there
@@ -759,7 +759,7 @@ class Parse(unittest.TestCase):
         for text in (KASAN_IRQ, HUNG_NMI, RCU_NMI):
             rep, m = find(text)
             self.assertEqual((rep.kind, m.status, m.address, m.candidates), (None, "none", None, []), text[:80])
-            self.assertTrue(m.notes[-1].startswith("no BUG/WARN trap in this report (no WARNING / kernel BUG / RIP / pc "
+            self.assertTrue(m.notes[-1].startswith("no BUG/WARN trap in this report (no WARNING / kernel BUG line or trap RIP / pc "
                                                    "line), and no BUG/WARN site at its first call-trace entry "), m.notes)
             self.assertEqual([(x.function, x.offset) for x in rep.locations if x.source == "regs"],
                              [("mfill_atomic_copy", 0x674)])
@@ -768,7 +768,7 @@ class Parse(unittest.TestCase):
                                           "context or of another CPU)")
         rep, m = find(RCU_NMI_ARM64)
         self.assertEqual((rep.primary, m.status, [x.source for x in rep.locations]), (None, "none", ["regs", "lr"]))
-        self.assertEqual(m.notes, ["no WARNING / kernel BUG / RIP / pc line, func+0xoff or file:line in the text",
+        self.assertEqual(m.notes, ["no WARNING / kernel BUG line, trap RIP / pc line, func+0xoff or file:line in the text",
                                    "not a trap line: pc : nft_do_chain+0x400/0x6d0 [nf_tables] (after the report's call "
                                    "trace began or in an NMI backtrace: the registers of an interrupted context or of "
                                    "another CPU)"])
@@ -906,6 +906,17 @@ class Parse(unittest.TestCase):
                      "WARNING: suspicious RCU usage", "RIP: 0033:0x7f1c2b0e9c5b", "Code: Bad RIP value.",
                      "mfill_atomic_copy", "BUG: unable to handle page fault for address: ffffffffffffffe8"):
             self.assertIsNone(oops.parse(text).primary, text)
+
+
+    def test_bug_sym_long_line(self):
+        """Review s165 NIT-2: one long line full of 'kernel BUG at' must not take quadratic time (IDA's UI thread)."""
+        import time
+        t = time.monotonic()
+        oops.parse("kernel BUG at " * 8000)
+        took = time.monotonic() - t
+        self.assertLess(took, 2.0, "parse took %.1f s" % took)
+        m = oops._BUG_SYM.search("Kernel BUG at mfill_atomic_copy+0x32e/0x9d0 [verbose debug info unavailable]")
+        self.assertEqual(m.group("rest"), "mfill_atomic_copy+0x32e/0x9d0")
 
 
 class Resolve(unittest.TestCase):
@@ -1194,7 +1205,7 @@ class Resolve(unittest.TestCase):
             rep, m = find(text)
             self.assertEqual((m.status, m.address), ("none", None), text)
             self.assertEqual(oops.describe(rep, m, lambda ea: "")[-2 if m.notes else -1], "no match")
-        self.assertEqual(find("hello")[1].notes, ["no WARNING / kernel BUG / RIP / pc line, func+0xoff or file:line in the text"])
+        self.assertEqual(find("hello")[1].notes, ["no WARNING / kernel BUG line, trap RIP / pc line, func+0xoff or file:line in the text"])
 
     def test_helpers_and_json(self):
         self.assertTrue(all(oops.same_file("mm/userfaultfd.c", b) for b in

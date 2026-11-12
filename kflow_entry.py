@@ -377,7 +377,7 @@ class OopsAction(ida_kernwin.action_handler_t):
         STATE["oops_text"] = text
         rep = oops.parse(text)
         if rep.primary is None:
-            ida_kernwin.warning("kflow: found no WARNING / kernel BUG / RIP / pc line, func+0xoff or file:line in the "
+            ida_kernwin.warning("kflow: found no WARNING / kernel BUG line, trap RIP / pc line, func+0xoff or file:line in the "
                                 "pasted text.%s" % "".join(" Note: " + n for n in oops.not_traps(rep)))
             return 0
         t = scan_or_warn()
