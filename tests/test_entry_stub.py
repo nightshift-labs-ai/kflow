@@ -297,6 +297,12 @@ old_map = m.STATE["pseudo"]
 assert m.AnnotateAction().activate(None) == 1 and m.STATE["pseudo"] is not old_map and hx_log["flushed"] == 2
 for kind, ea, text in exact:
     assert decompile([ea])[ea] == text, (kind, text)
+# the annotation record disappears without Remove (IDA undo of Annotate, or the headless runner's --remove): the
+# cached map must not keep showing comments
+saved = w["netnodes"].pop(il.NODE)
+for kind, ea, text in exact:
+    assert decompile([ea])[ea] == "", ("record gone, comment still shown", kind)
+w["netnodes"][il.NODE] = saved
 p.term()
 assert hx_log["hooked"] == 0 and m.STATE["hx"] is None and m.STATE["pseudo"] is None
 
