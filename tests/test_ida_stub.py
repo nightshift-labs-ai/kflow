@@ -283,7 +283,14 @@ def install_ui(w, log):
             return types.SimpleNamespace(start_ea=elf.funcs[i][0], end_ea=elf.funcs[i][1])
         return None
 
-    fn.get_func = get_func
+    def get_next_fchunk(ea):  # the first chunk that starts after ea: here every function is one chunk
+        i = bisect.bisect_right(fstarts, ea)
+        if not w.get("auto_ok", True) or i >= len(fstarts):
+            return None
+        return types.SimpleNamespace(start_ea=elf.funcs[i][0], end_ea=elf.funcs[i][1])
+
+    fn.get_func, fn.get_next_fchunk = get_func, get_next_fchunk
+    fn.func_contains = lambda f, ea: f.start_ea <= ea < f.end_ea
     lines_mod = types.ModuleType("ida_lines")
     lines_mod.SCOLOR_AUTOCMT = "\x04"
     lines_mod.COLSTR = lambda text, tag: "\x01" + tag + text + "\x02" + tag  # SCOLOR_ON tag text SCOLOR_OFF tag

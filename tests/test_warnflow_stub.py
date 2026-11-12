@@ -8,12 +8,12 @@ What the fakes model:
     all non-user xrefs are deleted; ordinary flow lives in the flags), then it calls the hooked IDP_Hooks listeners in
     order until one returns non-zero, else the processor module's own emulation adds flow unless the instruction is a
     stop (ud2 0F 0B, jmp EB/E9, ret C3). Flow to an address makes IDA disassemble it there (it becomes code).
-  * function chunks: get_func returns the function's entry chunk, get_fchunk the chunk around an address (a tail has
-    FUNC_TAIL and owner; an entry chunk has no owner: in funcs.hpp it shares a union with the frame fields),
-    get_next_fchunk the first chunk after an address. append_func_tail fails when any byte of the range already
-    belongs to a function; with BADADDR the end is where the orphan code ends. remove_func_tail removes the whole tail
-    chunk around the address (never an entry chunk). reanalyze_function re-emulates the trap sites of the function's
-    own chunks.
+  * function chunks: get_func returns the function's entry chunk, func_contains looks at all its chunks, get_fchunk the
+    chunk around an address (a tail has FUNC_TAIL and owner; an entry chunk has no owner: in funcs.hpp it shares a
+    union with the frame fields), get_next_fchunk the first chunk after an address. append_func_tail fails when any
+    byte of the range already belongs to a function; with BADADDR the end is where the orphan code ends.
+    remove_func_tail removes the whole tail chunk around the address (never an entry chunk). reanalyze_function
+    re-emulates the trap sites of the function's own chunks.
   * hooks: IDP_Hooks records the hook flags it was made with, hook() appends to the listener list (twice if called
     twice; it can be told to refuse), unhook() removes. A database close drops listeners made without HKCB_GLOBAL.
   * Hex-Rays: udc_filter_t records init(decl) (it cannot parse the declaration: it accepts it unless told to refuse);
@@ -350,6 +350,7 @@ def reanalyze_function(pfn, *rest):
 fn.get_func, fn.append_func_tail, fn.remove_func_tail, fn.reanalyze_function = \
     get_func, append_func_tail, remove_func_tail, reanalyze_function
 fn.get_fchunk, fn.get_next_fchunk = lambda ea: chunk(piece_at(ea)), get_next_fchunk
+fn.func_contains = lambda pfn, ea: piece_at(ea) is not None and piece_at(ea)[2] == pfn.start_ea  # any chunk of it
 fn.is_func_tail = lambda pfn: pfn is not None and bool(pfn.flags & FUNC_TAIL)
 fn.get_func_name = lambda ea: elf.func(ea - w["shift"]) or ""
 hx_log = {"hooked": 0, "flushed": 0}
@@ -509,6 +510,65 @@ def annotate_remove():
 
 ar_off = annotate_remove()
 assert snap(m) == pre, "Annotate / Remove touch nothing of WARN fall-through"
+
+# ---- Go to oops/WARN line on a site after a gap in its function (review s163 MAJOR 1) ----
+# get_func() is the function's entry chunk; the code after an orphan "ud2; jmp back" is a tail chunk of the same function
+# (or a trap IDA left out of any function). Such a site is inside its function: its own report goes there, it is not
+# "past the end" of the entry chunk. An offset past the function's last chunk, on the next function's site, still goes
+# nowhere (review s161 MINOR 2).
+n_log = len(log)
+modname = m.oops.module_name(sys.argv[1])
+modtag = " [%s]" % modname if modname else ""
+at_count = {}
+for b in ref["bug"]:
+    at_count[b.addr] = at_count.get(b.addr, 0) + 1
+
+
+def gap_owner(b):
+    """The start of the site's function when the site lies after a gap in it (a later chunk, or in no IDA function
+    inside the ELF function), and IDA names that function so; else None."""
+    pc, ef = piece_at(b.addr), elf_func(b.addr)
+    owner = pc[2] if pc is not None and pc[0] != pc[2] else ef[0] if pc is None and ef is not None else None
+    name = elf.func(owner) if owner is not None else None
+    if not name or at_count[b.addr] != 1 or [c[0] for c in m.function_starts(name)] != [owner]:
+        return None
+    return owner
+
+
+def own_report(b, start, off=None):
+    name, off = elf.func(start), b.addr - start if off is None else off
+    at = "%s+%#x/%#x%s" % (name, off, elf.printed_size(start) or elf_func(start)[1] - start, modtag)
+    head = ("WARNING: CPU: 1 PID: 9 at %s:%d %s\n" % (b.file, b.line, at) if b.warn else
+            "kernel BUG at %s:%d!\n" % (b.file, b.line)) if b.file else ""
+    return head + "RIP: 0010:" + at
+
+
+gapped = [(b, gap_owner(b)) for b in sorted(ref["bug"], key=lambda b: b.addr) if piece_at(b.addr) is None
+          or piece_at(b.addr)[0] != piece_at(b.addr)[2]]
+gapped = [(b, o) for b, o in gapped if o is not None]
+tail_sample = gapped[::max(1, len(gapped) // 40)]  # every k-th: about 40 sites, so the test stays fast
+tail_index = m.oops.SiteIndex(ref["bug"])
+for b, owner in tail_sample:
+    got = m.oops.resolve(m.oops.parse(own_report(b, owner)), tail_index, m.function_starts, modname, modname is not None)
+    assert (got.status, got.address) == ("exact", b.addr), (hex(b.addr), own_report(b, owner), got.status, got.notes)
+past_end = None
+if tail_sample:  # through the action: the site's own report jumps there
+    b, owner = tail_sample[0]
+    w["ask_text"] = own_report(b, owner)
+    assert m.OopsAction().activate(None) == 1 and [x[1] for x in log[n_log:] if x[0] == "jump"] == [b.addr], log[n_log:]
+    # past the function's end, on the next function's site: not that site
+    owner_end = max(pc[1] for pc in P if pc[2] == owner)
+    nxt = next((x for x in sorted(ref["bug"], key=lambda x: x.addr) if x.addr >= max(owner_end, elf_func(owner)[1])
+                and at_count[x.addr] == 1 and elf_func(x.addr) is not None and elf_func(x.addr)[0] != owner), None)
+    if nxt is not None:
+        text = "RIP: 0010:%s+%#x%s" % (elf.func(owner), nxt.addr - owner, modtag)
+        got = m.oops.resolve(m.oops.parse(text), tail_index, m.function_starts, modname, modname is not None)
+        assert got.status != "exact" and got.address is None, (text, got.status, got.notes)
+        past_end = "%s+%#x (on the next function's site) -> %s, no address" % (elf.func(owner), nxt.addr - owner,
+                                                                                got.status)
+del log[n_log:]
+tail_done = "%d of %d sites after a gap in their function (tail chunk / no IDA function): exact; %s" % (
+    len(tail_sample), len(gapped), past_end or "no next-function check")
 exp_tails = {h for h, (he, s) in HOLES.items() if traps[s] and (ORPHAN_FN is None or h != ORPHAN_FN[1])}
 
 # ---- 0. self-checks (review s151 item 3): IDA refuses the hook; IDA accepts it but never calls it ----
@@ -802,6 +862,6 @@ print("OK warnflow %s: %d WARN ud2 sites, %d BUG ud2 sites; flow after %d WARN s
       "other_func %d; site in no function %d; %d functions reanalysed; idempotent; term unhooks, the next load hooks "
       "from the record and reports lost flow; rebase; Remove restores flow, tails, record, filter; Annotate/Remove "
       "unchanged; filter matches only WARN sites; decompiler part fails soft; Remove takes out only exact tails "
-      "(%d changed tails left; merge modes, removed/left: %s)"
+      "(%d changed tails left; merge modes, removed/left: %s); Go to oops/WARN line: %s"
       % (name, len(EXP_WARN), len(EXP_BUG), res["flow"], res["tails"], len(PAIRS), res["other_func"], res["no_func"], res["functions"],
-         len(changed), ", ".join("%s %d/%d" % (k, a, b) for k, (a, b) in merged.items()) or "no tails"))
+         len(changed), ", ".join("%s %d/%d" % (k, a, b) for k, (a, b) in merged.items()) or "no tails", tail_done))

@@ -323,12 +323,24 @@ def bug_site_rows(sites):
 def function_starts(name, suffixed=False):
     """[(start, size or None, printed size or None, name)] of the function IDA has under this name
     (ida_name.get_name_ea, as kflow looks up the table names). suffixed=True: the functions in IDA's name list called
-    name.<suffix> (Linux 6.1 with Clang LTO prints a name like foo.llvm.123 cut at the first dot). printed size: what
-    the kernel prints after the '/' (kallsyms measures to the next symbol): here the distance to the next name in
-    IDA's name list in the same segment."""
+    name.<suffix> (Linux 6.1 with Clang LTO prints a name like foo.llvm.123 cut at the first dot). size: up to the end
+    of the function's last chunk before the next name. printed size: what the kernel prints after the '/' (kallsyms
+    measures to the next symbol): here the distance to the next name in IDA's name list in the same segment."""
     def size(ea):
+        # get_func() is the entry chunk only. IDA ends flow at a WARN ud2, so the code after such a gap is a tail chunk
+        # of the same function (or in none): a site there is still inside it (review s163 MAJOR 1). A chunk at or past
+        # the next name is not counted: the kernel prints an address there with that name.
         f = ida_funcs.get_func(ea)
-        return f.end_ea - f.start_ea if f is not None and f.start_ea == ea else None
+        if f is None or f.start_ea != ea:
+            return None
+        n, seg = printed(ea), ida_segment.getseg(ea)
+        limit = ea + n if n else seg.end_ea if seg is not None else f.end_ea
+        end, c = f.end_ea, ida_funcs.get_next_fchunk(ea)
+        while c is not None and c.start_ea < limit:
+            if ida_funcs.func_contains(f, c.start_ea):
+                end = max(end, min(c.end_ea, limit))
+            c = ida_funcs.get_next_fchunk(c.start_ea)
+        return end - ea
 
     def printed(ea):
         n, i = ida_name.get_nlist_size(), ida_name.get_nlist_idx(ea)
