@@ -416,6 +416,10 @@ class WarnFlowAction(ida_kernwin.action_handler_t):
             else:
                 ida_kernwin.info("kflow: not needed on arm64: IDA continues after brk #0x800. Nothing was changed.")
             return 0
+        import ida_auto
+        if not ida_auto.auto_is_ok():  # auto_wait() would run the whole remaining analysis under a wait box
+            ida_kernwin.warning("kflow: wait until IDA's auto-analysis has finished, then run this again. Nothing was changed.")
+            return 0
         t = scan_or_warn()
         if t is None:
             return 0

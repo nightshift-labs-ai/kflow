@@ -242,6 +242,7 @@ def auto_wait():
 
 
 auto.auto_wait = auto_wait
+auto.auto_is_ok = lambda: w.get("auto_ok", True)  # False while IDA's queues still hold work
 fn = sys.modules["ida_funcs"]
 
 
@@ -498,11 +499,18 @@ cdg = lambda ea, itype=NN_UD2: types.SimpleNamespace(insn=Insn(ea, 2, itype))  #
 assert all(flt.match(cdg(s)) for s in EXP_WARN)
 assert not any(flt.match(cdg(s)) for s in EXP_BUG)
 assert not flt.match(cdg(s0, NN_CALL)) and not flt.match(cdg(s0 + 1)) and not flt.match(types.SimpleNamespace(insn=None))
+w["flow"].discard(s0 + 2)  # a site whose flow IDA dropped: the decompiler keeps BUG() there, no __WARN() without a successor
+assert not flt.match(cdg(s0))
+w["flow"].add(s0 + 2)
+assert flt.match(cdg(s0))
 
 # ---- 2. running it again changes nothing ----
 assert m.WarnFlowAction().activate(None) == 1
 res2 = m.STATE["wf_last"]
 assert snap(m) == on and len(w["listeners"]) == 1 and len(w["filters"]) == 1
+w["auto_ok"] = False  # IDA's auto-analysis still running: refused, nothing changed
+assert m.WarnFlowAction().activate(None) == 0 and snap(m) == on and len(w["listeners"]) == 1
+w["auto_ok"] = True
 assert res2["flow"] == res2["sites"] == res["sites"] and res2["tails"] == 0 and res2["other_func"] == res["other_func"]
 
 # ---- 5b. Annotate / Remove give the same results with WARN fall-through on ----

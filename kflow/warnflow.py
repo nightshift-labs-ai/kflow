@@ -204,7 +204,8 @@ def make_filter(offsets):
         def match(self, cdg):
             try:
                 insn = cdg.insn
-                return insn.itype == NN_UD2 and ((insn.ea - ida_nalt.get_imagebase()) & MASK) in self.offsets
+                return (insn.itype == NN_UD2 and ((insn.ea - ida_nalt.get_imagebase()) & MASK) in self.offsets
+                        and ida_bytes.is_flow(ida_bytes.get_flags(insn.ea + insn.size)))  # only where IDA has the flow
             except Exception:  # noqa: BLE001  never break the decompiler
                 return False
 
