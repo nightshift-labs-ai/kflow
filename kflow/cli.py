@@ -277,6 +277,22 @@ class Elf:
             return self.funcs[i][2]
         return None
 
+    def function_starts(self, name, suffixed=False):
+        """[(start, size)] of the functions called name (static functions can share one), or with suffixed=True
+        of those called name.<suffix> (name.cfi, name.llvm.123...). A symbol that is not a function: size None."""
+        if not hasattr(self, "_by_name"):
+            self._by_name, self._by_base = {}, {}
+            for a, e, n in self.funcs:
+                self._by_name.setdefault(n, []).append((a, e - a))
+                if "." in n:
+                    self._by_base.setdefault(n.split(".", 1)[0], []).append((a, e - a))
+        if suffixed:
+            return [c for c in self._by_base.get(name, []) if c not in self._by_name.get(name, [])]
+        if name in self._by_name:
+            return list(self._by_name[name])
+        return [(self.symbols[name], None)] if self.symbols.get(name) else []
+
+
 
 def load(elf):
     """Decode every table that has __start_/__stop_ symbols. Returns dict."""

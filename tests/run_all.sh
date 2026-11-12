@@ -33,7 +33,7 @@ if [ $# -eq 0 ]; then
 fi
 
 for f in "$@"; do
-    for t in test_demo test_ida_stub test_headless_stub test_entry_stub test_warnflow_stub; do
+    for t in test_demo test_oops test_ida_stub test_headless_stub test_entry_stub test_warnflow_stub; do
         if [ -f "tests/$t.py" ]; then run "$PY" -I "tests/$t.py" "$f"; fi
     done
 done
