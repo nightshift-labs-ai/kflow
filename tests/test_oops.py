@@ -62,6 +62,10 @@ SITES += [BugSite(0xFFFFFFFF81002020, "lib/cut_a.c", 1, 1), BugSite(0xFFFFFFFF81
 FUNCS["padded_fn"] = [oops.Func(0xFFFFFFFF81000900, 0x9C3, 0x9D0, "padded_fn")]
 # two static functions named pad_dup, code sizes 0x40 and 0x48, both printed as 0x50: the code size still picks
 FUNCS["pad_dup"] = [oops.Func(0xFFFFFFFF81001000, 0x40, 0x50, "pad_dup"), oops.Func(0xFFFFFFFF81001100, 0x48, 0x50, "pad_dup")]
+# a BUG at a function's first byte (Android GKI 6.1 arm64: switched_to_stop+0x0, after the 8-byte task_tick_stop)
+FUNCS["task_tick_stop"] = [oops.Func(0xFFFFFFFF81003000, 0x8, 0x8, "task_tick_stop")]
+FUNCS["switched_to_stop"] = [oops.Func(0xFFFFFFFF81003008, 0x8, 0x8, "switched_to_stop")]
+SITES += [BugSite(0xFFFFFFFF81003008, "kernel/sched/stop_task.c", 101, 0)]
 
 
 def symbols(name, suffixed=False):
@@ -867,6 +871,16 @@ class Resolve(unittest.TestCase):
         self.assertIn("is not the log's WARNING line's do_one_initcall+0x27c", m.reason)
         rep, m = find("WARNING: CPU: 1 PID: 9 at do_one_initcall+0x27c/0x310\nRIP: 0010:do_one_initcall+0x27c/0x310")
         self.assertNotEqual(m.status, "mismatch", m.reason)  # header and RIP agree: unchanged
+        # review s161 MINOR 1: without CONFIG_DEBUG_BUGVERBOSE report_bug() prints 'Kernel BUG at %pB'; %pB looks up
+        # addr-1 and prints offset+1, so a BUG at a function's first byte is printed as the previous symbol + its size.
+        # It names the same address as the pc / RIP line: exact, also alone
+        head = "Kernel BUG at task_tick_stop+0x8/0x8 [verbose debug info unavailable]\n"
+        for text in (head + "pc : switched_to_stop+0x0/0x8", head + "RIP: 0010:switched_to_stop+0x0/0x8", head):
+            rep, m = find(text)
+            self.assertEqual((m.status, m.address, m.site and m.site.where()),
+                             ("exact", 0xFFFFFFFF81003008, "kernel/sched/stop_task.c:101"), (text, m.reason))
+        rep, m = find("Kernel BUG at task_tick_stop+0x4/0x8 [verbose debug info unavailable]\npc : switched_to_stop+0x0/0x8")
+        self.assertEqual((m.status, m.address), ("mismatch", None))  # another address than the pc line's
         rep, m = find("WARNING: CPU: 1 PID: 9 at mm/userfaultfd.c:755 mfill_atomic_poison+0x10/0x850")  # on :900
         self.assertEqual((m.status, [s.addr for s in m.candidates]),
                          ("mismatch", [0xFFFFFFFF8E62B164, 0xFFFFFFFF8E629BC4, 0xFFFFFFFF8E62A489, 0xFFFFFFFF8E62AB60]))

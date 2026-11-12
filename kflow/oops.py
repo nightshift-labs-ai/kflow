@@ -409,9 +409,18 @@ def confirms(report, site):
             and site.line == h.line and same_file(site.file, h.file))
 
 
-def _contradicts(report, site, loc, func=None):
+def _named(name, symbols):
+    """[Func] the log's name can be in this file: that name, and that name with a Clang LTO suffix (see _starts)."""
+    exact = [_func(c) for c in symbols(name) or []]
+    return exact + [f for f in map(_func, symbols(name, True) or []) if f.name is None or lto_suffix(f.name, name)]
+
+
+def _contradicts(report, site, loc, func=None, symbols=None):
     """Why the site at the log's address cannot be the one the log names, or None. The same build prints the bug
-    entry's own file:line and kind on the WARNING / kernel BUG line, and the function's size after the '/'."""
+    entry's own file:line and kind on the WARNING / kernel BUG line, and the function's size after the '/'. A WARNING /
+    kernel BUG line without file:line contradicts the site only if its function+offset is another address: report_bug()
+    prints 'Kernel BUG at %pB', which looks up addr-1 and prints offset+1, so a BUG at a function's first byte is
+    printed as the previous symbol + its size (review s161 MINOR 1)."""
     h = report.header
     at = "%s+%#x" % (loc.function, loc.offset) if loc.function is not None else "0x%x" % loc.address
     if h is not None and h.file and site.file and not (site.line == h.line and same_file(site.file, h.file)):
@@ -420,7 +429,9 @@ def _contradicts(report, site, loc, func=None):
     if report.kind in ("WARN", "BUG") and report.kind != _kind(site):
         return "the site at %s is a %s, but the log reports a %s" % (at, _kind(site), report.kind)
     if h is not None and not h.file and h is not loc and h.function is not None and h.offset is not None and loc.function is not None \
-            and (h.function, h.offset) != (loc.function, loc.offset):  # review s159 MINOR 1: header without file:line
+            and (h.function, h.offset) != (loc.function, loc.offset) \
+            and not (symbols and any(f.start + h.offset == site.addr for f in _named(h.function, symbols))):
+        # review s159 MINOR 1: a header without file:line naming another address (a hand-mixed paste)
         return "the site at %s is not the log's %s line's %s+%#x" % (
             at, "WARNING" if report.kind == "WARN" else "kernel BUG", h.function, h.offset)
     if func is not None and loc.size is not None and func.size is not None and not _same_size(func, loc.size) \
@@ -512,7 +523,7 @@ def _resolve(report, sites, symbols, module=None, is_module=False):
             if hits:
                 a = hits[0].start + cur.offset
                 notes += _used(cur, hits[0])
-                bad = _contradicts(report, by_addr[a], cur, hits[0])
+                bad = _contradicts(report, by_addr[a], cur, hits[0], symbols)
                 if bad:
                     return _mismatch(report, index, by_addr[a], cur, hits[0], notes, bad, symbols)
                 if cur.size is not None and hits[0].size is not None and not _same_size(hits[0], cur.size):
