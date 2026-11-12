@@ -240,8 +240,10 @@ def summary(elf, t):
         lines.append("__bug_table (%s): %d sites, %d WARN (resume after the trap), %d BUG; %d with file:line in %d source files"
                      % (t["bug_layout"], len(bugs), len(warn), len(bugs) - len(warn),
                         sum(1 for b in bugs if b.file), len(files)))
-        lines.append("  WARN sites that are %s here: %d; sites inside a function symbol: %d"
-                     % (tname, ud2, sum(1 for b in bugs if elf.func(b.addr))))
+        args = sum(1 for b in warn if b.args)
+        lines.append("  WARN sites that are %s here: %d; sites inside a function symbol: %d%s"
+                     % (tname, ud2, sum(1 for b in bugs if elf.func(b.addr)),
+                        "; WARN with a message, reported through a call (Linux 6.19+): %d" % args if args else ""))
     jumps = t.get("jump")
     if jumps is not None:
         labels = [elf.key_name(j.key) or "" for j in jumps]

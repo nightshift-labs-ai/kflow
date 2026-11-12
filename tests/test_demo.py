@@ -64,6 +64,8 @@ for b in bugs:
     assert (b.file is None) == (b.line is None)
     trap = b"\x00\x00\x21\xd4" if e.arch == "aarch64" else b"\x0f\x0b"
     code = e.read(b.addr, len(trap))
+    if b.args:  # Linux 6.19+ x86_64 WARN with a message: a call to the WARN trap, not ud2
+        continue
     assert code in (trap, bytes(len(trap))) or not e.func(b.addr), (hex(b.addr), code.hex())
 # MSR fixups point at wrmsr/rdmsr unless the bytes were freed (init text)
 for x in exs:

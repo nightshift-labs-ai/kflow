@@ -13,6 +13,7 @@ BUGFLAG_WARNING = 1 << 0
 BUGFLAG_ONCE = 1 << 1
 BUGFLAG_DONE = 1 << 2
 BUGFLAG_NO_CUT_HERE = 1 << 3
+BUGFLAG_ARGS = 1 << 4  # Linux 6.19+ x86_64: a WARN with a message, reported through a call (no ud2 at the site)
 
 # include/asm-generic/bug.h, struct bug_entry with relative pointers.
 # name: (entry size, field offsets) ; None = field absent.
@@ -45,6 +46,10 @@ class BugSite:
     @property
     def warn(self):
         return bool(self.flags & BUGFLAG_WARNING)
+
+    @property
+    def args(self):
+        return bool(self.flags & BUGFLAG_ARGS)
 
     @property
     def taint(self):

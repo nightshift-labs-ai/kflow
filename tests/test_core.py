@@ -112,6 +112,13 @@ class Tables(unittest.TestCase):
             decode_ex_table(m.read, BASE, BASE + 13)
 
 
+class Flags(unittest.TestCase):
+    def test_warn_with_message_flag(self):
+        from kflow.core import BugSite
+        self.assertEqual([(b.warn, b.args) for b in (BugSite(1, flags=0x11), BugSite(1, flags=0x01), BugSite(1, flags=0x0A))],
+                         [(True, True), (True, False), (False, False)])
+
+
 class OldJump(unittest.TestCase):
     def test_absolute_24_byte_entries_rejected(self):
         # Linux before 5.0: {u64 code, u64 target, u64 key} absolute. 2 entries = 48 bytes, a multiple of 16.

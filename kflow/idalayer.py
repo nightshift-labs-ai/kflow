@@ -114,6 +114,8 @@ def name_or_hex(ea):
 
 def bug_comment(b):
     where = " at %s" % b.where() if b.file else ""
+    if b.warn and b.args:
+        return "%s: WARN%s (WARN with a message, Linux 6.19+: reported through this call, then continues)" % (TAG, where)
     if b.warn:
         return "%s: WARN%s (the kernel reports and continues after this trap)" % (TAG, where)
     return "%s: BUG%s (does not return)" % (TAG, where)
