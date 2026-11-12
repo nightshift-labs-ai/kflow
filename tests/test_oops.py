@@ -582,6 +582,20 @@ class Parse(unittest.TestCase):
         mixed = mixed.replace("Modules linked in:", "Modules linked in:\n6,951,195388344,-,caller=T5935;usb 4-1: Using ep0 maxpacket: 16")
         rep2 = oops.parse(mixed)
         self.assertEqual([(x.source, x.function, x.offset) for x in rep2.locations], [(x.source, x.function, x.offset) for x in rep.locations])
+        # a kernel without CONFIG_DEBUG_BUGVERBOSE: the WARNING / Kernel BUG line has no file:line of its own, and the one
+        # syzbot puts after the symbol is the outer frame's when the trap is inlined (here mfill_atomic() into
+        # mfill_atomic_copy at :887): not the line's file:line, not a mismatch with the site's :755 (review s163 NIT 3)
+        for text in ("WARNING: at mfill_atomic_copy+0x674/0x9d0 mm/userfaultfd.c:887, CPU#1: syz.0.17/5850",
+                     "WARNING: CPU: 1 PID: 5850 at mfill_atomic_copy+0x674/0x9d0 mm/userfaultfd.c:887",
+                     "WARNING: at mfill_atomic mm/userfaultfd.c:755 [inline], CPU#1: syz.0.17/5850\n"
+                     "WARNING: at mfill_atomic_copy+0x674/0x9d0 mm/userfaultfd.c:887, CPU#1: syz.0.17/5850\n"
+                     "RIP: 0010:mfill_atomic mm/userfaultfd.c:755 [inline]\n"
+                     "RIP: 0010:mfill_atomic_copy+0x674/0x9d0 mm/userfaultfd.c:887",
+                     "Kernel BUG at folio_unlock+0x70/0xd0 mm/filemap.c:1530 [verbose debug info unavailable]"):
+            rep, m = find(text)
+            self.assertEqual((rep.header.file, m.status, m.address), (None, "exact", 0xFFFFFFFF8E629BC4 if "mfill" in text
+                                                                      else 0xFFFFFFFF81000110), (text, m.reason))
+            self.assertNotIn(":887", oops.describe(rep, m, lambda ea: "")[0])  # 'from the log:' does not say so either
 
     def test_old_formats(self):
         rep = oops.parse(OLD_X86)

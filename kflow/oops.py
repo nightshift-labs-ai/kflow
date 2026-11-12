@@ -203,6 +203,9 @@ def parse(text):
                 found = Loc("warning", inline=True, text=s)
             else:
                 found = _loc("warning", m.group("rest"), s) or Loc("warning", text=s)
+                # syzbot's source line after the symbol is the outer frame's when the trap is inlined: the line's own
+                # file:line is __warn()'s, or none (review s163 NIT 3)
+                found.file = found.line = None
             if m.group("file"):
                 found.file, found.line = m.group("file"), int(m.group("line"))
             if found.function is None and found.file is None:
@@ -214,6 +217,8 @@ def parse(text):
             else:
                 m = _BUG_SYM.search(s)
                 found = _loc("bug", m.group("rest"), s) if m else None
+                if found is not None:  # as for the WARNING line: not syzbot's source line
+                    found.file = found.line = None
                 if m and found is None and re.fullmatch(r"[0-9a-fA-F]{8,16}", m.group("rest")):  # '%p' (4.x)
                     found = Loc("bug", address=int(m.group("rest"), 16), text=s)
         if found is None:
@@ -634,8 +639,8 @@ def describe(report, match, func_of):
         what = []
         h = report.header
         if h is not None:
-            what.append(("WARNING" if report.kind == "WARN" else "kernel BUG") +
-                        (" at %s:%d" % (report.file, report.line) if report.file else ""))
+            what.append(("WARNING" if report.kind == "WARN" else "kernel BUG") +  # the line's own file:line only
+                        (" at %s:%d" % (h.file, h.line) if h.file else ""))
             if h is not loc and h.function is not None and (h.function, h.offset) != (loc.function, loc.offset):
                 what[-1] += " " + h.symbol()  # another function+offset than the line used (review s161 NIT 2)
         if loc.function is not None or loc.address is not None:
