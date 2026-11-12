@@ -51,7 +51,7 @@ kflow reads these tables from the database and, in IDA, comments every site and 
 hcli plugin install kflow
 ```
 
-kflow is new and not yet in the plugin index: on Nov 12 we asked Hex-Rays to add it ([plugin-repository#48](https://github.com/HexRaysSA/plugin-repository/pull/48)), and once it is listed the index can still lag a day or more behind the [GitHub releases](https://github.com/nightshift-labs-ai/kflow/releases). Until `hcli plugin install kflow` works (or if `hcli plugin status` shows an older version):
+Hex-Rays added kflow to the plugin index on Nov 12 ([plugin-repository#48](https://github.com/HexRaysSA/plugin-repository/pull/48)); it appears after their next index sync, and the index can lag a day or more behind the [GitHub releases](https://github.com/nightshift-labs-ai/kflow/releases). Until `hcli plugin install kflow` works (or if `hcli plugin status` shows an older version):
 
 - install a release zip directly, for example `hcli plugin install https://github.com/nightshift-labs-ai/kflow/archive/refs/tags/v0.0.3.zip`,
 - or copy this folder into your IDA `plugins` directory.
