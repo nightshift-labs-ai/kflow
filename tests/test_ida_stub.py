@@ -473,6 +473,11 @@ def other_function(path):
     il.remove_annotations(t)
     assert w["xrefs"].pop(chosen[0]) is False
     w["by_from"][s0].discard(d0)
+    w.setdefault("item_end", {})[s0] = d0  # the target is the next instruction: ordinary flow, no reference at all
+    r2 = il.annotate(t, arch)
+    assert r2["other_refs"] == 0 and chosen[0] not in w["drefs"] and chosen[0] not in w["xrefs"], r2
+    il.remove_annotations(t)
+    w["item_end"].pop(s0)
     w["imagebase"] = 0x10000  # a non-zero image base, so the rebase below checks the recorded offsets
     res = il.annotate(t, arch)
     assert res["other_refs"] == 1 and w["drefs"].get(chosen[0]) is True and chosen[0] not in w["xrefs"], res
