@@ -167,8 +167,17 @@ if b is not None:
                                                                  "function so" % name)) == (kind == "static"), new
         r, new = ask(head + reg + at)
         assert r == 1 and went(new) == [b.addr] and not said(new, "is a static function"), new
+        # review s159 NIT 1: its own line names another file:line (a mismatch, no jump): for a static function the
+        # warning and the note also name IDA's one function of that name as a cause (gki61's two gic_smp_init)
+        r, new = ask(head.replace("%s:%d" % (b.file, b.line), "%s:%d" % (b.file, b.line + 100000)) + reg + at)
+        warned = [x[1] for x in new if x[0] == "warning" and "does not fit this file" in x[1]]
+        cause = "or IDA shows another static function of that name (IDA names only one)"
+        assert r == 1 and not went(new) and len(warned) == 1 and said(new, "mismatch: "), new
+        assert (cause in warned[0]) == (kind == "static") and bool(said(new, cause)) == (kind == "static"), new
+        assert kind == "static" or "(a log from another build, or two reports in one paste?)" in warned[0], warned
     elf.public, elf.weak = saved["public"], saved["weak"]
-    oops_done.append("%s as a static function: note without its own line; global or weak: no note" % name)
+    oops_done.append("%s as a static function: note without its own line; global or weak: no note; another line: "
+                     "mismatch, warning and note name IDA's one static function of that name as a cause" % name)
 if any(b.addr == 0xFFFFFFFF8E629BC4 and b.where() == "mm/userfaultfd.c:755" for b in bugs):  # the MemLens demo kernel
     # the review's example: four functions share mm/userfaultfd.c:755; the WARNING line's func+0xoff picks one
     r, new = ask("WARNING: CPU: 1 PID: 9 at mm/userfaultfd.c:755 mfill_atomic_copy+0x674/0x...")

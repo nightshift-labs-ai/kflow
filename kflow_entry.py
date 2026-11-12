@@ -374,21 +374,29 @@ class OopsAction(ida_kernwin.action_handler_t):
         path = ida_nalt.get_input_file_path() or ""
         mod = oops.module_name(path)
         m = oops.resolve(rep, t["bug"], function_starts, mod, mod is not None)
-        if m.status == "exact" and m.function_start is not None and not oops.confirms(rep, m.site) \
-                and not ida_name.is_public_name(m.function_start) and not ida_name.is_weak_name(m.function_start):
-            # IDA shows one function under a name; the kernel can have several static functions of that name
+        # IDA shows one function under a name; the kernel can have several static functions of that name
+        static = m.function_start is not None and not ida_name.is_public_name(m.function_start) \
+            and not ida_name.is_weak_name(m.function_start)
+        if m.status == "exact" and static and not oops.confirms(rep, m.site):
             m.notes.append("%s is a static function, and IDA names only one function so: another static function of "
                            "that name is not tried (python3 -m kflow --oops lists them all); the log's WARNING / kernel "
                            "BUG line would confirm the site" % m.function)
+        causes = "a log from another build, or two reports in one paste?"
+        if m.status == "mismatch" and static:  # review s159 NIT 1: the log may name another static function of that name
+            causes = ("a log from another build, two reports in one paste, or IDA shows another static function of "
+                      "that name (IDA names only one)?")
+            m.notes.append("%s is a static function in IDA, so the cause can be a log from another build, two reports in "
+                           "one paste, or IDA shows another static function of that name (IDA names only one); python3 "
+                           "-m kflow --oops tries every function of that name" % m.function)
         for line in oops.describe(rep, m, ida_funcs.get_func_name):
             report(line)
         if m.status == "ambiguous" or (m.address is None and m.candidates):  # the candidates, no jump
             where = "at %s" % m.label if m.label else "in %s" % m.loc.function
             SitesChooser(bug_site_rows(m.candidates), "kflow: BUG/WARN sites %s" % where).Show()
             if m.status == "mismatch":  # never a silent jump to a site the log itself contradicts
-                ida_kernwin.warning("kflow: the pasted log does not fit this file: %s (a log from another build, or two "
-                                    "reports in one paste?). Not jumping; the BUG/WARN sites at %s are in the list, "
-                                    "details in the Output window." % (m.reason, m.label))
+                ida_kernwin.warning("kflow: the pasted log does not fit this file: %s (%s). Not jumping; the BUG/WARN "
+                                    "sites at %s are in the list, details in the Output window."
+                                    % (m.reason, causes, m.label))
             return 1
         if m.address is None:
             ida_kernwin.warning("kflow: no BUG/WARN site or function of this file matches the pasted text; details are "
