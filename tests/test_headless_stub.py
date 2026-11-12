@@ -22,7 +22,13 @@ idapro = types.ModuleType("idapro")
 idapro.open_database = lambda path, analyse: calls.append(("open", analyse)) or 0
 idapro.close_database = lambda save: calls.append(("close", save))
 sys.modules["idapro"] = idapro
+auto_ok = [True]  # IDA's auto-analysis state after open_database (review s159 NIT 2: the runner asks IDA, not the flag)
+sys.modules["ida_auto"] = types.ModuleType("ida_auto")
+sys.modules["ida_auto"].auto_is_ok = lambda: auto_ok[0]
 import kflow_headless as H  # noqa: E402
+from kflow import idalayer as IL  # noqa: E402
+seen_done, _annotate_text = [], IL.annotate_text
+IL.annotate_text = lambda res, analysis_done=False: seen_done.append(analysis_done) or _annotate_text(res, analysis_done)
 import json  # noqa: E402
 import tempfile  # noqa: E402
 
@@ -37,6 +43,14 @@ with contextlib.redirect_stdout(out):
 print(out.getvalue(), end="")
 assert "jump references added: " in out.getvalue() and "static-key site -> key references: " in out.getvalue(), out.getvalue()
 assert any(c.startswith("kflow: ") for c in w["cmts"].values())
+assert seen_done == [True], seen_done
+auto_ok[0] = False  # e.g. --no-analysis on a fresh file: the text must not claim analysis has finished
+with contextlib.redirect_stdout(io.StringIO()):
+    assert H.main([sys.argv[1], "--no-analysis"]) == 0
+assert seen_done == [True, False], seen_done
+assert calls[-2:] == [("open", False), ("close", True)], calls
+del calls[-2:]  # the open/close sequence below is checked as before
+auto_ok[0] = True
 assert H.main([sys.argv[1], "--remove", "--no-analysis"]) == 0
 assert calls == [("open", True), ("close", True), ("open", False), ("close", True)], calls
 assert not any(c.startswith("kflow") for c in w["cmts"].values())

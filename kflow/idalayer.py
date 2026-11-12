@@ -400,8 +400,9 @@ def _ref(src, dst, node, onode, arch, res):
     if dst == ida_bytes.get_item_end(src):
         if node.altval(key) == val and code_refs_from(src).get(dst):  # still kflow's user reference
             _del_user_cref(src, dst)
-            node.altdel(key)
-            res["next_insn_refs"] += 1
+            if not code_refs_from(src).get(dst):  # gone: only then drop the record, so Remove can still find it
+                node.altdel(key)
+                res["next_insn_refs"] += 1
         elif onode.altval(key) == val and data_refs_from(src).get(dst):
             ida_xref.del_dref(src, dst)
             onode.altdel(key)
@@ -597,7 +598,7 @@ def remove_annotations(t, res=None):
         f, to = (off + base) & MASK, (node.altval(off) + base) & MASK
         if code_refs_from(f).get(to):  # still there and still a user reference
             _del_user_cref(f, to)
-            removed += 1
+            removed += not code_refs_from(f).get(to)
         off = node.altnext(off)
     node.kill()
     return removed

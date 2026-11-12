@@ -92,7 +92,8 @@ def main(argv=None):
             print("[kflow] references removed: %d jump references, %d static-key site -> key references, %d data references"
                   " to targets inside another function" % (removed, res["key_refs"], res["other_refs"]))
         else:
-            print("[kflow] %s" % idalayer.annotate_text(idalayer.annotate(t, arch), analysis_done=not args.no_analysis))
+            import ida_auto  # an existing database opened with --no-analysis may be fully analysed already
+            print("[kflow] %s" % idalayer.annotate_text(idalayer.annotate(t, arch), analysis_done=ida_auto.auto_is_ok()))
             if args.no_analysis:
                 print("[kflow] --no-analysis: IDA has not made the instructions and functions yet, so references were "
                       "added only from sites that are instructions already, and targets inside other functions kept jump "

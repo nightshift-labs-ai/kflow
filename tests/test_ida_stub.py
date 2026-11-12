@@ -663,6 +663,21 @@ def stale_next_insn(path):
     assert again["next_insn_refs"] == again["xrefs"] == again["key_refs"] == 0, again
     il.remove_annotations(t)
     assert not any(w["xrefs"].values()) and not any(w["drefs"].values()), "Remove left a user reference"
+    for flow in ({fa}, set()):  # review s159 MINOR 1: Remove puts back only flow that was there, and never invents it
+        w["xrefs"][(a, fa)] = True
+        w["by_from"].setdefault(a, set()).add(fa)
+        w["netnodes"].setdefault(il.NODE, {})[(a - base) & il.MASK] = (fa - base) & il.MASK
+        w["flow"], w["del_clears_flow"] = set(flow), True
+        il.remove_annotations(t)
+        assert (a, fa) not in w["xrefs"] and (fa in w["flow"]) == bool(flow), (flow, w["flow"])
+    # Annotate path, no flow there before: none afterwards either
+    w["xrefs"][(a, fa)] = True
+    w["by_from"].setdefault(a, set()).add(fa)
+    w["netnodes"].setdefault(il.NODE, {})[(a - base) & il.MASK] = (fa - base) & il.MASK
+    w["flow"], w["del_clears_flow"] = set(), True
+    il.annotate(t, arch)
+    assert (a, fa) not in w["xrefs"] and fa not in w["flow"], "Annotate invented ordinary flow"
+    il.remove_annotations(t)
     print("OK stale next instruction: a jump and a data reference an earlier Annotate recorded to the next instruction "
           "deleted with their records, the other %d references as on a database annotated after analysis (%s)"
           % (res["xrefs"] + res["key_refs"] + res["other_refs"], os.path.basename(path)))
