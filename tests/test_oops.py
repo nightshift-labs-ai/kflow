@@ -260,7 +260,8 @@ class Parse(unittest.TestCase):
             rep = oops.parse(prefix + line)
             self.assertEqual((rep.primary.source, rep.primary.function), ("rip", "mfill_atomic_copy"), prefix)
         rep = oops.parse("<4>[  152.334305][  T123]  ? __warn+0x89/0x130")  # an entry without 'Call Trace:' above it
-        self.assertEqual((rep.primary.source, rep.primary.reliable), ("text", False))
+        self.assertEqual([(x.source, x.function, x.reliable) for x in rep.locations], [("text", "__warn", False)])
+        self.assertIsNone(rep.primary)  # a '? ' entry (unreliable) is never the one to go to
 
     def test_bare_lines(self):
         for text, want in (("mfill_atomic_copy+0x674", ("mfill_atomic_copy", 0x674, None, None)),
@@ -275,6 +276,54 @@ class Parse(unittest.TestCase):
         self.assertEqual((p.source, p.function, p.offset, p.size), ("text", "mfill_atomic_copy", 0x674, None))
         # other text after the symbol: not a call-trace entry or a bare location
         self.assertIsNone(oops.parse("mfill_atomic_copy+0x674/0x9d0 is where it stopped").primary)
+
+    def test_several_reports(self):
+        """A paste with several reports: cut at 'cut here' / 'end trace' / the next WARNING or kernel BUG line / the
+        first line of another report after a register dump; the first report with a trap line is used, with a note."""
+        poison = X86_WARN.replace("mfill_atomic_copy", "mfill_atomic_poison").replace("0x674/0x9d0", "0x494/0x850")
+        rep = oops.parse("[ 10.1] RIP: 0010:mfill_atomic_copy+0x674/0x9d0\n[ 10.2] ---[ end trace 0000000000000000 ]---\n"
+                         + poison)  # an oops, then a WARNING report (review s157 mixed.txt)
+        self.assertEqual((rep.reports, rep.kind, rep.header, rep.primary.function, rep.frames), (2, "oops", None,
+                                                                                               "mfill_atomic_copy", []))
+        rep, m = find(X86_WARN + poison)  # two WARNING reports: the first one's WARNING and RIP lines
+        self.assertEqual((rep.reports, rep.primary.function, rep.header.function, m.status, m.address),
+                         (2, "mfill_atomic_copy", "mfill_atomic_copy", "exact", 0xFFFFFFFF8E629BC4))
+        self.assertEqual(len(rep.frames), 10)
+        self.assertIn("the text holds 2 reports; the first one with a WARNING / kernel BUG / RIP / pc line is used "
+                      "(paste one report to look up another)", m.notes)
+        rep = oops.parse(NEW_WARN + "\n" + OLD_WARN_NO_FILE.replace("copy+0x674", "poison+0x494"))  # no cut-here line
+        self.assertEqual((rep.reports, rep.primary.offset, rep.file), (2, 0x674, "mm/userfaultfd.c"))
+        rep = oops.parse("BUG: KASAN: slab-use-after-free in folio_unlock+0x10/0xd0\nCall Trace:\n dump_stack_lvl+0x7d/0xa0\n"
+                         + X86_WARN)  # a KASAN report without a trap line, then a WARNING report: the WARNING one
+        self.assertEqual((rep.reports, rep.primary.source, rep.primary.function), (2, "rip", "mfill_atomic_copy"))
+        for one in (X86_WARN, X86_BUG, ARM64_BUG, SYZBOT):  # 'Oops:' / 'Internal error:' after the BUG line: one report
+            self.assertEqual(oops.parse(one).reports, 1, one[:60])
+        self.assertEqual(oops.parse(X86_BUG + X86_WARN).primary.function, "folio_unlock")  # BUG, then a WARNING
+        self.assertEqual(oops.parse("mfill_atomic_copy+0x674").reports, 0)  # a bare line is no report
+        rep = oops.parse("RIP: 0010:folio_unlock+0x70/0xd0\nCall Trace:\n f+0x1/0x2\nBUG: unable to handle page fault for "
+                         "address: 0000000000000008\nRIP: 0010:mfill_atomic_copy+0x674/0x9d0")  # no cut / end line
+        self.assertEqual((rep.reports, rep.primary.function, [f.function for f in rep.frames]), (2, "folio_unlock", ["f"]))
+
+    def test_no_trap_line(self):
+        """Reports with no WARNING / kernel BUG / RIP / pc line (KASAN, hung task, lockdep) and pasted call traces: the
+        first entry is a caller, so only a BUG/WARN site right there counts; a single bare line is still looked up."""
+        for text in ("BUG: KASAN: slab-use-after-free in mfill_atomic_copy+0x674/0x9d0\nCall Trace:\n <TASK>\n"
+                     " dump_stack_lvl+0x7d/0xa0\n print_report+0xcf/0x620\n mfill_atomic_copy+0x670/0x9d0\n",
+                     "INFO: task kworker/0:1:9 blocked for more than 122 seconds.\nCall Trace:\n <TASK>\n"
+                     " __schedule+0x2d1/0x1e70\n schedule+0x27/0x80\n",
+                     "WARNING: possible circular locking dependency detected\n-> #1 (&mm->mmap_lock){++++}-{3:3}:\n"
+                     "       mfill_atomic_copy+0x670/0x9d0\n       __might_fault+0x58/0x80\n",
+                     "[  152.334305]  ? __warn+0x89/0x130\n[  152.334310]  ? mfill_atomic_copy+0x674/0x9d0\n"
+                     "[  152.334340]  mfill_atomic_copy+0x670/0x9d0\n[  152.334345]  userfaultfd_ioctl+0x5d1/0x1e70\n"):
+            rep, m = find(text)
+            self.assertEqual((m.status, m.address, m.candidates), ("none", None, []), text)
+            self.assertTrue(m.notes[-1].startswith("no BUG/WARN trap in this report (no WARNING / kernel BUG / RIP / pc "
+                                                   "line), and no BUG/WARN site at its first "), m.notes)
+            self.assertNotIn("__warn", m.notes[-1])  # a '? ' entry is never used
+        rep, m = find("Call Trace:\n mfill_atomic_copy+0x674/0x9d0\n userfaultfd_ioctl+0x5d1/0x1e70")  # a site there
+        self.assertEqual((m.status, m.address), ("exact", 0xFFFFFFFF8E629BC4))
+        rep, m = find("mfill_atomic_copy+0x670")  # one bare line: the function's sites, as asked
+        self.assertEqual((m.status, m.address), ("near", 0xFFFFFFFF8E629BC0))
 
     def test_nothing(self):
         for text in ("", "hello, world", "WARNING: possible circular locking dependency detected",

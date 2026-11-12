@@ -47,6 +47,13 @@ _FILE_LINE = re.compile(r"^(?P<file>[\w./+-]+\.(?:c|h|S|rs)):(?P<line>\d+)$")
 # what may follow a call-trace entry or a bare func+0xoff line: an elided size ('/0x...', as people write it), and on
 # arm64 ' (P)', ' (C)', ' (F)'...
 _TAIL = re.compile(r"^(?:/\S*)?(?:\s+\([A-Z]+\))?\s*$")
+# where one report ends and the next begins: lib/bug.c / kernel/panic.c '------------[ cut here ]------------' and
+# '---[ end trace %016llx ]---'; the first line of other reports (KASAN / page fault 'BUG: ...', x86 'Oops: ...', arm64
+# 'Unable to handle kernel ...' / 'Internal error: ...', lockdep and others 'WARNING: ...', hung task 'INFO: task ...')
+_CUT = re.compile(r"-+\[ cut here \]-+")
+_END = re.compile(r"-+\[ end (?:trace|Kernel panic)")
+_START = re.compile(r"(?:^|\s)(?:BUG: |Oops(?::| -)|Unable to handle kernel|Internal error:|general protection fault|"
+                    r"WARNING: |INFO: task |Kernel panic - )")
 
 
 @dataclass
@@ -87,12 +94,14 @@ class Loc:
 @dataclass
 class Report:
     primary: Loc = None  # the location to go to: RIP/pc > WARNING caller > kernel BUG at > a bare line > first frame
+    #                      (reliable lines only; a frame or a bare line among others counts only if a site is there)
     header: Loc = None  # the WARNING or kernel BUG line, if any
     kind: str = None  # 'WARN', 'BUG', 'oops' (a RIP/pc line without either), or None
     file: str = None  # file:line the report names (WARNING / kernel BUG line, else the primary's own)
     line: int = None
     frames: list = field(default_factory=list)  # call-trace entries in order, '? ' ones with reliable=False
-    locations: list = field(default_factory=list)  # every location found, in the order of the text
+    locations: list = field(default_factory=list)  # every location found in that report, in the order of the text
+    reports: int = 0  # how many reports the text holds (the first one with a WARNING / kernel BUG / RIP / pc is used)
 
 
 def strip_prefix(line):
@@ -129,12 +138,23 @@ def _loc(source, rest, text, whole=False):
 
 
 def parse(text):
-    """Every location in the pasted text (one line or a whole report) and the one to go to: see Report."""
+    """Every location in the pasted text (one line or a whole report) and the one to go to: see Report. A text with
+    several reports is cut into them and the first one with a WARNING / kernel BUG / RIP / pc line is used (a later
+    report's RIP is not mixed with an earlier one's WARNING line)."""
     rep = Report()
     in_trace = False
+    segs, closed = [[]], False
+    trap = lambda seg: any(x.source in ("warning", "bug", "rip", "pc") for x in seg)
+    started = [False]  # per segment: a report's first line was seen
     for raw in (text or "").splitlines():
         s = strip_prefix(raw)
         if not s:
+            continue
+        if _CUT.search(s) or _END.search(s):
+            if segs[-1] or started[-1]:
+                segs.append([])
+                started.append(bool(_CUT.search(s)))
+            in_trace = False
             continue
         found = None
         m = _WARN_OLD.search(s) or _WARN_NEW.search(s)
@@ -179,11 +199,21 @@ def parse(text):
                     found = Loc("text", file=fm.group("file"), line=int(fm.group("line")), text=s)
             if found is not None and q.group(1):
                 found.reliable = False
+        header = found is not None and found.source in ("warning", "bug")
+        if (header and any(x.source in ("warning", "bug", "rip", "pc") for x in segs[-1])) or (
+                not header and _START.search(s) and any(x.source in ("rip", "pc") for x in segs[-1])):  # the next one
+            segs.append([])
+            started.append(True)
+            in_trace = False
+        elif _START.search(s):
+            started[-1] = True
         if found is None:
             continue
-        rep.locations.append(found)
-        if found.source == "frame":
-            rep.frames.append(found)
+        segs[-1].append(found)
+    reports = [seg for seg, st in zip(segs, started) if seg and (st or trap(seg))]
+    rep.reports = len(reports)
+    rep.locations = next((seg for seg in reports if trap(seg)), None) or next((seg for seg in segs if seg), [])
+    rep.frames = [x for x in rep.locations if x.source == "frame"]
     locs = rep.locations
     first = lambda pred: next((x for x in locs if pred(x)), None)
     rep.header = first(lambda x: x.source in ("warning", "bug"))
@@ -193,7 +223,7 @@ def parse(text):
                    or first(lambda x: x.source == "warning" and addressable(x))
                    or first(lambda x: x.source == "bug")
                    or first(lambda x: x.source == "warning")
-                   or first(lambda x: x.source == "text" and not x.inline)
+                   or first(lambda x: x.source == "text" and not x.inline and x.reliable)
                    or first(lambda x: x.source == "frame" and x.reliable and addressable(x)))
     if rep.kind is None and rep.primary is not None and rep.primary.source in ("rip", "pc"):
         rep.kind = "oops"
@@ -378,6 +408,20 @@ def resolve(report, sites, symbols, module=None, is_module=False):
     loc = report.primary
     if loc is None:
         return Match("none", notes=["no WARNING / kernel BUG / RIP / pc line, func+0xoff or file:line in the text"])
+    m = _resolve(report, sites, symbols, module, is_module)
+    if report.reports > 1:
+        m.notes.append("the text holds %d reports; the first one with a WARNING / kernel BUG / RIP / pc line is used "
+                       "(paste one report to look up another)" % report.reports)
+    if loc.source in ("frame", "text") and len(report.locations) > 1 and m.status not in ("exact", "ambiguous"):
+        # a call trace or a list of lines (KASAN, lockdep, hung task...): its first entry is a caller, not a trap
+        return Match("none", loc=loc, notes=m.notes + [
+            "no BUG/WARN trap in this report (no WARNING / kernel BUG / RIP / pc line), and no BUG/WARN site at its "
+            "first %s %s" % ("call-trace entry" if loc.source == "frame" else "line", loc.symbol() or loc.where())])
+    return m
+
+
+def _resolve(report, sites, symbols, module=None, is_module=False):
+    loc = report.primary
     index = sites if isinstance(sites, SiteIndex) else SiteIndex(sites)
     by_addr = index.by_addr
     notes = []
