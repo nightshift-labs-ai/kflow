@@ -17,15 +17,39 @@ class InputError(Exception):
     pass
 
 
+def _unpack(path, d):
+    """Distributions ship modules as .ko.xz / .ko.gz / .ko.zst: unpack the first two in memory."""
+    if d[:6] == b"\xfd7zXZ\x00":
+        try:
+            import lzma
+        except ImportError:
+            raise InputError("%s is xz-compressed and this Python has no lzma module: run xz -dk on it first" % path)
+        return lzma.decompress(d)
+    if d[:2] == b"\x1f\x8b":
+        import gzip
+        return gzip.decompress(d)
+    if d[:4] == b"\x28\xb5\x2f\xfd":
+        raise InputError("%s is zstd-compressed: run zstd -d on it first" % path)
+    return d
+
+
 class Elf:
     def __init__(self, path):
         self.path = path
         with open(path, "rb") as fh:
-            self.data = d = fh.read()
+            d = _unpack(path, fh.read())
         if d[:4] != b"\x7fELF":
             raise InputError("%s is not an ELF file" % path)
         if d[4] != 2 or d[5] != 1:
             raise InputError("only 64-bit little-endian ELF is supported")
+        self.data = d
+        try:
+            self._parse()
+        except (struct.error, IndexError, ValueError, OverflowError, KeyError) as e:
+            raise InputError("%s: malformed or truncated ELF (%s: %s)" % (path, type(e).__name__, e))
+
+    def _parse(self):
+        d = self.data
         shoff, = struct.unpack_from("<Q", d, 0x28)
         shentsize, shnum, shstrndx = struct.unpack_from("<HHH", d, 0x3A)
         machine, = struct.unpack_from("<H", d, 0x12)

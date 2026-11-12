@@ -30,7 +30,7 @@ You need a 64-bit kernel ELF that still has the kernel's symbol names, for examp
 - the `kernel.elf` of the [MemLens demo data](https://github.com/nightshift-labs-ai/memlens/releases/tag/demo-data) (22 MB zip; a Debian 13 6.12 kernel exported from a memory image, so freed init code reads as other bytes);
 - an Android GKI `Image` turned into an ELF with kallsyms names by [vmlinux-to-elf](https://github.com/marin-m/vmlinux-to-elf).
 
-- a kernel module (`.ko`): it has its own `__bug_table` and `__jump_table` (and `__ex_table` if its code touches user memory) as relocatable sections. The command line lays the sections out from 0x10000 in file order, puts undefined symbols in 8-byte slots after them and applies the relocations, so file names, keys and targets come out right; IDA relocates a `.ko` itself, and kflow then finds the tables by segment name. Addresses printed for a module are those of this layout, not necessarily IDA's.
+- a kernel module (`.ko`, or `.ko.xz` / `.ko.gz` as distributions ship them; unpack `.ko.zst` with `zstd -d` first): it has its own `__bug_table` and `__jump_table` (and `__ex_table` if its code touches user memory) as relocatable sections. The command line lays the sections out from 0x10000 in file order, puts undefined symbols in 8-byte slots after them and applies the relocations, so file names, keys and targets come out right; IDA relocates a `.ko` itself, and kflow then finds the tables by segment name. Addresses printed for a module are those of this layout, not necessarily IDA's.
 
 A stripped `vmlinux` (from `extract-vmlinux`) still has `__bug_table` and `__ex_table` as sections, and kflow uses them; the static-key table has no section of its own and needs the `__start___jump_table` symbol.
 

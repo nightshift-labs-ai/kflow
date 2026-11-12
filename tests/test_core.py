@@ -171,6 +171,29 @@ class Module(unittest.TestCase):
         self.assertEqual(e.by_addr[j.key], "my_key")
         self.assertGreater(j.key, max(end for a, end in e.sections.values()))  # extern slot after the sections
 
+    def test_compressed_and_broken(self):
+        import gzip
+        import lzma
+        import tempfile
+        from kflow.cli import Elf, InputError, load
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "toy.ko")
+            module_elf(p)
+            raw = open(p, "rb").read()
+            ref = load(Elf(p))["bug"]
+            for name, pack in (("toy.ko.xz", lzma.compress), ("toy.ko.gz", gzip.compress)):
+                q = os.path.join(d, name)
+                with open(q, "wb") as fh:
+                    fh.write(pack(raw))
+                self.assertEqual(load(Elf(q))["bug"][0].file, ref[0].file)
+            for name, data in (("cut.ko", raw[:200]), ("zst.ko.zst", b"\x28\xb5\x2f\xfd" + bytes(20)),
+                               ("junk.elf", b"\x7fELF\x02\x01" + b"\xff" * 100)):
+                q = os.path.join(d, name)
+                with open(q, "wb") as fh:
+                    fh.write(data)
+                with self.assertRaises(InputError):
+                    Elf(q)
+
 
 if __name__ == "__main__":
     unittest.main()
