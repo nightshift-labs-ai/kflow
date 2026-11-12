@@ -194,6 +194,7 @@ def decompile(eas, entry=0, extra=()):
     for item in extra:
         eamap[eas[0]].append(item)
     coords["far"] = (0, 99)
+    coords["same"] = (6, 2)  # a second item of eas[0] on the same line (an expression inside the statement)
     cf = FakeCfunc(lines, eamap, coords, entry)
     m.STATE["hx_error"] = False  # a crash inside the hook must not pass as "no comment"
     assert m.STATE["hx"].func_printed(cf) == 0
@@ -255,6 +256,7 @@ if bug is not None:
     assert got == il.bug_comment(bug) and got.startswith("kflow: " + ("WARN" if bug.warn else "BUG")), got
     assert (bug.where() or "") in got and (("continues" in got) if bug.warn else ("does not return" in got)), got
     shown_texts.append(("BUG/WARN", bug.addr, got))
+    assert decompile([bug.addr], extra=("same",))[bug.addr] == got  # two items of one address on one line: one copy
 if ex is not None:
     got = decompile([ex.insn])[ex.insn]
     assert got == il.ex_comment(ex, arch) and "fixup at 0x%X" % ex.fixup in got, got
@@ -290,6 +292,21 @@ if nop is not None:
     assert decompile([nop.code + n], entry=f.start_ea) == {nop.code + n: ""}
     del pm["sites"][nop.code + 1]
     pm["eas"] = sorted(pm["sites"])
+    # a static-key site a few bytes before the NEXT function's entry: that function's first line gets nothing (the
+    # site's function decides, not the function of the line); synthetic site 8 bytes before a function start
+    g = next((fs for fs in sorted({get_func(e).start_ea for e in all_eas if get_func(e) is not None})
+              if not any(fs - 8 <= e <= fs for e in pm["eas"])), None)
+    if g is not None:
+        pm["sites"][g - 8] = [("jump", dataclasses.replace(nop, code=g - 8))]
+        pm["eas"] = sorted(pm["sites"])
+        assert decompile([g], entry=g) == {g: ""}, "comment crossed into the next function"
+        del pm["sites"][g - 8]
+        pm["eas"] = sorted(pm["sites"])
+    # a statement before the first site of a database that has one site: nothing (no wrap-around to the last site)
+    saved_sites, saved_eas = pm["sites"], pm["eas"]
+    pm["sites"], pm["eas"] = {nop.code: saved_sites[nop.code]}, [nop.code]
+    assert decompile([f.start_ea], entry=f.start_ea) == {f.start_ea: ""}, "a line before the only site got its comment"
+    pm["sites"], pm["eas"] = saved_sites, saved_eas
 # a function with none of the sites
 assert decompile([1, 2, 3]) == {1: "", 2: "", 3: ""}
 # Annotate again: the map is rebuilt, the comments are not doubled
