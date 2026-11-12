@@ -1,5 +1,15 @@
 # kflow
 
+For kernel reverse engineers (Linux and Android vulnerability research, patch diffing, crash triage): kflow turns the bare traps, NOPs and faulting instructions of a kernel into source lines, static keys and fixups. A `WARNING: ... at mm/userfaultfd.c:755` from a kernel log can be looked up in kflow's list of BUG/WARN sites, and a NOP says which key patches it and where it then jumps.
+
+Before: what the disassembly shows at three addresses of the [MemLens demo kernel](https://github.com/nightshift-labs-ai/memlens/releases/tag/demo-data) (`objdump -d`). After: the comment kflow writes at each one (text from kflow's fake-IDA test, not an IDA screenshot):
+
+```
+ffffffff8e629bc4  ud2            ; kflow: WARN at mm/userfaultfd.c:755 (the kernel reports and continues after this trap)
+ffffffff8e391de7  xchg %ax,%ax   ; kflow: static key randomize_kstack_offset (static_branch_likely): runtime-patched NOP/branch; jumps to 0xFFFFFFFF8E391DFC when the key is off
+ffffffff8e200029  wrmsr          ; kflow: may fault -> fixup at 0xFFFFFFFF8E20002B (WRMSR)
+```
+
 Linux kernels carry their own maps of code that a disassembler cannot see from the instructions alone:
 
 - **`__bug_table`**: every `BUG()` / `WARN()` trap (`ud2` on x86_64, `brk #0x800` on arm64; from Linux 6.19 an x86_64 WARN with a message is a call instead, and kflow says so), with the **source file and line** and a flag that says whether the kernel **continues after the trap** (WARN) or not (BUG).

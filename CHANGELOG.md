@@ -11,6 +11,7 @@ Taken from the GitHub release notes. Newest first.
 - README "Try it": the quickest sample is the `vmlinuz` your own Linux machine boots, through vmlinux-to-elf (with the copy step for a root-only `/boot`).
 - Static-key comments say when the site jumps: "jumps to X when the key is off" (`static_branch_likely` sites) or "... is on" (`static_branch_unlikely`), from the kernel's rule that a site is a jump when the key's state XOR the entry's branch bit is set (`jump_label_type()`). Found by a judge-style review.
 - Modules: a static key inside an imported array was named after the NEXT import (Debian 13 `bridge.ko`: `sprintf+0x40` for `nf_hooks_needed + 0x270`): each import now gets a 64 KB slot and a key in it is named from that import, exactly (checked against `readelf -r`). Found by a judge-style review.
+- README opens with who it is for and a before/after of three real sites (objdump instruction vs kflow's comment). Found by a judge-style review.
 
 ## v0.0.1 (2026-11-12)
 
