@@ -1,6 +1,7 @@
 """kflow command line: decode the site tables of a kernel ELF (vmlinux, a MemLens kernel.elf, or a module .ko).
 
     python3 -m kflow <kernel.elf> [--list bug|warn|jump|ex] [--limit N] [--json out.json]
+    python3 -m kflow <kernel.elf> --oops <log file, or - for stdin> [--json out.json]
 """
 import argparse
 import bisect
@@ -108,6 +109,8 @@ class Elf:
         self.symbols = {}
         best = {}  # address -> (rank, name): the name to show for an address
         funcs = []
+        self.public = set()  # addresses of global function symbols (IDA: public names)
+        self.weak = set()  # and of weak ones (IDA: weak names)
         for si, (t, f, a, o, s, link) in enumerate(self.secs):
             if t != 2:
                 continue
@@ -133,6 +136,10 @@ class Elf:
                         best[value] = (rank, name)
                 if st_info & 0xF == 2 and value:
                     funcs.append((value, value + size, name))
+                    if st_info >> 4 == 1:
+                        self.public.add(value)
+                    elif st_info >> 4 == 2:
+                        self.weak.add(value)
         funcs.sort()
         # kallsyms-derived ELFs (vmlinux-to-elf) give every function size 0: end it at the next function
         for k, (a, e, n) in enumerate(funcs):
@@ -277,6 +284,39 @@ class Elf:
             return self.funcs[i][2]
         return None
 
+    def function_starts(self, name, suffixed=False):
+        """[(start, size, printed size, name)] of the functions called name (static functions can share one), or with
+        suffixed=True of those called name.<suffix> (name.cfi, name.llvm.123...). printed size: see printed_size. A
+        symbol that is not a function: size None."""
+        if not hasattr(self, "_by_name"):
+            self._by_name, self._by_base = {}, {}
+            for a, e, n in self.funcs:
+                self._by_name.setdefault(n, []).append((a, e - a, n))
+                if "." in n:
+                    self._by_base.setdefault(n.split(".", 1)[0], []).append((a, e - a, n))
+        if suffixed:
+            out = [c for c in self._by_base.get(name, []) if c not in self._by_name.get(name, [])]
+        elif name in self._by_name:
+            out = self._by_name[name]
+        else:
+            return [(self.symbols[name], None, self.printed_size(self.symbols[name]), name)] if self.symbols.get(name) else []
+        return [(a, n, self.printed_size(a), full) for a, n, full in out]
+
+    def printed_size(self, ea):
+        """The size the kernel prints for the symbol at ea ('func+0x10/0x40'): kallsyms measures from it to the next
+        symbol (alignment padding and a __pfx_ symbol included), so it can be larger than the ELF size. Mapping
+        symbols ($x, $d) and .L labels are not kallsyms symbols. In a module the next symbol must be in the same
+        section (the kernel lays the sections out differently). None if there is none."""
+        if not hasattr(self, "_sym_addrs"):
+            self._sym_addrs = sorted(a for a, n in self.by_addr.items() if not n.startswith(("$", ".L")))
+        i = bisect.bisect_right(self._sym_addrs, ea)
+        if i == len(self._sym_addrs):
+            return None
+        nxt = self._sym_addrs[i]
+        if self.relocatable and not any(a <= ea < e and nxt < e for a, e in self.sections.values()):
+            return None
+        return nxt - ea
+
 
 def load(elf):
     """Decode every table that has __start_/__stop_ symbols. Returns dict."""
@@ -356,16 +396,29 @@ def main(argv=None):
     ap = argparse.ArgumentParser(prog="kflow", description=__doc__.splitlines()[0])
     ap.add_argument("kernel")
     ap.add_argument("--list", choices=["bug", "warn", "jump", "ex"])
-    ap.add_argument("--limit", type=int, default=20)
+    ap.add_argument("--limit", type=int, help="rows for --list (default 20)")
     ap.add_argument("--json")
+    ap.add_argument("--oops", metavar="LOG", help="a kernel log (a WARNING / kernel BUG / RIP / pc line or a whole "
+                    "report; - reads stdin): print the BUG/WARN site it names")
     ap.add_argument("--version", action="version", version="kflow " + __version__)
     a = ap.parse_args(argv)
+    if a.oops is not None and (a.list or a.limit is not None):
+        ap.error("--oops cannot be combined with --list or --limit")
+    limit = 20 if a.limit is None else a.limit
     try:
+        if a.oops is not None:
+            if a.oops == "-":
+                log_text = sys.stdin.read()
+            else:
+                with open(a.oops, encoding="utf-8", errors="replace") as fh:
+                    log_text = fh.read()
         elf = Elf(a.kernel)
         t = load(elf)
     except (InputError, ValueError, OSError) as e:
         print("kflow: %s" % e, file=sys.stderr)
         return 2
+    if a.oops is not None:
+        return oops_main(elf, t, log_text, a.json)
     for line in summary(elf, t):
         print(line)
     if a.list:
@@ -383,10 +436,10 @@ def main(argv=None):
             for x in t.get("ex", []):
                 rows.append("%#x -> %#x  %-40s %s" % (x.insn, x.fixup, elf.func(x.insn) or "?",
                             ("handler " + elf.by_addr.get(x.handler, hex(x.handler))) if x.handler is not None else x.type_name(elf.arch)))
-        for r in rows[:a.limit]:
+        for r in rows[:limit]:
             print(r)
-        if len(rows) > a.limit:
-            print("... %d more (--limit)" % (len(rows) - a.limit))
+        if len(rows) > limit:
+            print("... %d more (--limit)" % (len(rows) - limit))
     if a.json:
         with open(a.json, "w") as fh:
             json.dump({"bug_layout": t.get("bug_layout"),
@@ -395,3 +448,23 @@ def main(argv=None):
                        "ex_layout": t.get("ex_layout"),
                        "ex": [[x.insn, x.fixup, x.data] for x in t.get("ex", [])]}, fh)
     return 0
+
+
+def oops_main(elf, t, log_text, json_path=None):
+    """--oops: the BUG/WARN site a kernel log names. Exit status 0 when something was found (the site, the function,
+    or the candidates for a file:line), 1 when not, or when the log contradicts this file (status mismatch)."""
+    from . import oops
+    for kind, error in t.get("errors", {}).items():
+        if kind == "bug":
+            print("not decoded: bug (%s)" % error)
+    if "bug" in t["missing"]:
+        print("no __bug_table in this file: only function+offset can be looked up")
+    report = oops.parse(log_text)
+    mod = oops.module_name(elf.path)
+    match = oops.resolve(report, t.get("bug", []), elf.function_starts, mod, elf.relocatable)
+    for line in oops.describe(report, match, elf.func):
+        print(line)
+    if json_path:
+        with open(json_path, "w") as fh:
+            json.dump({"input": elf.path, "oops": oops.match_record(report, match, elf.func)}, fh, indent=1)
+    return 1 if match.status in ("none", "mismatch") else 0

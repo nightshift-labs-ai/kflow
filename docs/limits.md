@@ -19,6 +19,15 @@ The full text of the README's [Limits](../README.md#limits) section; WARN fall-t
 - Linux 6.19+: checked only on a stripped Ubuntu mainline 7.0.0 x86_64 `vmlinux` (`__bug_table` and `__ex_table` by section name): 14,039 BUG/WARN sites with the 16-byte layout; of the 11,443 WARN sites, 9,632 are `ud2` and the other 1,811 are the flagged WARN-with-message calls; 754 exception-table entries.
 - x86_64 6.19+ kernels built without `CONFIG_DEBUG_BUGVERBOSE` (distributions and Android GKI enable it) have entries with a message but no file and line: kflow decodes that layout (synthetic test only) and lists those sites without `file:line`.
 
+## Go to oops/WARN line
+
+- The log must come from the same build as the file you open: function+offset is this file's only if the build is the same. From another build kflow notices it when the log's own `WARNING:` / `kernel BUG at` line names another `file:line` or kind than the site at that address, or, without such a line, when the log prints another function size than this file's (the size kallsyms prints, to the next symbol, or the code size): it reports a mismatch and lists the sites at the log's `file:line` instead of going there. A log with neither (a bare `RIP:` line without a size) can still land on an unrelated site.
+- A function+offset this file does not have (another build, or a module the file is not) is never replaced by a jump to the one site at the log's `file:line`; that site is only listed.
+- Clang LTO kernels: kallsyms prints `foo.123`, `foo.llvm.N` and `foo.cfi` as `foo`, so `foo+0x10` tries all of them and the plain `foo`; when several have a site at that offset and neither the size nor the `WARNING:` / `kernel BUG at` line decides, they are listed. GCC's `foo.part.N`, `.isra.N`, `.constprop.N` and `.cold` are printed in full and are only found by that full name.
+- Same-named static functions: the command line lists them all; in IDA only the function IDA shows under that name is tried (IDA names one function so), and for a static function a note says so unless the log's `WARNING:` / `kernel BUG at` line confirms the site. IDA's names for duplicates and for names with a dot are not verified (not yet run in real IDA).
+- A paste with several reports: the first one with a `WARNING:`, `kernel BUG at`, `RIP:` or `pc :` line is used. Reports without one (KASAN, lockdep, hung task) and pasted call traces find a site only if their first reliable entry is one; `?` entries are never used.
+- Linux 6.19+ x86_64 WARN with a message traps in `__WARN_trap`: the `RIP:` line names that, and the `WARNING:` line's function+offset gives the site (checked on hand-made logs only).
+
 ## WARN fall-through
 
 Experimental, off by default, x86_64 only, not yet run in real IDA: see [warnflow.md](warnflow.md).

@@ -168,6 +168,8 @@ def install(w, names=True):
     m["ida_name"].get_nlist_idx = lambda ea: bisect.bisect_left(nlist, ea)  # "closest match": may be the next name
     m["ida_name"].get_nlist_ea = lambda i: nlist[i]
     m["ida_name"].get_nlist_name = lambda i: elf.by_addr[nlist[i]]
+    m["ida_name"].is_public_name = lambda ea: ea in getattr(elf, "public", ())  # IDA: the ELF's global symbols
+    m["ida_name"].is_weak_name = lambda ea: ea in getattr(elf, "weak", ())  # and its weak ones
     m["ida_ida"].inf_is_64bit = lambda: True
     m["ida_ida"].inf_get_procname = lambda: "metapc" if elf.arch == "x86_64" else "ARM"
     x = m["ida_xref"]
@@ -223,8 +225,9 @@ def install(w, names=True):
 
 def install_ui(w, log):
     """Fake ida_kernwin, ida_funcs (get_func from the ELF's function symbols), ida_lines and ida_idaapi.plugin_t, to
-    load kflow_entry.py (the IDA plugin). Messages, warnings, info boxes, wait boxes, jumps, registered actions and
-    choosers shown go to log. Returns the modules and get_func."""
+    load kflow_entry.py (the IDA plugin). Messages, warnings, info boxes, wait boxes, jumps, registered actions,
+    text dialogs and choosers shown go to log; ask_text answers w["ask_text"] (None: cancelled). Returns the modules
+    and get_func."""
     elf = w["elf"]
     kw = types.ModuleType("ida_kernwin")
     kw.msg = lambda text: log.append(("msg", text))
@@ -233,6 +236,7 @@ def install_ui(w, log):
     kw.show_wait_box = lambda text: log.append(("wait", text))
     kw.hide_wait_box = lambda: log.append(("hide", None))
     kw.jumpto = lambda ea: log.append(("jump", ea)) or True
+    kw.ask_text = lambda max_size, defval, prompt: log.append(("ask", max_size, defval, prompt)) or w.get("ask_text")
     kw.AST_ENABLE_ALWAYS, kw.SETMENU_APP = 1, 0
     kw.register_action = lambda desc: log.append(("reg", desc.name)) or True
     kw.unregister_action = lambda name: log.append(("unreg", name)) or True
@@ -254,6 +258,7 @@ def install_ui(w, log):
 
         def Show(self):
             log.append(("show", self.title, self.OnGetSize()))
+            w["shown"] = self  # the last chooser, for tests that check its rows
             return 0
 
     class UI_Hooks:  # the test fires the events itself on the hooks logged as ("ui_hook", hooks)

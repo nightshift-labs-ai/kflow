@@ -5,6 +5,8 @@ Edit > Plugins > kflow actions:
     site (BUG/WARN with source file:line, static key + branch target, faulting instruction -> fixup) and adds
     jump references to static-key targets and fixups where IDA has none.
   * List BUG/WARN sites: a list with function and source file:line; Enter jumps to the site.
+  * Go to oops/WARN line: paste a WARNING / kernel BUG / RIP / pc line or a whole oops report; jumps to the BUG/WARN
+    site it names (function + offset), or lists the candidate sites when only file:line is known.
   * Remove annotations.
   * Let WARN sites fall through (experimental, x86_64 only, off by default) / Remove WARN fall-through: see
     kflow/warnflow.py.
@@ -20,20 +22,24 @@ import ida_funcs
 import ida_idaapi
 import ida_kernwin
 import ida_lines
+import ida_nalt
+import ida_name
+import ida_segment
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
-from kflow import __version__, idalayer  # noqa: E402
+from kflow import __version__, idalayer, oops  # noqa: E402
 
 ISSUES_URL = "https://github.com/nightshift-labs-ai/kflow/issues"
 # pseudo: the sites by address for the pseudocode hook (built by Annotate, rebuilt after a rebase); hx: the hook;
 # hx_late: a UI hook that tries it again when a plugin loads, while the decompiler was not there at init.
 # wf / wf_filter: the WARN fall-through processor hook and decompiler filter, only while it is on for the open database;
 # wf_last: its last counts.
+# oops_text: the last text pasted into Go to oops/WARN line (the dialog's default the next time).
 STATE = {"tables": None, "pseudo": None, "hx": None, "hx_error": False, "hx_late": None, "wf": None, "wf_filter": None,
-         "wf_error": False, "wf_last": None}
+         "wf_error": False, "wf_last": None, "oops_text": ""}
 NOP_WINDOW = 16  # bytes: how far a static-key site without a statement of its own may be from the next one that has one
 
 
@@ -302,9 +308,96 @@ class ListAction(ida_kernwin.action_handler_t):
         t = scan_or_warn()  # rescan: cheap, and right after a rebase or a database switch
         if t is None:
             return 0
-        rows = [(b.addr, "0x%X" % b.addr, "WARN" if b.warn else "BUG",
-                 ida_funcs.get_func_name(b.addr) or "", b.where() or "") for b in t["bug"]]
-        SitesChooser(rows).Show()
+        SitesChooser(bug_site_rows(t["bug"])).Show()
+        return 1
+
+    def update(self, ctx):
+        return ida_kernwin.AST_ENABLE_ALWAYS
+
+
+def bug_site_rows(sites):
+    return [(b.addr, "0x%X" % b.addr, "WARN" if b.warn else "BUG", ida_funcs.get_func_name(b.addr) or "", b.where() or "")
+            for b in sites]
+
+
+def function_starts(name, suffixed=False):
+    """[(start, size or None, printed size or None, name)] of the function IDA has under this name
+    (ida_name.get_name_ea, as kflow looks up the table names). suffixed=True: the functions in IDA's name list called
+    name.<suffix> (Linux 6.1 with Clang LTO prints a name like foo.llvm.123 cut at the first dot). printed size: what
+    the kernel prints after the '/' (kallsyms measures to the next symbol): here the distance to the next name in
+    IDA's name list in the same segment."""
+    def size(ea):
+        f = ida_funcs.get_func(ea)
+        return f.end_ea - f.start_ea if f is not None and f.start_ea == ea else None
+
+    def printed(ea):
+        n, i = ida_name.get_nlist_size(), ida_name.get_nlist_idx(ea)
+        while 0 <= i < n and (ida_name.get_nlist_ea(i) <= ea or ida_name.get_nlist_name(i).startswith("$")):
+            i += 1
+        if not 0 <= i < n:
+            return None
+        nxt, seg = ida_name.get_nlist_ea(i), ida_segment.getseg(ea)
+        return nxt - ea if seg is not None and nxt < seg.end_ea else None
+    if not suffixed:
+        ea = ida_name.get_name_ea(ida_idaapi.BADADDR, name)
+        return [] if ea == ida_idaapi.BADADDR else [(ea, size(ea), printed(ea), name)]
+    out = []
+    for i in range(ida_name.get_nlist_size()):
+        full = ida_name.get_nlist_name(i)
+        if full.startswith(name + "."):
+            ea = ida_name.get_nlist_ea(i)
+            out.append((ea, size(ea), printed(ea), full))
+    return out
+
+
+OOPS_PROMPT = ("kflow: paste a kernel log: a WARNING / kernel BUG / RIP / pc line, a whole oops or syzbot report, "
+               "func+0xoff or file:line")
+
+
+class OopsAction(ida_kernwin.action_handler_t):
+    """Go to the BUG/WARN site a pasted kernel log names: function + offset of the RIP / pc / WARNING line (the
+    kernel prints the trap's own address), else the sites at the WARNING / kernel BUG line's file:line."""
+    @guarded
+    def activate(self, ctx):
+        text = ida_kernwin.ask_text(0, STATE["oops_text"], OOPS_PROMPT)
+        if not text:
+            return 0
+        STATE["oops_text"] = text
+        rep = oops.parse(text)
+        if rep.primary is None:
+            ida_kernwin.warning("kflow: found no WARNING / kernel BUG / RIP / pc line, func+0xoff or file:line in the "
+                                "pasted text.")
+            return 0
+        t = scan_or_warn()
+        if t is None:
+            return 0
+        path = ida_nalt.get_input_file_path() or ""
+        mod = oops.module_name(path)
+        m = oops.resolve(rep, t["bug"], function_starts, mod, mod is not None)
+        if m.status == "exact" and m.function_start is not None and not oops.confirms(rep, m.site) \
+                and not ida_name.is_public_name(m.function_start) and not ida_name.is_weak_name(m.function_start):
+            # IDA shows one function under a name; the kernel can have several static functions of that name
+            m.notes.append("%s is a static function, and IDA names only one function so: another static function of "
+                           "that name is not tried (python3 -m kflow --oops lists them all); the log's WARNING / kernel "
+                           "BUG line would confirm the site" % m.function)
+        for line in oops.describe(rep, m, ida_funcs.get_func_name):
+            report(line)
+        if m.status == "ambiguous" or (m.address is None and m.candidates):  # the candidates, no jump
+            where = "at %s" % m.label if m.label else "in %s" % m.loc.function
+            SitesChooser(bug_site_rows(m.candidates), "kflow: BUG/WARN sites %s" % where).Show()
+            if m.status == "mismatch":  # never a silent jump to a site the log itself contradicts
+                ida_kernwin.warning("kflow: the pasted log does not fit this file: %s (a log from another build, or two "
+                                    "reports in one paste?). Not jumping; the BUG/WARN sites at %s are in the list, "
+                                    "details in the Output window." % (m.reason, m.label))
+            return 1
+        if m.address is None:
+            ida_kernwin.warning("kflow: no BUG/WARN site or function of this file matches the pasted text; details are "
+                                "in the Output window.")
+            return 0
+        if not ida_kernwin.jumpto(m.address):  # an address outside this database
+            ida_kernwin.warning("kflow: could not jump to 0x%X (not in this database?); details are in the Output "
+                                "window." % m.address)
+            return 0
         return 1
 
     def update(self, ctx):
@@ -543,6 +636,7 @@ ACTIONS = [
     ("kflow:annotate", "kflow: Annotate kernel sites", AnnotateAction),
     ("kflow:list", "kflow: List BUG/WARN sites", ListAction),
     ("kflow:keys", "kflow: List static-key sites", KeySitesAction),
+    ("kflow:oops", "kflow: Go to oops/WARN line", OopsAction),
     ("kflow:remove", "kflow: Remove annotations", RemoveAction),
     ("kflow:warnflow", "kflow: Let WARN sites fall through (experimental)", WarnFlowAction),
     ("kflow:warnflow_off", "kflow: Remove WARN fall-through", WarnFlowOffAction),

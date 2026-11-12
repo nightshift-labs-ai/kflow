@@ -1,8 +1,9 @@
-"""Loads kflow_entry.py (the IDA plugin) on fake ida_* modules backed by a kernel ELF and runs its four actions, then
-the Hex-Rays pseudocode comments on a fake ida_hexrays: it proves the plugin wiring runs, not that IDA or the real
-decompiler behave like the fakes.
+"""Loads kflow_entry.py (the IDA plugin) on fake ida_* modules backed by a kernel ELF and runs its annotation, list,
+Go to oops/WARN line and remove actions, then the Hex-Rays pseudocode comments on a fake ida_hexrays: it proves the
+plugin wiring runs, not that IDA or the real decompiler behave like the fakes.
 Usage: python3 tests/test_entry_stub.py <kernel.elf>   (SKIPs without a path)"""
 import bisect
+import collections
 import dataclasses
 import importlib
 import os
@@ -30,7 +31,8 @@ sys.path.insert(0, os.path.join(HERE, ".."))
 sys.modules.pop("kflow_entry", None)
 m = importlib.import_module("kflow_entry")
 p = m.PLUGIN_ENTRY()
-ACTION_NAMES = ["kflow:annotate", "kflow:list", "kflow:keys", "kflow:remove", "kflow:warnflow", "kflow:warnflow_off"]
+ACTION_NAMES = ["kflow:annotate", "kflow:list", "kflow:keys", "kflow:oops", "kflow:remove", "kflow:warnflow",
+                "kflow:warnflow_off"]
 assert p.init() == 1 and [x[1] for x in log if x[0] == "reg"] == ACTION_NAMES
 assert m.STATE["hx"] is None
 assert m.AnnotateAction().activate(None) == 1
@@ -71,6 +73,217 @@ if jumps:
         print("  static-key list on the packed module: %d rows, every key named as on the command line" % len(rows))
 else:
     assert keys == 0
+
+
+# ---- Go to oops/WARN line: pasted kernel log text -> the BUG/WARN site (ask_text answers w["ask_text"]) ----
+def ask(text):
+    w["ask_text"] = text
+    n = len(log)
+    return m.OopsAction().activate(None), log[n:]
+
+
+def went(new):
+    return [x[1] for x in new if x[0] == "jump"]
+
+
+def said(new, text):
+    return [x[1] for x in new if x[0] == "msg" and text in x[1]]
+
+
+bugs = m.STATE["tables"]["bug"]
+at_addr = collections.Counter(b.addr for b in bugs)
+mod = m.oops.module_name(sys.argv[1])
+modtag = " [%s]" % mod if mod else ""  # the kernel prints module code as 'func+0x10/0x20 [mod]'
+reg, trace = {"x86_64": ("RIP: 0010:", "Call Trace:"), "aarch64": ("pc : ", "Call trace:")}[elf.arch]
+
+
+def only_function(b):  # (name, start, size) of the function IDA has under that name, if the site is in it
+    f, name = get_func(b.addr), ui.fn.get_func_name(b.addr)
+    if f is None or not name or [c[:2] for c in m.function_starts(name)] != [(f.start_ea, f.end_ea - f.start_ea)]:
+        return None
+    return name, f.start_ea, f.end_ea - f.start_ea
+
+
+site = next((b for b in bugs if b.warn and b.file and at_addr[b.addr] == 1 and only_function(b)), None)
+oops_done = []
+if site is not None:
+    name, start, size = only_function(site)
+    off = site.addr - start
+    text = "\n".join(["[  152.334198][  T123] ------------[ cut here ]------------",
+                      "[  152.334201][  T123] WARNING: CPU: 1 PID: 123 at %s:%d %s+%#x/%#x%s" % (site.file, site.line, name,
+                                                                                            off, size, modtag),
+                      "[  152.334230][  T123] Modules linked in:%s" % (" " + mod if mod else ""),
+                      "[  152.334270][  T123] %s%s+%#x/%#x%s" % (reg, name, off, size, modtag),
+                      "[  152.334300][  T123] " + trace,
+                      "[  152.334305][  T123]  ? __warn+0x89/0x130",
+                      "[  152.334340][  T123]  some_caller+0x5d1/0x1e70"])
+    r, new = ask(text)
+    assert r == 1 and went(new) == [site.addr], new
+    assert new[0] == ("ask", 0, "", m.OOPS_PROMPT), new[0]
+    assert said(new, "exact: the WARN site at %s+%#x (%#x)" % (name, off, site.addr)), new
+    assert not [x for x in new if x[0] in ("warning", "show")], new
+    r, new = ask("%s+%#x" % (name, off))  # just func+0xoff; the dialog offers the last text
+    assert r == 1 and went(new) == [site.addr] and new[0][2] == text, new
+    # the module the log names is passed on (review s157 m7, M65): a note says this file is not that module
+    r, new = ask("%s%s+%#x/%#x [kflow_other_mod]" % (reg, name, off, size))
+    assert went(new) == [site.addr] and said(new, "the log puts %s in module kflow_other_mod; this file is %s" % (
+        name, ("module " + mod) if mod else "not that module (vmlinux?): open kflow_other_mod.ko")), new
+    gap = next((d for d in range(1, size - off) if start + off + d not in at_addr), None)
+    if gap is not None:  # an offset with no site: go to the log's address and list the function's sites
+        r, new = ask("%s%s+%#x/%#x%s" % (reg, name, off + gap, size, modtag))
+        assert r == 1 and went(new) == [site.addr + gap] and said(new, "not exact: no BUG/WARN site at %s+%#x" % (name, off + gap))
+    # an offset past the end of the function here (a log from another build): its sites in a chooser, no jump
+    r, new = ask("%s%s+%#x/%#x%s" % (reg, name, size, 2 * size, modtag))
+    want = sorted(b.addr for b in bugs if start <= b.addr < start + size)
+    assert r == 1 and not went(new) and [x for x in new if x[0] == "show"] == [
+        ("show", "kflow: BUG/WARN sites in %s" % name, len(want))], new
+    assert sorted(row[0] for row in w["shown"].rows) == want and said(new, "is past the end of %s" % name), new
+    # the log's own WARNING line names another file:line (another build, or two reports pasted): a warning and the
+    # chooser, never a jump
+    r, new = ask(text.replace("at %s:%d " % (site.file, site.line), "at %s:%d " % (site.file, site.line + 100000)))
+    assert r == 1 and not went(new) and [x[:2] for x in new if x[0] == "show"] == [
+        ("show", "kflow: BUG/WARN sites at %s+%#x" % (name, off))], new
+    assert [x for x in new if x[0] == "warning" and "does not fit this file: the WARN site at %s+%#x is at %s"
+            % (name, off, site.where()) in x[1]] and said(new, "mismatch: "), new
+    oops_done.append("WARNING/%s line and func+0xoff -> 0x%X (%s+%#x)%s; past the end -> %d rows; another line -> "
+                     "mismatch, no jump" % (reg.split(":")[0].strip(), site.addr, name, off,
+                                            ", near offset" if gap is not None else "", len(want)))
+# a static function (IDA shows one function under a name; the kernel may have several static functions of that name):
+# found from the RIP / pc line alone, a note says another one is not tried; its own WARNING / kernel BUG line confirms
+# the site (no note); a global or weak function needs no note (review s157 m3)
+b = next((b for b in bugs if b.file and at_addr[b.addr] == 1 and only_function(b)), None)
+if b is not None:
+    name, start, size = only_function(b)
+    at = "%s+%#x/%#x%s" % (name, b.addr - start, size, modtag)
+    head = ("WARNING: CPU: 1 PID: 9 at %s:%d %s\n" % (b.file, b.line, at) if b.warn else
+            "kernel BUG at %s:%d!\n" % (b.file, b.line))
+    saved = {k: set(getattr(elf, k, ())) for k in ("public", "weak")}
+    for kind in ("static", "global", "weak"):  # the function's symbol made each kind in turn (IDA: neither, public, weak)
+        elf.public, elf.weak = saved["public"] - {start}, saved["weak"] - {start}
+        if kind != "static":
+            getattr(elf, "public" if kind == "global" else "weak").add(start)
+        r, new = ask(reg + at)
+        assert r == 1 and went(new) == [b.addr] and bool(said(new, "%s is a static function, and IDA names only one "
+                                                                 "function so" % name)) == (kind == "static"), new
+        r, new = ask(head + reg + at)
+        assert r == 1 and went(new) == [b.addr] and not said(new, "is a static function"), new
+    elf.public, elf.weak = saved["public"], saved["weak"]
+    oops_done.append("%s as a static function: note without its own line; global or weak: no note" % name)
+if any(b.addr == 0xFFFFFFFF8E629BC4 and b.where() == "mm/userfaultfd.c:755" for b in bugs):  # the MemLens demo kernel
+    # the review's example: four functions share mm/userfaultfd.c:755; the WARNING line's func+0xoff picks one
+    r, new = ask("WARNING: CPU: 1 PID: 9 at mm/userfaultfd.c:755 mfill_atomic_copy+0x674/0x...")
+    assert r == 1 and went(new) == [0xFFFFFFFF8E629BC4], new
+    r, new = ask("mm/userfaultfd.c:755")
+    assert [ui.fn.get_func_name(row[0]) for row in w["shown"].rows] == [
+        "mfill_atomic_copy", "mfill_atomic_zeropage", "mfill_atomic_continue", "mfill_atomic_poison"], new
+    oops_done.append("demo kernel: mfill_atomic_copy+0x674 -> 0xFFFFFFFF8E629BC4, mm/userfaultfd.c:755 -> 4 rows")
+# the size the kernel prints is measured to the next symbol (padding included): IDA's next name gives it, so a log of this
+# build whose size is larger than the function's code gets no "size in the log" note
+padded = None
+for a, e, name in elf.funcs:
+    c = m.function_starts(name)
+    if len(c) == 1 and c[0][0] == a and c[0][1] and c[0][2] and c[0][2] != c[0][1] and a not in at_addr:
+        padded = (name, c[0])
+        break
+if padded is not None:
+    name, (a, size, printed, _) = padded
+    assert printed == cli_elf.printed_size(a) or cli_elf.relocatable, (name, printed, cli_elf.printed_size(a))
+    r, new = ask("%s%s+0x0/%#x%s" % (reg, name, printed, modtag))
+    assert r == 1 and went(new) == [a] and not said(new, "size in the log"), new
+    r, new = ask("%s%s+0x0/%#x%s" % (reg, name, printed + 8, modtag))
+    assert said(new, "size in the log %#x, here %#x" % (printed + 8, printed)), new
+    oops_done.append("printed size %#x of %s (code %#x): no size note" % (printed, name, size))
+# a name the log prints without the suffix the database has (Clang LTO: the kernel cuts foo.123 at the first dot); GCC's
+# foo.isra.0 / foo.part.0 are printed in full, so the cut name must not lead there
+def cut_site(lto):
+    for b in bugs:
+        full = ui.fn.get_func_name(b.addr)
+        base = full.split(".")[0] if full else ""
+        if (at_addr[b.addr] == 1 and "." in full and m.oops.lto_suffix(full, base) == lto and get_func(b.addr) is not None
+                and get_func(b.addr).start_ea == elf.symbols.get(full)
+                and sys.modules["ida_name"].get_name_ea(T.BAD, base) == T.BAD):
+            return b, base, full
+    return None
+
+
+# the plain name exists too (Clang LTO, review s157 M1: gic_smp_init and gic_smp_init.30554): the copy holding the
+# site's offset is tried as well; with the site's own WARNING / kernel BUG line it is found, without one it is found or
+# listed among the copies, never another site
+both = next((b for b in bugs if at_addr[b.addr] == 1 and b.file and m.oops.lto_suffix(ui.fn.get_func_name(b.addr) or "",
+                                                                                    ui.fn.get_func_name(b.addr).split(".")[0])
+             and get_func(b.addr) is not None and get_func(b.addr).start_ea == elf.symbols.get(ui.fn.get_func_name(b.addr))
+             and sys.modules["ida_name"].get_name_ea(T.BAD, ui.fn.get_func_name(b.addr).split(".")[0]) != T.BAD), None)
+if both is not None:
+    f, full = get_func(both.addr), ui.fn.get_func_name(both.addr)
+    at = "%s%s+%#x/%#x%s" % (reg, full.split(".")[0], both.addr - f.start_ea, f.end_ea - f.start_ea, modtag)
+    head = ("WARNING: CPU: 1 PID: 9 at %s:%d %s\n" % (both.file, both.line, at.split(reg, 1)[1]) if both.warn else
+            "kernel BUG at %s:%d!\n" % (both.file, both.line))
+    how = []
+    for text in (head + at, at):  # copies at the same file:line (inlined code) stay candidates also with the line
+        r, new = ask(text)
+        shown = [x for x in new if x[0] == "show"]
+        assert r == 1 and (went(new) == [both.addr] or (not went(new) and shown and both.addr in [
+            row[0] for row in w["shown"].rows] and not [x for x in new if x[0] == "warning"])), new
+        how.append("%d rows" % shown[0][2] if shown else "jump")
+    oops_done.append("%s+off: %s with its own line -> %s, without -> %s" % (full.split(".")[0], full, how[0], how[1]))
+for lto in (True, False):
+    c = cut_site(lto)
+    if c is None:
+        continue
+    b, base, full = c
+    f = get_func(b.addr)
+    r, new = ask("%s%s+%#x/%#x%s" % (reg, base, b.addr - f.start_ea, f.end_ea - f.start_ea, modtag))
+    if lto:
+        assert r == 1 and went(new) == [b.addr] and said(new, "exact: the %s site at %s+%#x" % (
+            "WARN" if b.warn else "BUG", full, b.addr - f.start_ea)) and said(new, "%s in the log is %s in this file"
+                                                                             % (base, full)), new
+        oops_done.append("%s+off -> %s" % (base, full))
+    else:
+        assert r == 0 and not went(new) and said(new, "no function %s in this file" % base), new
+        oops_done.append("%s+off -> not %s (GCC prints that name in full)" % (base, full))
+# file:line only: one site -> go there; several -> the chooser with exactly those rows, Enter jumps
+per_line = collections.Counter((b.file, b.line) for b in bugs if b.file)
+one = next((k for k, n in per_line.items() if n == 1), None)
+if one is not None:
+    warn1 = next(b.warn for b in bugs if (b.file, b.line) == one)
+    r, new = ask(("%s:%d" if warn1 else "kernel BUG at %s:%d!") % one)  # a WARNING line has a function+offset too
+    want = next(b.addr for b in bugs if (b.file, b.line) == one)
+    assert r == 1 and went(new) == [want] and said(new, "one BUG/WARN site at %s:%d" % one), new
+    oops_done.append("%sfile:line (one site) -> 0x%X" % ("" if warn1 else "kernel BUG at ", want))
+    # the same line, but the log names a function this file does not have: listed, not jumped to (review s157 m2)
+    r, new = ask(("WARNING: CPU: 0 PID: 1 at %s:%d kflow_other_fn+0x10/0x20" if warn1 else
+                  "kernel BUG at %s:%d!\n" + reg + "kflow_other_fn+0x10/0x20") % one)
+    assert r == 1 and not went(new) and [x[:2] for x in new if x[0] == "show"] == [
+        ("show", "kflow: BUG/WARN sites at %s:%d" % one)] and [x for x in new if x[0] == "warning"
+                                                               and "kflow_other_fn+0x10 is not in this file" in x[1]], new
+    oops_done.append("the same with a function not in this file -> listed, no jump")
+many = max(per_line, key=per_line.get) if per_line and max(per_line.values()) > 1 else None
+if many is not None:
+    want = sorted(b.addr for b in bugs if (b.file, b.line) == many)
+    r, new = ask("<4>[   12.345678] %s:%d" % many)
+    assert r == 1 and not went(new), new
+    assert [x for x in new if x[0] == "show"] == [("show", "kflow: BUG/WARN sites at %s:%d" % many, len(want))], new
+    assert [row[0] for row in w["shown"].rows] == want and said(new, "ambiguous: %d BUG/WARN sites" % len(want))
+    w["shown"].OnSelectLine(len(want) - 1)
+    assert log[-1] == ("jump", want[-1])
+    oops_done.append("file:line -> %d candidate rows" % len(want))
+if site is not None:  # jumpto() fails (an address outside the database): a warning, not silence
+    jumpto = sys.modules["ida_kernwin"].jumpto
+    sys.modules["ida_kernwin"].jumpto = lambda ea: False
+    r, new = ask("%s+%#x" % (only_function(site)[0], site.addr - only_function(site)[1]))
+    sys.modules["ida_kernwin"].jumpto = jumpto
+    assert r == 0 and [x for x in new if x[0] == "warning" and "could not jump to 0x%X" % site.addr in x[1]], new
+    oops_done.append("jumpto failing -> warned")
+r, new = ask("hello, world")  # nothing usable: a warning, no jump
+assert r == 0 and not went(new) and [x for x in new if x[0] == "warning" and "found no WARNING" in x[1]], new
+r, new = ask("%skflow_no_such_function+0x10/0x20" % reg)  # a function this file does not have
+assert r == 0 and not went(new) and [x for x in new if x[0] == "warning" and "no BUG/WARN site or function" in x[1]]
+assert said(new, "no function kflow_no_such_function in this file"), new
+r, new = ask(None)  # the dialog was cancelled
+assert r == 0 and [x[0] for x in new] == ["ask"], new
+print("OK oops: %s; no match / unknown function warned; cancel does nothing"
+      % ("; ".join(oops_done) or "no site with a function symbol in this file"))
+
 assert m.RemoveAction().activate(None) == 1
 assert not any(c.startswith("kflow") for c in w["cmts"].values())
 # a database that is not a supported kernel: one warning, nothing written
