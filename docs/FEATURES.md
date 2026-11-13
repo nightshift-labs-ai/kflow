@@ -12,7 +12,7 @@ Linux kernels carry their own maps of code that a disassembler cannot see from t
 - **`__jump_table`**: every static-key site (`static_branch_likely/unlikely`, tracepoints): a NOP or branch that the kernel patches at runtime, its **key** and its **branch target**.
 - **`__ex_table`**: every instruction that may fault on purpose (user-memory access, MSR reads...) and its **fixup** landing pad.
 
-kflow reads these tables from the database and, in IDA, comments every site and adds the jump references IDA cannot find on its own (a NOP has no branch, a fault has no visible path to its fixup). It also lists every BUG/WARN site with its function and `file:line`.
+kflow reads these tables from the database and, in IDA, comments every site and adds the jump references IDA cannot find on its own (a NOP has no branch; a faulting instruction often has no visible path to its fixup: on the MemLens demo kernel 322 of 658 fixup sites, the rest are reached by ordinary flow anyway, see [tools/reach_results.md](../tools/reach_results.md)). It also lists every BUG/WARN site with its function and `file:line`.
 
 ## BUG/WARN traps
 
@@ -39,7 +39,7 @@ kflow reads these tables from the database and, in IDA, comments every site and 
 - [**Static-key comments and key references**](USAGE.md#step-by-step): each static-key site (a NOP or branch the kernel patches at runtime) gets its key, its branch target and when it jumps, and a jump reference to the target where IDA has none (a data reference if the target is inside another function); a data reference from each site to its key makes X on a key list its sites.
 - [**Static-key chooser**](USAGE.md#step-by-step): **kflow: List static-key sites** shows every site with its key, `likely`/`unlikely`, `jump` / `no jump` now, the target, the size of the out-of-line block there (Block: `bytes / insns`) and the function; the filter finds every site of one key.
 - [**Exception-table fixups**](#what-kflow-reads): each instruction that may fault on purpose (user-memory access, MSR reads...) gets its fixup and type (or handler), and a jump reference to the fixup (a data reference if it is inside another function).
-- [**What the references add, measured**](../tools/reach_results.md): on the MemLens demo kernel, 96% of the 8,349 static-key NOP sites jump to code that no direct branch targets and no instruction falls into (8,011 out-of-line blocks, 264 KB): kflow's reference is the only one that leads there. The same holds after 90% of the 7,504 WARN traps (1.7 instructions on average up to the next jump or join). Reproduce: `python3 tools/reach.py <kernel>` (x86_64, needs objdump).
+- [**What the references add, measured**](../tools/reach_results.md): on the MemLens demo kernel, 96% of the 8,349 static-key NOP sites jump to code that no direct branch targets and no instruction falls into (8,011 out-of-line blocks, 264 KB): kflow's reference is the only one that leads there. After 90% of the 7,504 WARN traps the code is hidden too (1.7 instructions on average up to the next jump or join); Annotate only comments WARN sites, and only the experimental [WARN fall-through](warnflow.md) reaches that code. Reproduce: `python3 tools/reach.py <kernel>` (x86_64, needs objdump).
 
 ## Hex-Rays decompiler
 
@@ -56,4 +56,4 @@ kflow reads these tables from the database and, in IDA, comments every site and 
 
 - [**Headless runner**](USAGE.md#headless-idalib): `python3 tools/kflow_headless.py <kernel>` annotates (or with `--remove` removes) and saves the database without the IDA window (idalib, IDA 9.0+); `--json` exports every site with IDA's function names.
 - [**Command-line decoder, no IDA needed**](OUTPUT.md#what-you-get-real-output-not-ida-screenshots): `python3 -m kflow <kernel ELF>` needs only Python 3.8+ and no packages; `--list warn`, `bug`, `jump` or `ex` lists the sites; `--oops <log>` finds the site a kernel log names.
-- [**One-command tests**](VERIFICATION.md#what-was-verified): `sh tests/run_all.sh` runs every test in about two seconds on a pinned Debian arm64 `ext4.ko` (sha256 checked) or on your own files.
+- [**One-command tests**](VERIFICATION.md#what-was-verified): `sh tests/run_all.sh` runs every test in about two seconds on a pinned Debian arm64 `ext4.ko` (sha256 checked) or on your own files (about a minute on a whole vmlinux).

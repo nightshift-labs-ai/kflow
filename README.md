@@ -28,7 +28,7 @@ One line per feature; each one in full: [docs/FEATURES.md](docs/FEATURES.md).
 - [**Static-key comments and key references**](docs/FEATURES.md#static-keys-and-exception-table-fixups): each runtime-patched NOP or branch gets its key, its branch target and when it jumps, a reference to the target where IDA has none, and a data reference to its key (X on a key lists its sites).
 - [**Static-key chooser**](docs/FEATURES.md#static-keys-and-exception-table-fixups): **kflow: List static-key sites** shows every site with its key, `jump` / `no jump` now, the target, the size of the out-of-line block there (`bytes / insns`) and the function; the filter finds every site of one key.
 - [**Exception-table fixups**](docs/FEATURES.md#static-keys-and-exception-table-fixups): each instruction that may fault on purpose gets its fixup and type (or handler), and a reference to the fixup.
-- [**What the references add, measured**](tools/reach_results.md): on the MemLens demo kernel, 96% of the 8,349 static-key NOP sites jump to code that no direct branch targets and no instruction falls into; the same holds after 90% of the 7,504 WARN traps.
+- [**What the references add, measured**](tools/reach_results.md): on the MemLens demo kernel, 96% of the 8,349 static-key NOP sites jump to code that no direct branch targets and no instruction falls into. After 90% of the 7,504 WARN traps the code is hidden too; only the experimental [WARN fall-through](docs/warnflow.md) reaches it (Annotate comments WARN sites but adds no reference there).
 - [**Hex-Rays pseudocode comments**](docs/USAGE.md#hex-rays-pseudocode-comments): a `// kflow: ...` comment at the end of the site's pseudocode line (display text only); at a static-key site whose skipped code nothing else in the database reaches, it adds that this pseudocode probably does not show that code.
 - [**Decompile check**](docs/USAGE.md#hex-rays-pseudocode-comments): with the decompiler, Annotate decompiles up to 20 functions that get a new static-key jump reference, before and after, and names any that stopped decompiling.
 - [**Kernel modules**](docs/modules.md) (`.ko`, `.ko.xz`, `.ko.gz`): the command line applies the module's relocations; IDA relocates a `.ko` itself.
@@ -36,7 +36,7 @@ One line per feature; each one in full: [docs/FEATURES.md](docs/FEATURES.md).
 - [**WARN fall-through**](docs/warnflow.md) (experimental, off by default, x86_64 only): ordinary flow after exactly the WARN `ud2` traps the kernel's `__bug_table` lists, so that IDA can reach the code after them.
 - [**Headless runner**](docs/USAGE.md#headless-idalib): `python3 tools/kflow_headless.py <kernel>` annotates and saves the database without the IDA window (idalib, IDA 9.0+); `--json` exports every site.
 - [**Command-line decoder, no IDA needed**](docs/OUTPUT.md): `python3 -m kflow <kernel ELF>` needs only Python 3.8+ and no packages.
-- [**One-command tests**](docs/VERIFICATION.md#what-was-verified): `sh tests/run_all.sh` runs every test in about two seconds on a pinned Debian arm64 `ext4.ko` (sha256 checked) or on your own files.
+- [**One-command tests**](docs/VERIFICATION.md#what-was-verified): `sh tests/run_all.sh` runs every test in about two seconds on a pinned Debian arm64 `ext4.ko` (sha256 checked) or on your own files (about a minute on a whole vmlinux).
 
 ## Install
 

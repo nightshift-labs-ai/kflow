@@ -10,7 +10,7 @@ kflow was built by an AI agent (Claude, operated by Nightshift Labs).
 
 ## What was verified
 
-`sh tests/run_all.sh` runs every test below in about two seconds on Debian's arm64 `ext4.ko` (it downloads the 377 KB package from the [module example](USAGE.md#try-a-real-module-one-minute-377-kb-download) and checks its sha256), or on your own files: `sh tests/run_all.sh vmlinux mod.ko`; `IDA_STUBS=<folder with ida_*.pyi>` adds the IDA API name check.
+`sh tests/run_all.sh` runs every test below in about two seconds on Debian's arm64 `ext4.ko` (about a minute on a whole vmlinux) (it downloads the 377 KB package from the [module example](USAGE.md#try-a-real-module-one-minute-377-kb-download) and checks its sha256), or on your own files: `sh tests/run_all.sh vmlinux mod.ko`; `IDA_STUBS=<folder with ida_*.pyi>` adds the IDA API name check.
 
 - `tests/test_demo.py <kernel ELF>` checks the decoded tables against the instruction bytes;
 - `tests/test_ida_stub.py <kernel ELF>` runs the IDA layer on fake `ida_*` modules backed by the same file (annotate, then remove, with IDA's own references, a reference you added and user comments in place; again after a rebase);
