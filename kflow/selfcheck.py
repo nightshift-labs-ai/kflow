@@ -84,7 +84,14 @@ def try_decompile(ea):
             return True, None
     except ida_hexrays.DecompilationFailure:
         pass
-    return False, failure_reason(hf)
+    why = failure_reason(hf)
+    if why is None:
+        try:  # re-review s175 NIT 6: decompile() also gives None when IDA's analysis removed the function
+            if ida_funcs.get_func(ea) is None:
+                why = "no function at this address any more"
+        except Exception:  # noqa: BLE001  (the check must never stop Annotate)
+            pass
+    return False, why
 
 
 def failure_reason(hf):

@@ -829,3 +829,27 @@ class _FilledHF(_UnfilledHF):
 assert sc.failure_reason(_UnfilledHF()) is None, sc.failure_reason(_UnfilledHF())
 assert sc.failure_reason(_FilledHF()) == "bad thing"
 print("OK decompile check reason: none from an unfilled hexrays_failure_t")
+
+
+# re-review s175 claims NIT 6: decompile() also gives None when IDA's analysis removed the function; the line then says
+# so instead of giving no reason
+_fake_hx = types.ModuleType("ida_hexrays")
+_fake_hx.hexrays_failure_t = _UnfilledHF
+_fake_hx.DECOMP_NO_WAIT = 1
+_fake_hx.DecompilationFailure = type("DecompilationFailure", (Exception,), {})
+_fake_hx.decompile = lambda ea, hf=None, flags=0: None
+_fake_hx.mark_cfunc_dirty = lambda ea, close_views=False: False
+_saved_hx, _real_get_func = sys.modules.get("ida_hexrays"), sc.ida_funcs.get_func
+sys.modules["ida_hexrays"] = _fake_hx
+try:
+    sc.ida_funcs.get_func = lambda ea: None
+    assert sc.try_decompile(0x1234) == (False, "no function at this address any more"), sc.try_decompile(0x1234)
+    sc.ida_funcs.get_func = lambda ea: object()  # the function is there: no reason invented
+    assert sc.try_decompile(0x1234) == (False, None), sc.try_decompile(0x1234)
+finally:
+    sc.ida_funcs.get_func = _real_get_func
+    if _saved_hx is None:
+        sys.modules.pop("ida_hexrays", None)
+    else:
+        sys.modules["ida_hexrays"] = _saved_hx
+print("OK decompile check reason: 'no function at this address any more' when IDA removed it")
