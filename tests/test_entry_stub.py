@@ -7,6 +7,7 @@ import collections
 import dataclasses
 import importlib
 import os
+import re
 import sys
 import types
 
@@ -37,6 +38,31 @@ assert p.init() == 1 and [x[1] for x in log if x[0] == "reg"] == ACTION_NAMES
 assert m.STATE["hx"] is None
 assert m.AnnotateAction().activate(None) == 1
 assert [x for x in log if x[0] == "msg" and "jump references added: " in x[1] and "static-key site -> key references: " in x[1]], "Annotate reports its counts"
+HEADLINE = re.compile(r"^kflow: (\d+) of (\d+) static-key jump references lead to code nothing else in this database "
+                      r"reaches\n")
+
+
+def summary(new):
+    """judge s180 first-run #2: Annotate ends with one summary window (ask_buttons; Close, the third button, is the
+    default and Esc): the headline (when the database has NOP-state static-key sites), the counts the Output window
+    has, then where the details are. Returns (text, (N, M) or None)."""
+    got = [x for x in new if x[0] == "buttons"]
+    assert len(got) == 1, ("one summary window per Annotate", got)
+    text, yes, no, cancel, deflt = got[0][1:]
+    assert (yes, no, cancel, deflt) == ("Static-key sites", "BUG/WARN sites", "Close", -1), got[0]
+    counts = [x[1] for x in new if x[0] == "msg" and "jump references added: " in x[1]]
+    assert counts and counts[-1][len("[kflow] "):].strip() in text, (counts[-1:], text)
+    assert text.rstrip().endswith("Details: Output window"), text
+    h = HEADLINE.match(text)
+    if h:
+        assert int(h.group(1)) <= int(h.group(2)) <= len(m.STATE["tables"]["jump"]), h.group(0)
+    return text, h and (int(h.group(1)), int(h.group(2)))
+
+
+first_text, first_nm = summary(log)
+nop_state = [j for j in m.STATE["tables"]["jump"] if m.idalayer.is_insn(j.code) and not m.idalayer.branches_to(
+    j.code, j.target, m.idalayer.current_arch())]
+assert (first_nm is not None) == bool(nop_state), (first_nm, len(nop_state))
 assert not [x for x in log if x[0] == "msg" and "auto-analysis is still running" in x[1]]
 # Annotate while auto-analysis still runs (no instructions, no functions yet): it works, adds no reference from a site
 # that is not an instruction yet, and says to run it again afterwards
@@ -44,6 +70,7 @@ w["auto_ok"], w["code"] = False, set()
 before = (dict(w["xrefs"]), dict(w["drefs"]))
 assert m.AnnotateAction().activate(None) == 1
 assert [x for x in log if x[0] == "msg" and "auto-analysis is still running" in x[1]]
+assert len([x for x in log if x[0] == "buttons"]) <= 2, "at most one summary window per Annotate"
 # the count names static-key / exception-table sites only (BUG/WARN sites get comments, no references): a module with
 # neither table (Debian arm64 vfat.ko: 5 BUG/WARN sites) has nothing to count and no such line
 refd = bool(m.STATE["tables"].get("jump") or m.STATE["tables"].get("ex"))
@@ -103,6 +130,19 @@ if jumps:
         print("  static-key list on the packed module: %d rows, every key named as on the command line" % len(rows))
 else:
     assert keys == 0
+# the summary window's buttons: 'Static-key sites' (1) opens the static-key list, 'BUG/WARN sites' (0) the BUG/WARN
+# list, 'Close' / Esc (-1) nothing
+for answer, title in ((1, "kflow: static-key sites"), (0, "kflow: BUG/WARN sites"), (-1, None)):
+    w["ask_buttons"], n = answer, len(log)
+    assert m.AnnotateAction().activate(None) == 1
+    summary(log[n:])
+    want = [] if title is None or (answer == 1 and not jumps) else [title]
+    assert [x[1] for x in log[n:] if x[0] == "show"] == want, (answer, [x for x in log[n:] if x[0] == "show"])
+    if want and answer == 1:
+        assert [x for x in log[n:] if x[0] == "show"][0][2] == len(jumps)
+w.pop("ask_buttons")
+print("OK summary window: one per Annotate, buttons open the static-key / BUG/WARN lists, Close opens nothing; %s"
+      % ("headline %d of %d" % first_nm if first_nm else "no headline (no NOP-state static-key site)"))
 
 
 # ---- Go to oops/WARN line: pasted kernel log text -> the BUG/WARN site (ask_text answers w["ask_text"]) ----
@@ -472,7 +512,7 @@ def nop_len(ea):
     return next((n for raw, n in NOPS.items() if elf.read(ea, len(raw)) == raw), None)
 
 
-def hidden_expected(j):
+def hidden_expected(j, refs=None):
     """The hidden-path sentence for j's pseudocode text, worked out from the fake database itself by the code's rule
     (the cases one by one: test_ida_stub.hidden_path). The other path is the target of a site that is not a jump there
     now (NOP state), the next instruction of a site that is; none when that jump is to the next instruction itself
@@ -488,7 +528,8 @@ def hidden_expected(j):
 
     def kflows(f):  # a reference kflow recorded, from a source that is not a jump to dst now (review s177 m1)
         return rec.get((f - base) & il.MASK) == (dst - base) & il.MASK and not il.branches_to(f, dst, arch)
-    if any(to == dst and (jmp or f != j.code) and not kflows(f) for f, to in w["xrefs"]):
+    if any(to == dst and (jmp or f != j.code) and not kflows(f) for f, to in (w["xrefs"] if refs is None else
+                                                                               refs.get(dst, ()))):
         return ""
     return T.HIDDEN_JMP % (dst, "on" if j.branch else "off") if jmp else T.HIDDEN_NOP % dst
 
@@ -507,7 +548,17 @@ assert samples and (nop is not None or not t["jump"] or not elf.funcs), "no NOP 
 
 # before Annotate: the hook is there, the lines are untouched
 assert set(decompile(sample_eas).values()) == {""}
+n_log = len(log)
 assert m.AnnotateAction().activate(None) == 1 and hx_log["flushed"] == 1 and msgs("pseudocode comments on")
+# the summary window's headline N of M: N is the oracle's count of NOP-state sites with a hidden target
+_, nm = summary(log[n_log:])
+by_dst = collections.defaultdict(list)
+for f, to in w["xrefs"]:
+    by_dst[to].append((f, to))
+nop_sites = [j for j in t["jump"] if il.in_text(j.code) and not il.branches_to(j.code, j.target, arch)]
+want_n = sum(bool(hidden_expected(j, by_dst)) for j in nop_sites)
+assert (nm is not None) == bool(nop_sites) and (nm is None or nm[0] == want_n), (nm, want_n, len(nop_sites))
+print("OK summary headline: %s of %d NOP-state sites (oracle)" % (nm and nm[0], len(nop_sites)))
 shown_texts = []
 if bug is not None:
     got = decompile([bug.addr], extra=("lost", "far"))[bug.addr]
@@ -849,7 +900,10 @@ def check_lines(remove=True):
     assert m.AnnotateAction().activate(None) == 1 and il.annotated()
     new = [x[1] for x in log[n:] if x[0] == "msg"]
     assert [x for x in new if "jump references added: " in x], new
-    return [x for x in new if "decompile check" in x]
+    lines = [x for x in new if "decompile check" in x]
+    text = summary(log[n:])[0]
+    assert all(x[len("[kflow] "):].strip() in text for x in lines), ("decompile check line not in the window", lines, text)
+    return lines
 
 
 got = check_lines()

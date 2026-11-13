@@ -26,6 +26,10 @@ auto_ok = [True]  # IDA's auto-analysis state after open_database (review s159 N
 sys.modules["ida_auto"] = types.ModuleType("ida_auto")
 sys.modules["ida_auto"].auto_is_ok = lambda: auto_ok[0]
 sys.modules["ida_auto"].auto_wait = lambda: calls.append(("auto_wait",))
+dialogs = []  # judge s180 first-run #2: the summary window is the menu action's; the headless runner shows none
+if "ida_kernwin" not in sys.modules:
+    sys.modules["ida_kernwin"] = types.ModuleType("ida_kernwin")
+sys.modules["ida_kernwin"].ask_buttons = lambda *a: dialogs.append(a) or -1
 import kflow_headless as H  # noqa: E402
 from kflow import idalayer as IL  # noqa: E402
 seen_done, _annotate_text = [], IL.annotate_text
@@ -122,4 +126,5 @@ with contextlib.redirect_stdout(io.StringIO()):
 sys.modules["ida_hexrays"] = None
 w.pop("func_of")
 print("OK headless decompile check: %s" % first_line)
+assert not dialogs, dialogs
 print("OK headless: annotate + remove, database saved both times")

@@ -285,7 +285,8 @@ def install(w, names=True):
 def install_ui(w, log):
     """Fake ida_kernwin, ida_funcs (get_func from the ELF's function symbols), ida_lines and ida_idaapi.plugin_t, to
     load kflow_entry.py (the IDA plugin). Messages, warnings, info boxes, wait boxes, jumps, registered actions,
-    text dialogs and choosers shown go to log; ask_text answers w["ask_text"] (None: cancelled). Returns the modules
+    text dialogs, button dialogs and choosers shown go to log; ask_text answers w["ask_text"] (None: cancelled),
+    ask_buttons w["ask_buttons"] (default -1: the third button / Esc). Returns the modules
     and get_func."""
     elf = w["elf"]
     kw = types.ModuleType("ida_kernwin")
@@ -297,6 +298,8 @@ def install_ui(w, log):
     kw.replace_wait_box = lambda text: log.append(("wait_replace", text))
     kw.jumpto = lambda ea: log.append(("jump", ea)) or True
     kw.ask_text = lambda max_size, defval, prompt: log.append(("ask", max_size, defval, prompt)) or w.get("ask_text")
+    kw.ask_buttons = lambda yes, no, cancel, deflt, text: log.append(("buttons", text, yes, no, cancel, deflt)) or w.get(
+        "ask_buttons", -1)  # 1 / 0 / -1 (Esc): the first / second / third button; w["ask_buttons"] answers (Close)
     kw.AST_ENABLE_ALWAYS, kw.SETMENU_APP = 1, 0
     kw.register_action = lambda desc: log.append(("reg", desc.name)) or True
     kw.unregister_action = lambda name: log.append(("unreg", name)) or True
