@@ -2,7 +2,7 @@
 
 Taken from the GitHub release notes. Newest first.
 
-## Unreleased
+## v0.0.5 (2026-11-16)
 
 - `tools/reach.py` measures what kflow's references add (results in `tools/reach_results.md`, rules checked by `tests/test_reach.py`): on the MemLens demo kernel, 96% of the 8,349 static-key NOP sites jump to code that no direct branch targets and no instruction falls into (8,011 out-of-line blocks, 264 KB), so kflow's reference is the only one that leads there; the same holds after 90% of the 7,504 WARN traps (1.7 instructions on average up to the next jump or join). x86_64, needs objdump; about 15 s per kernel.
 - `--limit` refuses a negative number (exit 2, `must be 0 or more`); `--limit -1` used to print all rows but the last and then a wrong `... N more` count.
