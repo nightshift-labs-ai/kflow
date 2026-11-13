@@ -59,6 +59,8 @@ def install(w, names=True):
     m["ida_funcs"].get_func = lambda ea: (lambda r: types.SimpleNamespace(start_ea=r[0], end_ea=r[1]) if r else None)(
         w["func_of"](ea) if "func_of" in w and w.get("auto_ok", True) else None)
     m["ida_funcs"].func_contains = lambda f, ea: f.start_ea <= ea < f.end_ea or ea in w.get("shared", {}).get(f.start_ea, ())
+    # every fragment (SDK: 'takes into account all fragments'); w["tail_bytes"] adds tail chunks (re-review s175 MINOR 3)
+    m["ida_funcs"].calc_func_size = lambda f: (f.end_ea - f.start_ea) + w.get("tail_bytes", {}).get(f.start_ea, 0)
     m["ida_funcs"].get_func_name = lambda ea: w.get("func_names", {}).get(ea, "")
     m["ida_idaapi"].BADADDR = BAD
 
@@ -290,6 +292,8 @@ def install_ui(w, log):
         return types.SimpleNamespace(start_ea=elf.funcs[i][0], end_ea=elf.funcs[i][1])
 
     fn.get_func, fn.get_next_fchunk = get_func, get_next_fchunk
+    # every fragment of the function (SDK: 'takes into account all fragments'); w["tail_bytes"] adds tail chunks
+    fn.calc_func_size = lambda f: (f.end_ea - f.start_ea) + w.get("tail_bytes", {}).get(f.start_ea, 0)
     fn.func_contains = lambda f, ea: f.start_ea <= ea < f.end_ea
     lines_mod = types.ModuleType("ida_lines")
     lines_mod.SCOLOR_AUTOCMT = "\x04"

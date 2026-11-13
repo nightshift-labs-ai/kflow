@@ -53,7 +53,8 @@ def pick_functions(t, arch, limit=MAX_FUNCS):
         if not gets_jump_ref(j, arch):
             continue
         f = ida_funcs.get_func(j.code)
-        if f is None or f.start_ea in seen or f.end_ea - f.start_ea > MAX_FUNC_BYTES:
+        # re-review s175 code MINOR 3: calc_func_size counts the tails too (get_func gives the entry chunk only)
+        if f is None or f.start_ea in seen or ida_funcs.calc_func_size(f) > MAX_FUNC_BYTES:
             continue
         seen.add(f.start_ea)
         (nop if is_nop(j.code, arch) else other).append(f.start_ea)

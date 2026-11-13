@@ -610,6 +610,12 @@ t = il.scan()
 picked = sc.pick_functions(t, arch)
 assert len(picked) <= sc.MAX_FUNCS and len(set(picked)) == len(picked)
 assert all(get_func(ea) is not None and get_func(ea).start_ea == ea for ea in picked)
+# re-review s175 code MINOR 3: the 16 KB cap counts every chunk of the function (calc_func_size), not the entry chunk
+if picked:
+    tailed = picked[0]
+    w.setdefault("tail_bytes", {})[tailed] = sc.MAX_FUNC_BYTES
+    assert tailed not in sc.pick_functions(t, arch), "tails make it larger than 16 KB: not picked"
+    del w["tail_bytes"][tailed]
 # claims review s174 F4: the documented choice = the full list ordered NOP-site functions first (by each function's
 # first qualifying site), then spread evenly when longer than MAX_FUNCS
 allf = sc.pick_functions(t, arch, limit=10 ** 9)
