@@ -141,6 +141,13 @@ for answer, title in ((1, "kflow: static-key sites"), (0, "kflow: BUG/WARN sites
     if want and answer == 1:
         assert [x for x in log[n:] if x[0] == "show"][0][2] == len(jumps)
 w.pop("ask_buttons")
+# the window never gets in the way: when it fails, Annotate still succeeds and one Output line says so
+real_buttons, n = sys.modules["ida_kernwin"].ask_buttons, len(log)
+sys.modules["ida_kernwin"].ask_buttons = lambda *a: 1 // 0
+assert m.AnnotateAction().activate(None) == 1
+assert len([x for x in log[n:] if x[0] == "msg" and "summary window not shown" in x[1]]) == 1, log[n:]
+assert not [x for x in log[n:] if x[0] in ("warning", "show", "buttons")], log[n:]
+sys.modules["ida_kernwin"].ask_buttons = real_buttons
 print("OK summary window: one per Annotate, buttons open the static-key / BUG/WARN lists, Close opens nothing; %s"
       % ("headline %d of %d" % first_nm if first_nm else "no headline (no NOP-state static-key site)"))
 
