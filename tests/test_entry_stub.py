@@ -638,6 +638,8 @@ if picked:
     assert got == ["[kflow] decompile check: %d functions with static-key sites decompile before and after Annotate\n"
                    % len(picked)], got
     assert sorted(dc["calls"][-2 * len(picked):]) == sorted(picked * 2), "each picked function decompiled twice"
+    # review s174 api MINOR 5: no Hex-Rays wait box of its own (a user Cancel there would read as a kflow failure)
+    assert dc["flags"] and all(f & 1 for f in dc["flags"][-2 * len(picked):]), dc["flags"][-3:]
     # review s174 api MAJOR 1: IDA's auto-analysis runs after Annotate and before the AFTER pass
     assert T.AUTO_WAITS and T.AUTO_WAITS[-1] == len(dc["calls"]) - len(picked), (T.AUTO_WAITS[-3:], len(dc["calls"]))
     # fails after Annotate: blamed by name; the AFTER decompile is not the cached BEFORE result

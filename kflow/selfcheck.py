@@ -68,7 +68,9 @@ def decompiles(ea):
     import ida_hexrays
     ida_hexrays.mark_cfunc_dirty(ea)
     try:
-        return ida_hexrays.decompile(ea) is not None
+        # review s174 api MINOR 5: DECOMP_NO_WAIT = no Hex-Rays wait box of its own, so no user Cancel there that would be
+        # read as a kflow failure; hf None keeps the documented failure path (None, or DecompilationFailure)
+        return ida_hexrays.decompile(ea, None, ida_hexrays.DECOMP_NO_WAIT) is not None
     except ida_hexrays.DecompilationFailure:
         return False
 

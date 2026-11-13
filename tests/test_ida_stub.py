@@ -327,6 +327,7 @@ def add_decompiler(hx, annotated):
 
     def decompile(ea, hf=None, flags=0):
         state["calls"].append(ea)
+        state.setdefault("flags", []).append(flags)
         if state["crash"] and (not state.get("crash_after_only") or annotated()):
             raise RuntimeError(state["crash"])
         if ea not in state["cache"]:
@@ -347,6 +348,7 @@ def add_decompiler(hx, annotated):
         if flush is not None:
             flush()
     hx.DecompilationFailure = DecompilationFailure
+    hx.DECOMP_NO_WAIT = 1  # as in the 9.1 and 9.5 stubs
     hx.decompile = decompile
     hx.mark_cfunc_dirty = mark_cfunc_dirty
     hx.clear_cached_cfuncs = clear_cached_cfuncs
