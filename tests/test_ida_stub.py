@@ -327,7 +327,7 @@ def add_decompiler(hx, annotated):
 
     def decompile(ea, hf=None, flags=0):
         state["calls"].append(ea)
-        if state["crash"]:
+        if state["crash"] and (not state.get("crash_after_only") or annotated()):
             raise RuntimeError(state["crash"])
         if ea not in state["cache"]:
             state["cache"][ea] = not (ea in state["always"] or (ea in state["after"] and annotated()))

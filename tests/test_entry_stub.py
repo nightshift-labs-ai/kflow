@@ -683,6 +683,20 @@ if picked:
     got = check_lines()
     dc["crash"] = None
     assert got == ["[kflow] decompile check skipped: fake decompiler crash\n"], got
+    # review s174 claims F2: an error inside the AFTER pass, and one from IDA's auto_wait(), also give one 'skipped' line
+    dc["crash"], dc["crash_after_only"] = "fake crash after Annotate", True
+    got = check_lines()
+    dc["crash"], dc["crash_after_only"] = None, False
+    assert got == ["[kflow] decompile check skipped: fake crash after Annotate\n"], got
+    real_wait = sys.modules["ida_auto"].auto_wait
+
+    def bad_wait():
+        raise RuntimeError("fake auto_wait failure")
+    sys.modules["ida_auto"].auto_wait = bad_wait
+    got = check_lines()
+    sys.modules["ida_auto"].auto_wait = real_wait
+    assert got == ["[kflow] decompile check skipped: fake auto_wait failure\n"], got
+    assert any(c.startswith("kflow: ") for c in w["cmts"].values()) and any(w["xrefs"].values())
     assert any(c.startswith("kflow: ") for c in w["cmts"].values()) and any(w["xrefs"].values())
 else:
     assert got == ["[kflow] decompile check: no function has a static-key site that gets a new jump reference\n"], got
