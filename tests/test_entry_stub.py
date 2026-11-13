@@ -610,6 +610,15 @@ t = il.scan()
 picked = sc.pick_functions(t, arch)
 assert len(picked) <= sc.MAX_FUNCS and len(set(picked)) == len(picked)
 assert all(get_func(ea) is not None and get_func(ea).start_ea == ea for ea in picked)
+# review s174 api MINOR 4: very large functions are not picked (one huge decompile could blow the time budget)
+if picked:
+    big = max(picked, key=lambda ea: get_func(ea).end_ea - get_func(ea).start_ea)
+    real_max = getattr(sc, "MAX_FUNC_BYTES", None)
+    sc.MAX_FUNC_BYTES = get_func(big).end_ea - get_func(big).start_ea - 1
+    small = sc.pick_functions(t, arch)
+    sc.MAX_FUNC_BYTES = real_max
+    assert big not in small and all(get_func(ea).end_ea - get_func(ea).start_ea <= get_func(big).end_ea - get_func(big).start_ea - 1
+                                    for ea in small), (hex(big), len(small))
 
 
 def check_lines(remove=True):

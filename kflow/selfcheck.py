@@ -14,6 +14,7 @@ from . import idalayer
 
 MAX_FUNCS = 20       # functions decompiled before and after Annotate
 TIME_LIMIT = 10.0    # seconds of decompiling in all; half of it for the BEFORE pass
+MAX_FUNC_BYTES = 0x4000  # review s174 api MINOR 4: larger functions are not picked (one decompile could take tens of s)
 clock = time.monotonic
 
 
@@ -51,7 +52,7 @@ def pick_functions(t, arch, limit=MAX_FUNCS):
         if not gets_jump_ref(j, arch):
             continue
         f = ida_funcs.get_func(j.code)
-        if f is None or f.start_ea in seen:
+        if f is None or f.start_ea in seen or f.end_ea - f.start_ea > MAX_FUNC_BYTES:
             continue
         seen.add(f.start_ea)
         (nop if is_nop(j.code, arch) else other).append(f.start_ea)
