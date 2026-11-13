@@ -275,7 +275,7 @@ def install(w, names=True):
         return size
     ua.insn_t, ua.decode_insn = insn_t, decode_insn
     idp.CF_STOP = CF_STOP
-    idp.has_insn_feature = lambda icode, bit: bool(bit & CF_STOP) and (icode in (NN_JMP, NN_RETN, NN_UD2) or (
+    idp.has_insn_feature = lambda icode, bit: bool(bit & CF_STOP) and (w.get("stop_everything") or icode in (NN_JMP, NN_RETN, NN_UD2) or (
         icode == ARM_B and w.get("arm_b_stop", True)) or (icode == ARM_RET and w.get("arm_ret_stop", True)))
     sys.modules.update(m)
     sys.modules.pop("kflow.idalayer", None)
@@ -972,6 +972,9 @@ def target_blocks(path):
         assert block(b"\xcc" + mov)[0] == (0, 0, False)
         assert block(mov + b"\x0f\x05" + jmp) == (None, "?"), "an instruction the fake cannot decode (syscall)"
         assert block(b"\x0f\x05")[1] == "?"
+        w["insns"] = {a: (4, NN_MOV)}  # the bytes of an arm64 ret decide nothing on x86_64 (s179 NIT 4)
+        assert block(b"\xc0\x03\x5f\xd6" + mov + jmp)[0] == (12, 3, False)
+        del w["insns"]
         kinds = "jmp, ret, ud2 end it (an int3 just before it)"
     else:
         nop, bcond, b, brk, ret = (x.to_bytes(4, "little") for x in (0xD503201F, 0x54000040, 0x14000002, 0xD4210000,
@@ -986,15 +989,22 @@ def target_blocks(path):
         w["arm_ret_stop"] = False  # if IDA's ARM module did not mark ret as CF_STOP: the bytes still end the block
         assert block(nop + ret + nop)[0] == (8, 2, False), "ret ended the block only because the fake marks it CF_STOP"
         w["arm_ret_stop"] = True
-        # br x16, eret, retaa, retab, eretaa, eretab: decided by their bytes, whatever IDA marks (review s178 MINOR 2)
-        for word in (0xD61F0200, 0xD69F03E0, 0xD65F0BFF, 0xD65F0FFF, 0xD69F0BFF, 0xD69F0FFF):
+        # ret x1, br x16, br x10, eret, retaa, retab, eretaa, eretab, braa x16, x17, brab x3, sp, braaz x16, brabz x9:
+        # decided by their bytes, whatever IDA marks (review s178 MINOR 2, s179 NITs 1-2; words from clang)
+        for word in (0xD65F0020, 0xD61F0200, 0xD61F0140, 0xD69F03E0, 0xD65F0BFF, 0xD65F0FFF, 0xD69F0BFF, 0xD69F0FFF,
+                     0xD71F0A11, 0xD71F0C7F, 0xD61F0A1F, 0xD61F0D3F):
             assert block(nop + word.to_bytes(4, "little") + nop)[0] == (8, 2, False), "%08x did not end the block" % word
-        blr = (0xD63F0200).to_bytes(4, "little")  # blr x16 returns to the next instruction: not an end
-        assert block(nop + blr + ret)[0] == (12, 3, False)
+        # blr x16, blr x3, blraa x16, x17, blrab x1, x2, blraaz x16, blrabz x9 return to the next instruction: never an
+        # end, even if IDA marked them CF_STOP (the fake marks everything here)
+        w["stop_everything"] = True
+        for word in (0xD63F0200, 0xD63F0060, 0xD73F0A11, 0xD73F0C22, 0xD63F0A1F, 0xD63F0D3F):
+            assert block(word.to_bytes(4, "little") + ret)[0] == (8, 2, False), "%08x ended the block" % word
+        del w["stop_everything"]
+        assert block(nop + (0xD63F0200).to_bytes(4, "little") + ret)[0] == (12, 3, False)
         w["insns"] = {a + 4: (0, 0)}
         assert block(nop + nop + ret) == (None, "?")
         del w["insns"]
-        kinds = "B, brk, ret, br, eret end it (B.cond, blr do not)"
+        kinds = "B, brk, ret, br, eret (also their pointer-authentication forms) end it (B.cond, blr do not)"
     full = (len(seq), 3, False)
     # a join: IDA's jump reference from elsewhere to the second instruction ends the block before it
     w["xrefs"][(other, starts[1])] = False
