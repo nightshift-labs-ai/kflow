@@ -339,6 +339,14 @@ class Versions(unittest.TestCase):
         newest = next(h for h in heads if h != "Unreleased")
         self.assertEqual(manifest, code)
         self.assertEqual(newest, "v" + manifest)
+        # every release zip URL in README.md and docs/ installs this version (a stale URL installs an old kflow)
+        urls = []
+        for name in ["README.md"] + [os.path.join("docs", n) for n in sorted(os.listdir(os.path.join(root, "docs")))]:
+            if name.endswith(".md"):
+                with open(os.path.join(root, name), encoding="utf-8") as fh:
+                    urls += [(name, tag) for tag in re.findall(r"kflow/archive/refs/tags/(v[^/\s`)]+)\.zip", fh.read())]
+        self.assertTrue(urls, "no release zip URL found")
+        self.assertEqual([u for u in urls if u[1] != "v" + manifest], [])
 
 class CliArgs(unittest.TestCase):
     def test_limit_zero_is_allowed(self):
