@@ -12,6 +12,12 @@ ffffffff8e391de7  xchg %ax,%ax   ; kflow: static key randomize_kstack_offset (st
 ffffffff8e200029  wrmsr          ; kflow: may fault -> fixup at 0xFFFFFFFF8E20002B (WRMSR)
 ```
 
+With the Hex-Rays decompiler, the static-key site's pseudocode line ends with this comment (same fake-IDA test, `tests/test_entry_stub.py` on the demo kernel):
+
+```
+// kflow: static key randomize_kstack_offset (likely): jumps to 0xFFFFFFFF8E391DFC when the key is off; nothing else in the database jumps or falls through to 0xFFFFFFFF8E391DFC, so this pseudocode probably does not show that code
+```
+
 ## Status
 
 **kflow has not yet been run inside real IDA.** It was built without access to an IDA installation. The table decoders are checked on seven real kernels and five kernel modules; the IDA layer has only been exercised with fake `ida_*` modules ([details](docs/VERIFICATION.md#status-read-this-first)). Bug reports are very welcome.
