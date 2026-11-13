@@ -45,7 +45,7 @@ def gets_jump_ref(j, arch):
 
 def pick_functions(t, arch, limit=MAX_FUNCS):
     """Start addresses of up to `limit` functions with a static-key site that gets a new jump reference: functions
-    spread evenly over the table (same choice every run; the list is ordered NOP-site functions first before spreading,
+    spread evenly over the qualifying functions (same choice every run; the list is ordered NOP-site functions first before spreading,
     so NOP sites are not preferred once there are more than `limit`)."""
     nop, other = [], []
     seen = set()
