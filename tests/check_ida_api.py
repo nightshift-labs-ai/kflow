@@ -42,7 +42,8 @@ for f in FILES:
                 print("MISSING", ".".join(d))
                 missing += 1
 # members used on objects (xrefblk_t iteration, segment_t fields)
-MEMBERS = [("ida_xref", "xrefblk_t", m) for m in ("first_from", "next_from", "to", "iscode", "user")] + \
+MEMBERS = [("ida_xref", "xrefblk_t", m) for m in ("first_from", "next_from", "to", "iscode", "user", "first_to", "next_to",
+                                                  "frm")] + \
     [("ida_segment", "segment_t", m) for m in ("start_ea", "end_ea", "perm", "type")] + \
     [("ida_netnode", "netnode", m) for m in ("altset", "altval", "altfirst", "altnext", "index", "kill")] + \
     [("ida_kernwin", "Choose", m) for m in ("Show", "CHCOL_HEX", "NOTHING_CHANGED")] + \
