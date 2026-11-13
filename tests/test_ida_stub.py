@@ -32,6 +32,14 @@ SEG_XTRN = 1
 FF_CODE, MS_CLS = 0x600, 0x600  # ida_bytes.pyi values
 FF_FLOW = 0x10000  # bytes.hpp: "Exec flow from prev instruction"
 X86_LEN = [(b"\xe9", 5), (b"\xeb", 2), (b"\x0f\x1f\x44\x00\x00", 5), (b"\x66\x90", 2), (b"\x0f\x0b", 2), (b"\xe8", 5)]
+# ida_ua.decode_insn: the instructions the fake decodes (ida_allins.pyi codes) and which of them the fake processor
+# modules mark CF_STOP (ida_idp.has_insn_feature). arm64 B and B.cond share ARM_b, as in IDA's ARM module; brk is not
+# marked (IDA's answer is not known: kflow/warnflow.py only logs it); w["arm_b_stop"] False: B is not marked either
+NN_CALL, NN_INT3, NN_JMP, NN_MOV, NN_NOP, NN_RETN, NN_UD2 = 16, 48, 86, 122, 129, 159, 632
+ARM_RET, ARM_NOP, ARM_B, ARM_BL, ARM_BRK = 1, 2, 3, 4, 542
+CF_STOP = 1
+X86_INSNS = [(b"\x0f\x0b", 2, NN_UD2), (b"\x0f\x1f\x44\x00\x00", 5, NN_NOP), (b"\x66\x90", 2, NN_NOP), (b"\x90", 1, NN_NOP),
+             (b"\xe8", 5, NN_CALL), (b"\xe9", 5, NN_JMP), (b"\xeb", 2, NN_JMP), (b"\xc3", 1, NN_RETN), (b"\xcc", 1, NN_INT3)]
 
 
 def world_from(elf):
@@ -236,6 +244,38 @@ def install(w, names=True):
                 return False
             return True
     x.xrefblk_t = xrefblk_t
+    ua = m["ida_ua"] = types.ModuleType("ida_ua")
+    idp = m["ida_idp"] = types.ModuleType("ida_idp")
+
+    class insn_t:  # the members kflow reads
+        def __init__(self):
+            self.ea, self.size, self.itype = BAD, 0, 0
+
+    def decode_insn(insn, ea):
+        """Like IDA: the length of the instruction at ea (0 if the bytes are none), without changing the database;
+        w["decoded"] counts the calls. w["insns"]: address -> (size, itype) laid out by a test, size 0 = undecodable.
+        Else the bytes: arm64 any 4-byte word; x86 only X86_INSNS and 'mov r64, r64' (48 89 /r), nothing else."""
+        w["decoded"] = w.get("decoded", 0) + 1
+        b = m["ida_bytes"].get_bytes(ea, 5) or b""
+        if ea in w.get("insns", {}):
+            size, itype = w["insns"][ea]
+        elif elf.arch == "aarch64" and len(b) >= 4:
+            word = int.from_bytes(b[:4], "little")
+            size = 4
+            itype = (ARM_B if word >> 26 == 0b000101 or word >> 24 == 0x54 else ARM_BL if word >> 26 == 0b100101
+                     else ARM_RET if word & 0xFFFFFC1F == 0xD65F0000 else ARM_BRK if word & 0xFFE0001F == 0xD4200000
+                     else ARM_NOP)
+        else:
+            size, itype = next(((n, c) for raw, n, c in X86_INSNS if b.startswith(raw) and len(b) >= n), (0, 0))
+            if not size and b[:2] == b"\x48\x89" and len(b) >= 3 and b[2] >= 0xC0:
+                size, itype = 3, NN_MOV
+        if size:
+            insn.ea, insn.size, insn.itype = ea, size, itype
+        return size
+    ua.insn_t, ua.decode_insn = insn_t, decode_insn
+    idp.CF_STOP = CF_STOP
+    idp.has_insn_feature = lambda icode, bit: bool(bit & CF_STOP) and (icode in (NN_JMP, NN_RETN, NN_UD2, ARM_RET) or (
+        icode == ARM_B and w.get("arm_b_stop", True)))
     sys.modules.update(m)
     sys.modules.pop("kflow.idalayer", None)
     return importlib.import_module("kflow.idalayer")
@@ -898,6 +938,90 @@ def hidden_path(path):
           "reference, ordinary flow, not code: no sentence) (%s)" % (", ".join(cases), os.path.basename(path)))
 
 
+def target_blocks(path):
+    """Spec step 3 (judge item 4): the static-key chooser's 'bytes / insns' of the out-of-line block at a target,
+    decoded forward with ida_ua.decode_insn by the block rule of tools/reach.py: up to and including the first
+    instruction that does not pass execution to the next one; ending earlier before a join (a jump or call reference
+    from elsewhere that kflow did not record), before an x86 int3 and where executable code ends; at most 4096
+    instructions ('+' then); '?' when an instruction cannot be decoded. Each case lays its own bytes at one target."""
+    elf, w, il, t = _db(path)
+    arch = il.current_arch()
+    a = next((j.target for j in t["jump"] if il.in_text(j.target) and il.in_text(j.target + 64)), None)
+    if a is None:
+        print("  target-block check skipped: no static-key target in code in %s" % os.path.basename(path))
+        return
+    other = next(j.code for j in t["jump"] if il.in_text(j.code) and not a - 64 <= j.code < a + 64)
+    get = il.ida_bytes.get_bytes
+    w["imagebase"] = base = 0x10000
+
+    def block(code):  # target_block and its chooser text with these bytes at a (the database's own bytes elsewhere)
+        il.ida_bytes.get_bytes = lambda ea, n: (code[ea - a:] + (get(a + len(code), n) or b""))[:n] \
+            if a <= ea < a + len(code) else get(ea, n)
+        try:
+            return il.target_block(a, arch), il.target_block_text(a, arch)
+        finally:
+            il.ida_bytes.get_bytes = get
+    if arch == "x86_64":
+        mov, call, jmp = b"\x48\x89\xc7", b"\xe8" + bytes(4), b"\xe9" + bytes(4)
+        seq, starts = mov + call + jmp, [a, a + 3, a + 8]
+        assert block(seq) == ((13, 3, False), "13 / 3"), block(seq)  # up to and including the jmp
+        assert block(mov + b"\xc3")[0] == (4, 2, False)  # ret
+        assert block(call + b"\x0f\x0b" + mov)[0] == (7, 2, False)  # ud2, a BUG/WARN trap
+        assert block(mov + call + b"\xcc\xcc")[0] == (8, 2, False), "int3 padding after a call that does not return"
+        assert block(b"\xcc" + mov)[0] == (0, 0, False)
+        assert block(mov + b"\x0f\x05" + jmp) == (None, "?"), "an instruction the fake cannot decode (syscall)"
+        assert block(b"\x0f\x05")[1] == "?"
+        kinds = "jmp, ret, ud2 end it (an int3 just before it)"
+    else:
+        nop, bcond, b, brk, ret = (x.to_bytes(4, "little") for x in (0xD503201F, 0x54000040, 0x14000002, 0xD4210000,
+                                                                      0xD65F03C0))
+        seq, starts = nop + bcond + b, [a, a + 4, a + 8]
+        assert block(seq) == ((12, 3, False), "12 / 3"), block(seq)  # B.cond falls through, B does not
+        w["arm_b_stop"] = False  # if IDA's ARM module did not mark B as CF_STOP: the bytes still end the block there
+        assert block(seq)[0] == (12, 3, False)
+        w["arm_b_stop"] = True
+        assert block(nop + brk + nop)[0] == (8, 2, False)  # brk #0x800, a BUG/WARN trap
+        assert block(nop + ret + nop)[0] == (8, 2, False)
+        w["insns"] = {a + 4: (0, 0)}
+        assert block(nop + nop + ret) == (None, "?")
+        del w["insns"]
+        kinds = "B, brk, ret end it (B.cond does not)"
+    full = (len(seq), 3, False)
+    # a join: IDA's jump reference from elsewhere to the second instruction ends the block before it
+    w["xrefs"][(other, starts[1])] = False
+    assert block(seq)[0] == (starts[1] - a, 1, False), block(seq)
+    w["xrefs"][(other, starts[1])] = True  # kflow's own recorded reference there is not a join
+    w["netnodes"].setdefault(il.NODE, {})[(other - base) & il.MASK] = (starts[1] - base) & il.MASK
+    assert block(seq)[0] == full, "a reference kflow recorded counted as a join"
+    del w["netnodes"][il.NODE][(other - base) & il.MASK]  # the same reference unrecorded: the user's, a join
+    assert block(seq)[0] == (starts[1] - a, 1, False)
+    del w["xrefs"][(other, starts[1])]
+    w["drefs"][(other, starts[1])] = True  # a data reference is not flow
+    assert block(seq)[0] == full
+    del w["drefs"][(other, starts[1])]
+    w["xrefs"][(other, a)] = False  # a reference to the target itself: where the block starts anyway
+    assert block(seq)[0] == full
+    del w["xrefs"][(other, a)]
+    # the cap (4096 instructions, as in tools/reach.py): both numbers get '+'
+    assert il.BLOCK_CAP == 4096
+    il.BLOCK_CAP = 2
+    try:
+        assert block(seq) == ((starts[2] - a, 2, True), "%d+ / 2+" % (starts[2] - a)), block(seq)
+    finally:
+        il.BLOCK_CAP = 4096
+    # executable code ends after the second instruction (the segment made shorter): the block ends there
+    seg = il.ida_segment.getseg(a)
+    end, seg.end_ea = seg.end_ea, starts[2]
+    try:
+        assert block(seq)[0] == (starts[2] - a, 2, False), block(seq)
+        assert il.target_block(starts[2], arch) is None and il.target_block_text(starts[2], arch) == "?"
+    finally:
+        seg.end_ea = end
+    assert block(seq)[0] == full
+    print("OK target block: %s, a join / the end of code ends it before, kflow's recorded reference and data "
+          "references do not, cap 4096 gives '+', undecodable gives '?' (%s)" % (kinds, os.path.basename(path)))
+
+
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("SKIP: pass a kernel ELF path")
@@ -908,3 +1032,4 @@ if __name__ == "__main__":
         analysis_running(p)
         stale_next_insn(p)
         hidden_path(p)
+        target_blocks(p)

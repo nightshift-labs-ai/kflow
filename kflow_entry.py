@@ -302,7 +302,8 @@ class AnnotateAction(ida_kernwin.action_handler_t):
 
 BUG_COLUMNS = [["Address", 18 | ida_kernwin.Choose.CHCOL_HEX], ["Kind", 6], ["Function", 30], ["Source", 40]]
 KEY_COLUMNS = [["Address", 18 | ida_kernwin.Choose.CHCOL_HEX], ["Key", 34], ["Kind", 8], ["Now", 7],
-               ["Target", 18 | ida_kernwin.Choose.CHCOL_HEX], ["Function", 30]]
+               ["Target", 18 | ida_kernwin.Choose.CHCOL_HEX], ["Block (bytes / insns)", 12], ["Function", 30]]
+BLOCK_COLUMN = 5  # the Block column's place in a static-key chooser line
 
 
 class SitesChooser(ida_kernwin.Choose):
@@ -319,6 +320,23 @@ class SitesChooser(ida_kernwin.Choose):
     def OnSelectLine(self, n):
         ida_kernwin.jumpto(self.rows[n][0])
         return (ida_kernwin.Choose.NOTHING_CHANGED, )
+
+
+class KeySitesChooser(SitesChooser):
+    """The static-key list. Its Block column (the out-of-line block at the site's target, idalayer.target_block_text)
+    is decoded only when IDA asks for a row, and once per target."""
+
+    def __init__(self, rows, targets, arch):
+        SitesChooser.__init__(self, rows, "kflow: static-key sites", KEY_COLUMNS)
+        self.targets, self.arch, self.blocks = targets, arch, {}
+
+    def OnGetLine(self, n):
+        target = self.targets[n]
+        if target not in self.blocks:
+            self.blocks[target] = idalayer.target_block_text(target, self.arch)
+        line = list(self.rows[n][1:])
+        line.insert(BLOCK_COLUMN, self.blocks[target])
+        return line
 
 
 class ListAction(ida_kernwin.action_handler_t):
@@ -469,7 +487,7 @@ class KeySitesAction(ida_kernwin.action_handler_t):
                 "the __jump_table could not be decoded: %s" % t["errors"]["jump"] if "jump" in t.get("errors", {}) else
                 "the table is empty"))
             return 0
-        SitesChooser(key_site_rows(t), "kflow: static-key sites", KEY_COLUMNS).Show()
+        KeySitesChooser(key_site_rows(t), [j.target for j in t["jump"]], idalayer.current_arch()).Show()
         return 1
 
     def update(self, ctx):

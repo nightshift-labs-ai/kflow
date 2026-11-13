@@ -81,6 +81,8 @@ SHAPES = [("ida_hexrays", "Hexrays_Hooks", r"def func_printed\(self, cfunc: cfun
           ("ida_idp", "IDP_Hooks", r"def ev_emu_insn\(self, insn: insn_t\) -> bool:"),
           ("ida_idp", None, r"def has_insn_feature\(icode: int, bit: int\) -> bool:"),
           ("ida_idp", None, r"^CF_STOP: int"), ("ida_allins", None, r"^NN_ud2: int  # 632"), ("ida_allins", None, r"^ARM_brk: int"),
+          # the static-key chooser's Block column (idalayer.target_block): decode without changing the database
+          ("ida_ua", None, r"def decode_insn\(out: insn_t, ea: ida_idaapi.ea_t\) -> int:"),
           ("ida_ua", "insn_t", r"def add_cref\(self, to: ida_idaapi.ea_t, opoff: int, type: cref_t\) -> None:"),
           ("ida_xref", None, r"^fl_F: int  # 21"), ("ida_auto", None, r"def plan_ea\(ea: ida_idaapi.ea_t\) -> None:"),
           ("ida_auto", None, r"def auto_wait\(\) -> bool:"), ("ida_bytes", None, r"def get_flags\(ea: ida_idaapi.ea_t\) -> int:"),

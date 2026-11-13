@@ -6,10 +6,12 @@ import ida_bytes
 import ida_funcs
 import ida_ida
 import ida_idaapi
+import ida_idp
 import ida_nalt
 import ida_name
 import ida_netnode
 import ida_segment
+import ida_ua
 import ida_xref
 
 from . import core
@@ -24,6 +26,7 @@ OTHER_NODE = "$ kflow created other-function refs"  # site -> target inside ANOT
 WARN_NODE = "$ kflow warn flow"  # WARN fall-through (kflow/warnflow.py, experimental): offset -> bits 1 = WARN ud2 site,
 # 2 = start of a function tail kflow appended (offsets from the image base); the record exists only while it is on
 MASK = (1 << 64) - 1
+BLOCK_CAP = 4096  # instructions: where target_block() stops walking, as tools/reach.py does
 
 
 def current_arch():
@@ -295,22 +298,31 @@ def code_refs_to(ea):
     return out
 
 
+def _records():
+    """(kflow's record of the jump references it added, or None when there is none; the image base), for _kflows()."""
+    node = ida_netnode.netnode(NODE, 0, False)
+    return (node if node.index() != ida_netnode.BADNODE else None), ida_nalt.get_imagebase()
+
+
+def _kflows(src, dst, records, arch):
+    """True when the reference src -> dst is one kflow recorded (other static-key sites or faulting instructions
+    pointing at the same address) and src is not now itself a jump to dst: patched after Annotate (_add never records
+    one), it is a path of its own (review s177 m1)."""
+    node, base = records
+    return (node is not None and node.altval((src - base) & MASK) == (dst - base) & MASK
+            and not branches_to(src, dst, arch))
+
+
 def other_path_to(dst, site, arch=None):
     """True unless dst is an instruction that nothing in the database leads to but kflow: no ordinary flow from the
     instruction before it (FF_FLOW) and no jump/call reference to it except from site and the references kflow
-    recorded (other static-key sites or faulting instructions pointing at the same address). A recorded source that
-    is now itself a jump to dst (patched after Annotate; _add never records one) is a path (review s177 m1). True as
-    well when dst is not an instruction: then nothing is known."""
+    recorded (_kflows). True as well when dst is not an instruction: then nothing is known."""
     flags = ida_bytes.get_flags(dst)
     if not ida_bytes.is_code(flags) or ida_bytes.is_flow(flags):
         return True
-    node = ida_netnode.netnode(NODE, 0, False)
-    recorded = node.index() != ida_netnode.BADNODE
-    base = ida_nalt.get_imagebase()
-    val = (dst - base) & MASK
+    records = _records()
     arch = arch or current_arch()
-    return any(src != site and not (recorded and node.altval((src - base) & MASK) == val
-                                    and not branches_to(src, dst, arch)) for src in code_refs_to(dst))
+    return any(src != site and not _kflows(src, dst, records, arch) for src in code_refs_to(dst))
 
 
 def hidden_path_text(j, arch=None):
@@ -335,6 +347,60 @@ def hidden_path_text(j, arch=None):
         return ""
     return ("; nothing else in the database jumps or falls through to 0x%X, so this pseudocode probably does not show "
             "that code" % j.target)
+
+
+def _stops(insn, raw, arch):
+    """True when the decoded instruction does not pass execution to the next one: IDA's processor module marks it
+    CF_STOP (x86_64 jmp, ret, ud2...). On arm64 the bytes decide for B (stops) and B.cond (does not: IDA's ARM module
+    gives B and B.cond one instruction code), and brk, the BUG/WARN trap, stops as ud2 does in tools/reach.py."""
+    if arch == "aarch64" and len(raw) >= 4:
+        word = int.from_bytes(raw[:4], "little")
+        if word >> 24 == 0x54:  # B.cond, BC.cond
+            return False
+        if word >> 26 == 0b000101 or word & 0xFFE0001F == 0xD4200000:  # B; brk #imm
+            return True
+    return bool(ida_idp.has_insn_feature(insn.itype, ida_idp.CF_STOP))
+
+
+def target_block(ea, arch=None):
+    """(bytes, instructions, capped) of the out-of-line block at a static-key target, by the block rule of
+    tools/reach.py: from ea up to and including the first instruction that does not pass execution to the next one
+    (_stops); it ends earlier, before an instruction that a jump or call reference reaches (a join: from there on,
+    ordinary flow reaches the code anyway; references kflow recorded do not count, _kflows), before an x86
+    int3 (padding) and where executable code ends, and after BLOCK_CAP instructions (capped True). Instructions are
+    decoded with ida_ua.decode_insn, which does not change the database. None when ea is not in executable code or an
+    instruction cannot be decoded before the block ends."""
+    arch = arch or current_arch()
+    insn = ida_ua.insn_t()
+    records = _records()
+    size = n = 0
+    while n < BLOCK_CAP:
+        cur = ea + size
+        if not in_text(cur):
+            return (size, n, False) if n else None
+        if n and any(not _kflows(src, cur, records, arch) for src in code_refs_to(cur)):
+            return size, n, False
+        raw = read(cur, 4) or b""
+        if arch == "x86_64" and raw[:1] == b"\xcc":
+            return size, n, False
+        length = ida_ua.decode_insn(insn, cur)
+        if length <= 0:
+            return None
+        size += length
+        n += 1
+        if _stops(insn, raw, arch):
+            return size, n, False
+    return size, n, True
+
+
+def target_block_text(ea, arch=None):
+    """target_block(ea) as the static-key chooser shows it: 'bytes / insns', both with '+' when BLOCK_CAP ended the
+    walk; '?' when it gives None."""
+    block = target_block(ea, arch)
+    if block is None:
+        return "?"
+    more = "+" if block[2] else ""
+    return "%d%s / %d%s" % (block[0], more, block[1], more)
 
 
 def ex_comment(x, arch):

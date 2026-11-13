@@ -68,6 +68,33 @@ if jumps:
     j = jumps[0]
     assert rows[0][0] == j.code and rows[0][3] == ("likely" if j.branch else "unlikely") and rows[0][4] in ("jump", "no jump")
     nj = sum(r[4] == "jump" for r in rows)
+    # spec step 3: the Block column, the out-of-line block at the target as 'bytes / insns', is decoded only when IDA
+    # asks for a row (ida_ua.decode_insn), once per target; '?' when an instruction there cannot be decoded
+    ch, karch, ilm = w["shown"], m.idalayer.current_arch(), m.idalayer
+    assert [c[0] for c in ch.cols] == ["Address", "Key", "Kind", "Now", "Target", "Block (bytes / insns)", "Function"]
+    assert not w.get("decoded"), "the chooser decoded instructions before IDA asked for a row"
+    line = ch.OnGetLine(0)
+    n1 = w.get("decoded", 0)
+    assert n1 >= 1 and ch.OnGetLine(0) == line and w["decoded"] == n1, "the same row decoded again"
+    for i in [i for i, x in enumerate(jumps) if x.target == j.target][:20]:  # rows with the same target
+        assert ch.OnGetLine(i)[5] == line[5] and w["decoded"] == n1, "the same target decoded again"
+    assert list(line) == list(rows[0][1:6]) + [ilm.target_block_text(j.target, karch)] + list(rows[0][6:]), line
+    real_get = sys.modules["ida_bytes"].get_bytes
+    for code, text in (((b"\x48\x89\xc7" + b"\xe8" + bytes(4) + b"\xe9" + bytes(4), "13 / 3") if karch == "x86_64" else
+                        (b"\x1f\x20\x03\xd5" + b"\x40\x00\x00\x54" + b"\x02\x00\x00\x14", "12 / 3")),
+                       (b"\x0f\x05" if karch == "x86_64" else b"", "?")):
+        if not code:  # arm64: every word decodes in the fake; an undecodable one is laid out
+            w["insns"] = {j.target: (0, 0)}
+            code = b"\x1f\x20\x03\xd5"
+        sys.modules["ida_bytes"].get_bytes = lambda ea, n, code=code: (code[ea - j.target:] + (
+            real_get(j.target + len(code), n) or b""))[:n] if j.target <= ea < j.target + len(code) else real_get(ea, n)
+        two = m.KeySitesChooser(rows[:1] * 2, [j.target] * 2, karch)
+        n2 = w["decoded"]
+        assert two.OnGetLine(0)[5] == two.OnGetLine(1)[5] == text, (two.OnGetLine(0), text)
+        assert w["decoded"] - n2 == (3 if text != "?" else 1), w["decoded"] - n2
+        sys.modules["ida_bytes"].get_bytes = real_get
+        w.pop("insns", None)
+    print("  static-key list: Block column decoded per shown row, once per target; row 0: %s" % line[5])
     assert 0 < nj < len(rows) or len(rows) < 50 or elf.relocatable, nj  # kernels have both states; a module on disk is all NOPs
     if elf.relocatable:  # the list names each module key as the command line does, although IDA packs the imports
         want = [cli_elf.key_name(c.key) or "0x%X" % c.key for c in T.load(cli_elf).get("jump", [])]
