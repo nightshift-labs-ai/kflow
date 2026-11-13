@@ -574,6 +574,12 @@ if key is not None:
         assert decompile(sorted(both)) == both
         rep = msgs("hidden-path sentence failed")
         assert len(rep) == n_rep + 1 and "0x%X" % key.code in rep[-1] and "fake hidden-path failure" in rep[-1], rep
+        assert m.STATE["hidden_error"], "the hidden-path failure was not recorded"
+        saved = (m.STATE["hx"], m.STATE["hx_late"], m.STATE["pseudo"])
+        m.STATE["hx"] = m.STATE["hx_late"] = None
+        m.unhook_pseudocode()  # review s178 MINOR 1: a later database reports its own first hidden-path error
+        assert not m.STATE["hidden_error"], "unhook_pseudocode left hidden_error set"
+        m.STATE["hx"], m.STATE["hx_late"], m.STATE["pseudo"] = saved
         il.hidden_path_text = real_hidden
 
         def broken_jtext(j, name=None, before=False):

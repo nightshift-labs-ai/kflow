@@ -247,6 +247,7 @@ def unhook_pseudocode():
     hooks, STATE["hx"] = STATE["hx"], None
     STATE["pseudo"] = None
     STATE["hx_error"] = False  # a later session reports its own first error
+    STATE["hidden_error"] = False  # the same for a hidden-path sentence error
     if hooks is not None:
         try:
             hooks.unhook()
