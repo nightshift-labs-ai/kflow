@@ -109,7 +109,9 @@ class DecompileCheck:
         if self.error is not None or self.skip is not None:
             return
         try:
-            self._run(list(self.before_ok), self.after_ok, self.seconds)
+            # reviews s174 (api MINOR 3/NIT 7, claims F1): its own half of the budget, and only functions that decompiled
+            # before (one slow BEFORE decompile must not leave AFTER nothing; failures before are never re-tried)
+            self._run([ea for ea in self.before_ok if self.before_ok[ea]], self.after_ok, self.spent + self.seconds / 2)
         except Exception as e:  # noqa: BLE001
             self.error = e
 
@@ -120,18 +122,22 @@ class DecompileCheck:
             return "decompile check skipped: %s" % (str(self.error) or type(self.error).__name__)
         if not self.picked:
             return "decompile check: no function has a static-key site that gets a new jump reference"
-        checked = list(self.after_ok)
-        good = [ea for ea in checked if self.before_ok[ea]]
-        blamed = [ea for ea in good if not self.after_ok[ea]]
-        failed_before = [ea for ea in checked if not self.before_ok[ea]]
+        checked = list(self.after_ok)  # functions that decompiled before Annotate and were decompiled again after it
+        good = [ea for ea in self.before_ok if self.before_ok[ea]]
+        blamed = [ea for ea in checked if not self.after_ok[ea]]
+        failed_before = [ea for ea in self.before_ok if not self.before_ok[ea]]
+
+        def n(k):
+            return "%d function%s" % (k, "" if k == 1 else "s")
         if not good:
-            text = "decompile check: none of %d functions with static-key sites decompiled before Annotate" % len(checked)
+            text = "decompile check: none of %s with static-key sites decompiled before Annotate" % n(len(self.before_ok))
         elif blamed:
-            text = ("decompile check: %d of %d functions decompiled before Annotate but fail after (%s): kflow's jump "
+            text = ("decompile check: %d of %s decompiled before Annotate but fail after (%s): kflow's jump "
                     "references may confuse Hex-Rays there; kflow: Remove annotations takes them out"
-                    % (len(blamed), len(good), ", ".join(fname(ea) for ea in blamed)))
+                    % (len(blamed), n(len(checked)), ", ".join(fname(ea) for ea in blamed)))
         else:
-            text = "decompile check: %d functions with static-key sites decompile before and after Annotate" % len(good)
+            text = "decompile check: %s with static-key sites %s before and after Annotate" % (
+                n(len(checked)), "decompiles" if len(checked) == 1 else "decompile")
         if failed_before and good:
             text += "; %d more failed already before Annotate (not counted against kflow)" % len(failed_before)
         if self.stopped:

@@ -645,7 +645,7 @@ if picked:
     if len(picked) > 1:
         assert "%d functions with static-key sites decompile before and after" % (len(picked) - 1) in got[0], got
     dc["always"], dc["after"] = set(), set()
-    # time bound: each decompile takes 1.5 s on a fake clock; BEFORE stops after 5 s, AFTER after 10 s in all
+    # time bound: each decompile takes 1.5 s on a fake clock; BEFORE stops after 5 s, AFTER gets its own 5 s (s174 F1)
     ticks = [0.0]
 
     def fake_clock():
@@ -656,9 +656,23 @@ if picked:
     got = check_lines()
     sc.clock = real_clock
     if len(picked) >= 4:
-        assert len(dc["calls"]) - n_calls == 4 + 3, dc["calls"][n_calls:]
-        assert ("stopped after 10 s of decompiling: 3 of %d picked functions checked" % len(picked)) in got[0], got
-        assert "3 functions with static-key sites decompile before and after Annotate" in got[0], got
+        assert len(dc["calls"]) - n_calls == 4 + 4, dc["calls"][n_calls:]
+        assert ("stopped after 12 s of decompiling: 4 of %d picked functions checked" % len(picked)) in got[0], got
+        assert "4 functions with static-key sites decompile before and after Annotate" in got[0], got
+    # reviews s174 api MINOR 3 / claims F1: one slow BEFORE decompile (12 s) must not leave AFTER without budget, and the
+    # line must not say that nothing decompiled
+    steps = iter([0.0, 12.0])
+
+    def slow_first():
+        ticks[0] += next(steps, 1.5)
+        return ticks[0]
+    ticks[0], sc.clock = 0.0, slow_first
+    n_calls = len(dc["calls"])
+    got = check_lines()
+    sc.clock = real_clock
+    assert len(dc["calls"]) - n_calls == 1 + 1, dc["calls"][n_calls:]
+    assert "1 function with static-key sites decompiles before and after Annotate" in got[0], got
+    assert "none of" not in got[0] and ("1 of %d picked functions checked" % len(picked)) in got[0], got
     # an exception inside the check: one 'skipped' line, Annotate still adds its comments and references
     dc["crash"] = "fake decompiler crash"
     got = check_lines()
