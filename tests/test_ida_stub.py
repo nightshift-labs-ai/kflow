@@ -237,6 +237,7 @@ def install_ui(w, log):
     kw.info = lambda text: log.append(("info", text)) or 0
     kw.show_wait_box = lambda text: log.append(("wait", text))
     kw.hide_wait_box = lambda: log.append(("hide", None))
+    kw.replace_wait_box = lambda text: log.append(("wait_replace", text))
     kw.jumpto = lambda ea: log.append(("jump", ea)) or True
     kw.ask_text = lambda max_size, defval, prompt: log.append(("ask", max_size, defval, prompt)) or w.get("ask_text")
     kw.AST_ENABLE_ALWAYS, kw.SETMENU_APP = 1, 0

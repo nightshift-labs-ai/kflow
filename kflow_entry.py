@@ -263,6 +263,9 @@ class AnnotateAction(ida_kernwin.action_handler_t):
         try:
             check = selfcheck.start(t, idalayer.current_arch())  # with Hex-Rays: decompile a few functions first
             res = idalayer.annotate(t, idalayer.current_arch())
+            if check is not None and check.waits():  # re-review s175 code MINOR 1: this wait has no time limit
+                ida_kernwin.replace_wait_box("HIDECANCEL\nkflow: decompile check: waiting for IDA to analyse the new "
+                                             "references, then decompiling again")
             line = selfcheck.finish(check)
         finally:
             ida_kernwin.hide_wait_box()

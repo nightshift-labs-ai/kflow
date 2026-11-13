@@ -141,6 +141,11 @@ class DecompileCheck:
         except Exception as e:  # noqa: BLE001  (the check must never stop Annotate)
             self.error = e
 
+    def waits(self):
+        """True when finish() will wait for IDA's auto-analysis and decompile again (the check ran and something
+        decompiled before Annotate)."""
+        return self.skip is None and self.error is None and any(self.before_ok.values())
+
     def after(self):
         if self.error is not None or self.skip is not None:
             return
@@ -210,7 +215,7 @@ def finish(check):
     if check is None:
         return None
     try:
-        if check.skip is None and check.error is None and any(check.before_ok.values()):  # re-review s174 MINOR 2
+        if check.waits():  # re-review s174 MINOR 2: nothing decompiled before Annotate → no auto_wait()
             import ida_auto
             # review s174 api MAJOR 1: auto-analysis was idle before Annotate (start() checked it), so this only lets IDA
             # react to the references Annotate just added; the AFTER pass then sees what F5 will see
