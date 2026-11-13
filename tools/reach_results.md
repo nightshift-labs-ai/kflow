@@ -100,3 +100,13 @@ Every percentage is within 1.1 points. The differences come from two rules:
 
 Fixups are mostly reached by ordinary flow, and the hidden ones are shared: 322 hidden fixup sites go to only 51
 distinct handlers (426 bytes). That is why the README quotes only the static-key and WARN numbers.
+
+## Source lines with several trap sites (README "Without kflow / with kflow" table, measured Nov 13 2026)
+
+On the MemLens demo kernel, 586 source lines (`file:line`) have 2 or more `__bug_table` sites (3,715 sites on them);
+506 of those lines have sites in 2 or more different named functions (inlined copies). Reproduce:
+
+    python3 -m kflow kernel.elf --list bug --limit 100000 > bug.txt
+    grep -E '^0x' bug.txt | awk '{n[$NF]++; if($3!="?"){k=$NF" "$3; if(!(k in s)){s[k]=1; f[$NF]++}}}
+      END{a=0;b=0;for(x in n){if(n[x]>=2)a++; if(f[x]>=2)b++}; print a, b}'
+    # prints: 586 506
