@@ -324,6 +324,8 @@ def hidden_path_text(j, arch=None):
     arch = arch or current_arch()
     if branches_to(j.code, j.target, arch):
         after = ida_bytes.get_item_end(j.code)
+        if after == j.target:  # eb 00 / 'b .+4': the site's jump itself runs the next instruction
+            return ""
         if other_path_to(after, ida_idaapi.BADADDR, arch):  # the site's own jump counts: kflow records none to after
             return ""
         return ("; the site is a jump here and nothing else in the database jumps or falls through to the next "

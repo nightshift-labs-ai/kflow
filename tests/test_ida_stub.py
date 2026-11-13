@@ -884,8 +884,9 @@ def hidden_path(path):
         got = il.hidden_path_text(j, arch)
         assert got == "", "site 0x%X jumps to the next instruction itself: %s" % (j.code, got)
     j = nxt[0]
-    w["xrefs"].pop((j.code, j.target))  # without IDA's own jump reference nothing would lead there: the sentence
-    assert il.hidden_path_text(j, arch) == HIDDEN_JMP % (j.target, "on" if j.branch else "off")
+    w["xrefs"].pop((j.code, j.target))  # even without IDA's own jump reference: the site itself runs the next insn
+    got = il.hidden_path_text(j, arch)
+    assert got == "", "site 0x%X jumps to the next instruction, no IDA reference: %s" % (j.code, got)
     w["xrefs"][(j.code, j.target)] = False
     if made is not None:
         il.ida_bytes.get_bytes = get
