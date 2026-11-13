@@ -1227,6 +1227,24 @@ class Resolve(unittest.TestCase):
         self.assertEqual((rec["status"], rec["address"], rec["site"]["line"], rec["from"]["offset"], len(rec["frames"])),
                          ("exact", "0xFFFFFFFF8E629BC4", 755, "0x674", 9))
 
+    def test_example_line_offset_below_printed_size(self):
+        # GKI 6.1 arm64: two static gic_handle_irq (irq-gic.c, irq-gic-v3.c) back to back. IDA's name lookup (one
+        # address per name) gives the first for both, so the second's WARN came out as gic_handle_irq+0x190/0xf4: an
+        # offset past the printed size, which no kernel prints and which, pasted back, is not an exact match.
+        a, b = 0xFFFFFFC008010004, 0xFFFFFFC0080100F8
+        sites = [BugSite(b + 0x9C, "drivers/irqchip/irq-gic-v3.c", 722, 1),
+                 BugSite(0xFFFFFFC008020010, "kernel/later.c", 5, 1)]
+        names = {sites[0].addr: "gic_handle_irq", sites[1].addr: "later_fn"}
+        first_only = {"gic_handle_irq": [(a, b - a, b - a, "gic_handle_irq")],
+                      "later_fn": [(0xFFFFFFC008020000, 0x40, 0x40, "later_fn")]}
+        line = oops.example_line(sites, names.get, lambda n: first_only.get(n, []))
+        self.assertEqual(line, "WARNING: CPU: 0 PID: 1 at kernel/later.c:5 later_fn+0x10/0x40")
+        off, size = re.search(r"\+0x([0-9a-f]+)/0x([0-9a-f]+)", line).groups()
+        self.assertLess(int(off, 16), int(size, 16))
+        # an offset exactly at the printed size is the next symbol's first byte: not this function either
+        at_end = [BugSite(a + (b - a), "x.c", 1, 1)]
+        self.assertIsNone(oops.example_line(at_end, lambda ea: "gic_handle_irq", lambda n: first_only[n]))
+
 
 def whole_kernel(path):
     """Every BUG/WARN site inside a function of this file: a RIP (x86_64) or pc (arm64) line built from its function

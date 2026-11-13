@@ -724,7 +724,10 @@ def example_line(sites, func_name, function_starts, module=None):
             continue
         name = func_name(site.addr)
         starts = function_starts(name) if name else []
-        if len(starts) != 1 or starts[0][2] is None or starts[0][0] > site.addr:
+        # off < printed size: IDA's name lookup gives one address per name, so for a second function of the same name
+        # (GKI 6.1: two static gic_handle_irq) it is the other one's start, and no kernel prints func+off/size past size
+        if (len(starts) != 1 or starts[0][2] is None or starts[0][0] > site.addr
+                or site.addr - starts[0][0] >= starts[0][2]):
             continue
         return "WARNING: CPU: 0 PID: 1 at %s:%d %s+0x%x/0x%x%s" % (site.file, site.line, name, site.addr - starts[0][0],
                                                                  starts[0][2], " [%s]" % module if module else "")
