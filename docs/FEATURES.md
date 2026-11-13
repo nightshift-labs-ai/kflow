@@ -37,7 +37,7 @@ kflow reads these tables from the database and, in IDA, comments every site and 
 ## Static keys and exception-table fixups
 
 - [**Static-key comments and key references**](USAGE.md#step-by-step): each static-key site (a NOP or branch the kernel patches at runtime) gets its key, its branch target and when it jumps, and a jump reference to the target where IDA has none (a data reference if the target is inside another function); a data reference from each site to its key makes X on a key list its sites.
-- [**Static-key chooser**](USAGE.md#step-by-step): **kflow: List static-key sites** shows every site with its key, `likely`/`unlikely`, `jump` / `no jump` now, the target and the function; the filter finds every site of one key.
+- [**Static-key chooser**](USAGE.md#step-by-step): **kflow: List static-key sites** shows every site with its key, `likely`/`unlikely`, `jump` / `no jump` now, the target, the size of the out-of-line block there (Block: `bytes / insns`) and the function; the filter finds every site of one key.
 - [**Exception-table fixups**](#what-kflow-reads): each instruction that may fault on purpose (user-memory access, MSR reads...) gets its fixup and type (or handler), and a jump reference to the fixup (a data reference if it is inside another function).
 - [**What the references add, measured**](../tools/reach_results.md): on the MemLens demo kernel, 96% of the 8,349 static-key NOP sites jump to code that no direct branch targets and no instruction falls into (8,011 out-of-line blocks, 264 KB): kflow's reference is the only one that leads there. The same holds after 90% of the 7,504 WARN traps (1.7 instructions on average up to the next jump or join). Reproduce: `python3 tools/reach.py <kernel>` (x86_64, needs objdump).
 
