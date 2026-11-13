@@ -30,7 +30,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
-from kflow import __version__, idalayer, oops  # noqa: E402
+from kflow import __version__, idalayer, oops, selfcheck  # noqa: E402
 
 ISSUES_URL = "https://github.com/nightshift-labs-ai/kflow/issues"
 # pseudo: the sites by address for the pseudocode hook (built by Annotate, rebuilt after a rebase); hx: the hook;
@@ -261,12 +261,16 @@ class AnnotateAction(ida_kernwin.action_handler_t):
             return 0
         ida_kernwin.show_wait_box("HIDECANCEL\nkflow: writing comments and references")
         try:
+            check = selfcheck.start(t, idalayer.current_arch())  # with Hex-Rays: decompile a few functions first
             res = idalayer.annotate(t, idalayer.current_arch())
+            line = selfcheck.finish(check)
         finally:
             ida_kernwin.hide_wait_box()
         import ida_auto
         done = ida_auto.auto_is_ok()
         report(idalayer.annotate_text(res, analysis_done=done))
+        if line:
+            report(line)
         if not done:
             report("IDA's auto-analysis is still running: run Annotate again when it has finished, so that sites that are "
                    "not instructions yet get their references and targets inside other functions get data references "

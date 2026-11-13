@@ -12,7 +12,7 @@ import re
 import sys
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
-FILES = ["kflow/idalayer.py", "kflow/warnflow.py", "kflow_entry.py", "tools/kflow_headless.py"]
+FILES = ["kflow/idalayer.py", "kflow/warnflow.py", "kflow/selfcheck.py", "kflow_entry.py", "tools/kflow_headless.py"]
 
 
 def used_names():

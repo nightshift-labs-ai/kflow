@@ -94,7 +94,13 @@ def main(argv=None):
                   " to targets inside another function" % (removed, res["key_refs"], res["other_refs"]))
         else:
             import ida_auto  # an existing database opened with --no-analysis may be fully analysed already
-            print("[kflow] %s" % idalayer.annotate_text(idalayer.annotate(t, arch), analysis_done=ida_auto.auto_is_ok()))
+            from kflow import selfcheck
+            check = selfcheck.start(t, arch)  # with Hex-Rays: decompile a few functions before and after Annotate
+            res = idalayer.annotate(t, arch)
+            line = selfcheck.finish(check)
+            print("[kflow] %s" % idalayer.annotate_text(res, analysis_done=ida_auto.auto_is_ok()))
+            if line:
+                print("[kflow] %s" % line)
             if args.no_analysis:
                 print("[kflow] --no-analysis: IDA has not made the instructions and functions yet, so references were "
                       "added only from sites that are instructions already, and targets inside other functions kept jump "

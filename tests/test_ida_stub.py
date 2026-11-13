@@ -308,6 +308,42 @@ def install_ui(w, log):
     return types.SimpleNamespace(kw=kw, fn=fn, lines=lines_mod, get_func=get_func)
 
 
+def add_decompiler(hx, annotated):
+    """Give a fake ida_hexrays module a decompiler for kflow's decompile check: decompile(ea) fails (raises
+    DecompilationFailure) for functions in state["always"], and for functions in state["after"] while annotated() is
+    true; state["crash"] makes it raise RuntimeError. Results are cached per function like Hex-Rays' cache, so a
+    second decompile() returns the first result unless mark_cfunc_dirty(ea) or clear_cached_cfuncs() erased it."""
+    state = {"always": set(), "after": set(), "crash": None, "calls": [], "cache": {}, "dirty": 0}
+
+    class DecompilationFailure(Exception):
+        pass
+
+    def decompile(ea, hf=None, flags=0):
+        state["calls"].append(ea)
+        if state["crash"]:
+            raise RuntimeError(state["crash"])
+        if ea not in state["cache"]:
+            state["cache"][ea] = not (ea in state["always"] or (ea in state["after"] and annotated()))
+        if not state["cache"][ea]:
+            raise DecompilationFailure("fake failure at 0x%X" % ea)
+        return ("cfunc", ea)
+
+    def mark_cfunc_dirty(ea, close_views=False):
+        state["dirty"] += 1
+        return state["cache"].pop(ea, None) is not None
+    flush = getattr(hx, "clear_cached_cfuncs", None)
+
+    def clear_cached_cfuncs():
+        state["cache"].clear()
+        if flush is not None:
+            flush()
+    hx.DecompilationFailure = DecompilationFailure
+    hx.decompile = decompile
+    hx.mark_cfunc_dirty = mark_cfunc_dirty
+    hx.clear_cached_cfuncs = clear_cached_cfuncs
+    return state
+
+
 def run(path):
     cli_elf = Elf(path)
     ref = load(cli_elf)

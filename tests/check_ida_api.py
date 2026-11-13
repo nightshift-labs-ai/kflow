@@ -12,7 +12,7 @@ import re
 import sys
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
-FILES = ["kflow/idalayer.py"] + [f for f in ("kflow_entry.py", "kflow/warnflow.py") if os.path.exists(os.path.join(ROOT, f))]
+FILES = ["kflow/idalayer.py"] + [f for f in ("kflow_entry.py", "kflow/warnflow.py", "kflow/selfcheck.py") if os.path.exists(os.path.join(ROOT, f))]
 
 
 def dotted(n):

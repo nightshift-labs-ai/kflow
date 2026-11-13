@@ -42,6 +42,7 @@ with contextlib.redirect_stdout(out):
     assert H.main([sys.argv[1]]) == 0
 print(out.getvalue(), end="")
 assert "jump references added: " in out.getvalue() and "static-key site -> key references: " in out.getvalue(), out.getvalue()
+assert "decompile check" not in out.getvalue(), "no decompiler: no decompile check line"
 assert any(c.startswith("kflow: ") for c in w["cmts"].values())
 assert seen_done == [True], seen_done
 auto_ok[0] = False  # e.g. --no-analysis on a fresh file: the text must not claim analysis has finished
@@ -72,4 +73,28 @@ if b0 is not None:
     assert r["function"] == (elf.func(b0.addr) or None), r
 assert all(r["kind"] in ("likely", "unlikely") and r["now"] in ("jump", "no jump") and r["key"] for r in js["jump"])
 print("OK headless --json: %d BUG/WARN, %d static-key, %d exception-table records" % (len(js["bug"]), len(js["jump"]), len(js["ex"])))
+# with a (fake) Hex-Rays decompiler: one decompile check line after the counts, naming a function that stopped
+# decompiling after Annotate
+hx = types.ModuleType("ida_hexrays")
+hx.init_hexrays_plugin = lambda flags=0: True
+dc = T.add_decompiler(hx, IL.annotated)
+sys.modules["ida_hexrays"] = hx
+w["func_of"] = T._funcs(elf)  # IDA's functions: the ELF's function symbols
+from kflow import selfcheck as SC  # noqa: E402
+picked = SC.pick_functions(IL.scan(), IL.current_arch())
+assert picked or not elf.funcs or not IL.scan()["jump"], "a kernel with functions and static keys has functions to check"
+if picked:
+    dc["after"] = {picked[0]}
+out = io.StringIO()
+with contextlib.redirect_stdout(out):
+    assert H.main([sys.argv[1]]) == 0
+lines = [x for x in out.getvalue().splitlines() if "decompile check" in x]
+assert len(lines) == 1 and lines[0].startswith("[kflow] decompile check: "), out.getvalue()
+if picked:
+    assert ("1 of %d functions decompiled before Annotate but fail after" % len(picked)) in lines[0], lines
+with contextlib.redirect_stdout(io.StringIO()):
+    assert H.main([sys.argv[1], "--remove"]) == 0
+sys.modules["ida_hexrays"] = None
+w.pop("func_of")
+print("OK headless decompile check: %s" % lines[0])
 print("OK headless: annotate + remove, database saved both times")

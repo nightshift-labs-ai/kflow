@@ -329,6 +329,7 @@ def fake_hexrays(available=True):
     hx.Hexrays_Hooks = Hexrays_Hooks
     hx.init_hexrays_plugin = lambda flags=0: available() if callable(available) else available
     hx.clear_cached_cfuncs = lambda: hx_log.update(flushed=hx_log["flushed"] + 1)
+    hx_log["dc"] = T.add_decompiler(hx, lambda: sys.modules["kflow.idalayer"].annotated())
     sys.modules["ida_hexrays"] = hx
 
 
@@ -600,6 +601,85 @@ assert m.RemoveAction().activate(None) == 1 and hx_log["flushed"] == flushed + 1
 assert not il.annotated() and set(decompile([ea for _, ea, _ in exact] or [1]).values()) == {""}
 p.term()
 assert hx_log["hooked"] == 0 and not any(c.startswith("kflow") for c in w["cmts"].values())
+# ---- the decompile check inside Annotate (kflow/selfcheck.py), on the fake decompiler ----
+fake_hexrays()
+m, p = load_plugin()
+il, sc = m.idalayer, m.selfcheck
+dc = hx_log["dc"]
+t = il.scan()
+picked = sc.pick_functions(t, arch)
+assert len(picked) <= sc.MAX_FUNCS and len(set(picked)) == len(picked)
+assert all(get_func(ea) is not None and get_func(ea).start_ea == ea for ea in picked)
+
+
+def check_lines(remove=True):
+    """Annotate once (after Remove, so BEFORE sees the database without kflow's references); its decompile check
+    lines. Annotate itself must always report its counts."""
+    if remove:
+        assert m.RemoveAction().activate(None) == 1 and not il.annotated()
+    n = len(log)
+    assert m.AnnotateAction().activate(None) == 1 and il.annotated()
+    new = [x[1] for x in log[n:] if x[0] == "msg"]
+    assert [x for x in new if "jump references added: " in x], new
+    return [x for x in new if "decompile check" in x]
+
+
+got = check_lines()
+if picked:
+    assert got == ["[kflow] decompile check: %d functions with static-key sites decompile before and after Annotate\n"
+                   % len(picked)], got
+    assert sorted(dc["calls"][-2 * len(picked):]) == sorted(picked * 2), "each picked function decompiled twice"
+    # fails after Annotate: blamed by name; the AFTER decompile is not the cached BEFORE result
+    victim = picked[len(picked) // 2]
+    dc["after"] = {victim}
+    got = check_lines()
+    assert len(got) == 1 and ("1 of %d functions decompiled before Annotate but fail after (%s)"
+                              % (len(picked), ui.fn.get_func_name(victim) or "0x%X" % victim)) in got[0], got
+    assert "kflow: Remove annotations takes them out" in got[0], got
+    # fails already before Annotate (and after): counted apart, never blamed on kflow
+    dc["always"], dc["after"] = {victim}, {victim}
+    got = check_lines()
+    assert len(got) == 1 and "fail after" not in got[0] and "1 more failed already before Annotate" in got[0], got
+    if len(picked) > 1:
+        assert "%d functions with static-key sites decompile before and after" % (len(picked) - 1) in got[0], got
+    dc["always"], dc["after"] = set(), set()
+    # time bound: each decompile takes 1.5 s on a fake clock; BEFORE stops after 5 s, AFTER after 10 s in all
+    ticks = [0.0]
+
+    def fake_clock():
+        ticks[0] += 1.5
+        return ticks[0]
+    real_clock, sc.clock = sc.clock, fake_clock
+    n_calls = len(dc["calls"])
+    got = check_lines()
+    sc.clock = real_clock
+    if len(picked) >= 4:
+        assert len(dc["calls"]) - n_calls == 4 + 3, dc["calls"][n_calls:]
+        assert ("stopped after 10 s of decompiling: 3 of %d picked functions checked" % len(picked)) in got[0], got
+        assert "3 functions with static-key sites decompile before and after Annotate" in got[0], got
+    # an exception inside the check: one 'skipped' line, Annotate still adds its comments and references
+    dc["crash"] = "fake decompiler crash"
+    got = check_lines()
+    dc["crash"] = None
+    assert got == ["[kflow] decompile check skipped: fake decompiler crash\n"], got
+    assert any(c.startswith("kflow: ") for c in w["cmts"].values()) and any(w["xrefs"].values())
+else:
+    assert got == ["[kflow] decompile check: no function has a static-key site that gets a new jump reference\n"], got
+real_pick = sc.pick_functions
+sc.pick_functions = lambda t, arch, limit=0: 1 // 0
+got = check_lines()
+sc.pick_functions = real_pick
+assert len(got) == 1 and got[0].startswith("[kflow] decompile check skipped: "), got
+p.term()
+# no decompiler (or it refuses): no check, no line
+fake_hexrays(available=False)
+m, p = load_plugin()
+assert m.selfcheck.start(t, arch) is None
+n_calls = len(hx_log["dc"]["calls"])
+assert check_lines() == [] and len(hx_log["dc"]["calls"]) == n_calls
+p.term()
+print("OK decompile check: %d functions picked; all OK / fails after (blamed) / fails before (not blamed) / time bound / "
+      "exception / no decompiler" % len(picked))
 for kind, ea, text in shown_texts:
     print("  pseudocode, %s site 0x%X:  %s" % (kind, ea, text))
 print("OK pseudocode: comments on BUG/WARN %s, static key %s, NOP static key %s, exception %s; none before Annotate, "
