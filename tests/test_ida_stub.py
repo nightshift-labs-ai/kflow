@@ -828,6 +828,10 @@ def hidden_path(path):
         il.ida_bytes.get_bytes = get
         del w["netnodes"][il.NODE][(other - base) & il.MASK]  # the same reference, not recorded: the user's own
         assert il.hidden_path_text(nop, arch) == "", "a user reference kflow did not add is another path"
+        # review s177 m2 (b): other has a kflow record, but for another address: its reference to d is still a path
+        w["netnodes"][il.NODE][(other - base) & il.MASK] = (d + 1 - base) & il.MASK
+        assert il.hidden_path_text(nop, arch) == "", "a source kflow recorded for another target counted as kflow's"
+        del w["netnodes"][il.NODE][(other - base) & il.MASK]
         w["xrefs"][(other, d)] = False  # IDA's own branch from elsewhere
         assert il.hidden_path_text(nop, arch) == "", "IDA branches there from elsewhere"
         del w["xrefs"][(other, d)]
@@ -843,6 +847,12 @@ def hidden_path(path):
         assert il.hidden_path_text(nop, arch) == ""
         del w["code"]
         assert il.hidden_path_text(nop, arch) == want
+        # review s177 m2 (c): the site's own reference to its target that kflow did not record (the user's, or one a
+        # Remove left) is the pair kflow would add, not a path from elsewhere: the NOP still never jumps there
+        rec = w["netnodes"][il.NODE].pop((nop.code - base) & il.MASK)
+        assert w["xrefs"].get((nop.code, d)) is True
+        assert il.hidden_path_text(nop, arch) == want, "the site's own unrecorded reference counted as another path"
+        w["netnodes"][il.NODE][(nop.code - base) & il.MASK] = rec
         cases.append("NOP site 0x%X" % nop.code)
     if jmp is not None:
         f = il.ida_bytes.get_item_end(jmp.code)
