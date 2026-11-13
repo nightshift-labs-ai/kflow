@@ -280,6 +280,10 @@ class AnnotateAction(ida_kernwin.action_handler_t):
                 ida_kernwin.replace_wait_box("HIDECANCEL\nkflow: decompile check: waiting for IDA to analyse the new "
                                              "references, then decompiling again")
             line = selfcheck.finish(check)
+            try:  # review s184 #3: the slow part of the summary window, while the wait box is still up
+                nm = hidden_count(t, idalayer.current_arch())
+            except Exception:  # noqa: BLE001
+                nm = None
         finally:
             ida_kernwin.hide_wait_box()
         import ida_auto
@@ -297,7 +301,7 @@ class AnnotateAction(ida_kernwin.action_handler_t):
             flush_pseudocode()
             report("pseudocode comments on: functions decompiled from now on show the sites (display only)")
         if any(res.get(k) for k in ("comments", "kept_user_comments", "xrefs", "key_refs", "other_refs")):
-            summary_window(t, [counts] + ([line.strip().replace("[kflow] ", "", 1)] if line else []))
+            summary_window(t, [counts] + ([line.strip().replace("[kflow] ", "", 1)] if line else []), nm)
         return 1
 
     def update(self, ctx):
@@ -327,12 +331,12 @@ def hidden_count(t, arch):
     return hidden, total
 
 
-def summary_window(t, lines):
+def summary_window(t, lines, nm=None):
     """The window Annotate ends with (menu action only; the headless runner prints text): the headline, the counts
     and decompile-check line already in the Output window, and buttons to the two lists. Never in the way: if it
     fails, the Output window has the text (one line says so)."""
     try:
-        hidden, total = hidden_count(t, idalayer.current_arch())
+        hidden, total = nm if nm is not None else hidden_count(t, idalayer.current_arch())
         text = "\n".join(([HEADLINE % (hidden, total)] if total else []) + lines + ["Details: Output window"])
         answer = ida_kernwin.ask_buttons(*SUMMARY_BUTTONS, -1, text.replace("%", "%%"))  # printf-style format
         if answer == 1:

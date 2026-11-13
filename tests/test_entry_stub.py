@@ -562,7 +562,21 @@ n_log = len(log)
 other_ref = (get_func(nop.code).start_ea, nop.target) if nop is not None else None
 if other_ref is not None:
     w["xrefs"][other_ref] = False
+_real_hidden_count = m.hidden_count
+
+
+def _logged_hidden_count(*a):
+    log.append(("hidden_count", None))
+    return _real_hidden_count(*a)
+
+
+m.hidden_count = _logged_hidden_count
 assert m.AnnotateAction().activate(None) == 1 and hx_log["flushed"] == 1 and msgs("pseudocode comments on")
+m.hidden_count = _real_hidden_count
+# review s184 #3: the hidden-path count (slow on a distro kernel) runs while the wait box is still up
+_ev = [x[0] for x in log[n_log:] if x[0] in ("wait", "hide", "hidden_count")]
+assert _ev.count("hidden_count") == 1 and "wait" in _ev[:_ev.index("hidden_count")] and \
+    "hide" in _ev[_ev.index("hidden_count"):], _ev
 # the summary window's headline N of M: N is the oracle's count of NOP-state sites with a hidden target, M the number
 # of NOP-state sites
 _, nm = summary(log[n_log:])
