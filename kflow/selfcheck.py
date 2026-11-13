@@ -13,7 +13,7 @@ import ida_funcs
 from . import idalayer
 
 MAX_FUNCS = 20       # functions decompiled before and after Annotate
-TIME_LIMIT = 10.0    # seconds of decompiling in all; half of it for the BEFORE pass
+TIME_LIMIT = 10.0    # BEFORE starts no decompile after TIME_LIMIT/2 s; AFTER gets TIME_LIMIT/2 s more of its own
 MAX_FUNC_BYTES = 0x4000  # review s174 api MINOR 4: larger functions are not picked (one decompile could take tens of s)
 clock = time.monotonic
 
@@ -45,7 +45,8 @@ def gets_jump_ref(j, arch):
 
 def pick_functions(t, arch, limit=MAX_FUNCS):
     """Start addresses of up to `limit` functions with a static-key site that gets a new jump reference: functions
-    with a NOP site first, then spread evenly over the table (same choice every run)."""
+    spread evenly over the table (same choice every run; the list is ordered NOP-site functions first before spreading,
+    so NOP sites are not preferred once there are more than `limit`)."""
     nop, other = [], []
     seen = set()
     for j in t["jump"]:
