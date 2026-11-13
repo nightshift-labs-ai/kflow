@@ -661,6 +661,13 @@ if picked:
     if len(picked) > 1:
         assert "%d functions with static-key sites decompile before and after" % (len(picked) - 1) in got[0], got
     dc["always"], dc["after"] = set(), set()
+    # re-review s174 MINOR 2: nothing decompiled before Annotate → nothing to re-check, so no auto_wait() either
+    dc["always"] = set(picked)
+    n_waits = len(T.AUTO_WAITS)
+    got = check_lines()
+    dc["always"] = set()
+    assert len(T.AUTO_WAITS) == n_waits, "auto_wait with nothing to re-check"
+    assert len(got) == 1 and "none of %d functions with static-key sites decompiled before Annotate" % len(picked) in got[0], got
     # time bound: each decompile takes 1.5 s on a fake clock; BEFORE stops after 5 s, AFTER gets its own 5 s (s174 F1)
     ticks = [0.0]
 
