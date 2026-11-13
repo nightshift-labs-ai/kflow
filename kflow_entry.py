@@ -38,8 +38,9 @@ ISSUES_URL = "https://github.com/nightshift-labs-ai/kflow/issues"
 # wf / wf_filter: the WARN fall-through processor hook and decompiler filter, only while it is on for the open database;
 # wf_last: its last counts.
 # oops_text: the last text pasted into Go to oops/WARN line (the dialog's default the next time).
+# hidden_error: a hidden-path sentence failed (reported once; that comment is shown without it).
 STATE = {"tables": None, "pseudo": None, "hx": None, "hx_error": False, "hx_late": None, "wf": None, "wf_filter": None,
-         "wf_error": False, "wf_last": None, "oops_text": ""}
+         "wf_error": False, "wf_last": None, "oops_text": "", "hidden_error": False}
 NOP_WINDOW = 16  # bytes: how far a static-key site without a statement of its own may be from the next one that has one
 
 
@@ -124,8 +125,16 @@ def pseudo_text(p, kind, site, before=False):
         return idalayer.ex_comment(site, p["arch"])
     # + the hidden-path sentence, from the database's references when the function is printed (so also in a later
     # session): only where nothing but kflow leads to the path the site does not take here (judge item 4)
-    return (idalayer.jump_pseudo_text(site, idalayer.site_key_name(site, p["names"]), before)
-            + idalayer.hidden_path_text(site, p["arch"]))
+    text = idalayer.jump_pseudo_text(site, idalayer.site_key_name(site, p["names"]), before)
+    try:
+        hidden = idalayer.hidden_path_text(site, p["arch"])
+    except Exception:  # noqa: BLE001  one sentence must not cost the function all its kflow comments (review s177 N5)
+        hidden = ""
+        if not STATE["hidden_error"]:
+            STATE["hidden_error"] = True
+            report("hidden-path sentence failed at 0x%X, comment shown without it (shown once):\n%s"
+                   % (site.code, traceback.format_exc()))
+    return text + hidden
 
 
 def pseudocode_lines(cfunc):

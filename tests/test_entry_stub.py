@@ -471,6 +471,7 @@ if key is not None:
     when = "jumps to 0x%X when the key is %s" % (key.target, "off" if key.branch else "on")
     want = "kflow: static key %s (%s): %s" % (il.key_name(key.key), "likely" if key.branch else "unlikely", when)
     want += hidden_expected(key)
+    want_key = want
     got = decompile([key.code])[key.code]
     assert got == want and il.jump_comment(key).endswith("; " + when), (got, want, il.jump_comment(key))
     shown_texts.append(("static key", key.code, got))
@@ -523,6 +524,36 @@ if nop is not None:
     pm["sites"], pm["eas"] = {nop.code: saved_sites[nop.code]}, [nop.code]
     assert decompile([f.start_ea], entry=f.start_ea) == {f.start_ea: ""}, "a line before the only site got its comment"
     pm["sites"], pm["eas"] = saved_sites, saved_eas
+# re-review s177 N5: an exception inside the hidden-path sentence (idalayer.hidden_path_text) costs only that sentence:
+# the static-key comment shows without it, the function's other kflow comments stay, the hook does not fail, and the
+# error is reported once; an exception anywhere else in a comment still reaches the hook's own handler
+if key is not None:
+    real_hidden, real_jtext = il.hidden_path_text, il.jump_pseudo_text
+
+    def broken_hidden(j, arch=None):
+        raise RuntimeError("fake hidden-path failure")
+    il.hidden_path_text = broken_hidden
+    try:
+        n_rep = len(msgs("hidden-path sentence failed"))
+        plain_key = "kflow: static key %s (%s): %s" % (il.key_name(key.key), "likely" if key.branch else "unlikely", when)
+        both = {ea: (plain_key if ea == key.code else text) for _, ea, text in exact}
+        assert decompile(sorted(both)) == both, "a failing hidden-path sentence dropped kflow comments"
+        assert decompile(sorted(both)) == both
+        rep = msgs("hidden-path sentence failed")
+        assert len(rep) == n_rep + 1 and "0x%X" % key.code in rep[-1] and "fake hidden-path failure" in rep[-1], rep
+        il.hidden_path_text = real_hidden
+
+        def broken_jtext(j, name=None, before=False):
+            raise RuntimeError("fake jump-text failure")
+        il.jump_pseudo_text = broken_jtext
+        m.STATE["hx_error"] = False
+        cf = FakeCfunc(["void f(void)", "{", "  s0;", "}"], {key.code: ["s0"]}, {"s0": (2, 2)}, 0)
+        assert m.STATE["hx"].func_printed(cf) == 0 and m.STATE["hx_error"], "an error outside the sentence was swallowed"
+        assert cf.sv[2].line == "  s0;" and msgs("fake jump-text failure")
+        m.STATE["hx_error"] = False
+    finally:
+        il.hidden_path_text, il.jump_pseudo_text = real_hidden, real_jtext
+    assert decompile([key.code])[key.code] == want_key
 # a function with none of the sites
 assert decompile([1, 2, 3]) == {1: "", 2: "", 3: ""}
 # Annotate again: the map is rebuilt, the comments are not doubled
@@ -611,6 +642,7 @@ il.scan = real_scan
 w["segs"][-1].end_ea -= 0x1000
 # an exception inside the hook: caught, reported once, the decompiler gets 0
 hooks = m.STATE["hx"]
+n_failed = len(msgs("pseudocode comment failed"))  # the N5 check above made one, in an earlier plugin load
 
 
 class Broken:
@@ -621,7 +653,7 @@ class Broken:
 
 
 assert hooks.func_printed(Broken()) == 0 and hooks.func_printed(Broken()) == 0 and hooks.func_printed(None) == 0
-assert len(msgs("pseudocode comment failed")) == 1
+assert len(msgs("pseudocode comment failed")) == n_failed + 1
 # Remove: the comments go, cached decompilations are dropped
 flushed = hx_log["flushed"]
 assert m.RemoveAction().activate(None) == 1 and hx_log["flushed"] == flushed + 1 and m.STATE["pseudo"] is None
