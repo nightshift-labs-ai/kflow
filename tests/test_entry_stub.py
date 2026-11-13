@@ -427,16 +427,22 @@ def nop_len(ea):
 
 
 def hidden_expected(j):
-    """The hidden-path sentence for j's pseudocode text, worked out from the fake database itself (the cases one by
-    one: test_ida_stub.hidden_path): the other path is the target of a NOP-state site, the next instruction of a site
-    that is a jump; hidden when it is code with no ordinary flow into it and no jump reference to it except from the
-    site and kflow's recorded ones."""
+    """The hidden-path sentence for j's pseudocode text, worked out from the fake database itself by the code's rule
+    (the cases one by one: test_ida_stub.hidden_path). The other path is the target of a site that is not a jump there
+    now (NOP state), the next instruction of a site that is; none when that jump is to the next instruction itself
+    (eb 00 / b .+4: it runs it in both key states). The path is hidden when the site and the path are code, no
+    ordinary flow leads into the path, and every jump/call reference to it is kflow's: recorded by kflow from a source
+    that is not itself a jump there now, or (NOP state only) the site's own. At a site that is a jump, its own
+    reference to the next instruction counts as a path (re-review s177 N3)."""
     jmp = il.branches_to(j.code, j.target, arch)
     dst = sys.modules["ida_bytes"].get_item_end(j.code) if jmp else j.target
-    if dst in w.get("flow", ()) or not il.in_text(dst):
+    if (jmp and dst == j.target) or not il.in_text(j.code) or dst in w.get("flow", ()) or not il.in_text(dst):
         return ""
     base, rec = w.get("imagebase", 0), w["netnodes"].get(il.NODE, {})
-    if any(to == dst and f != j.code and rec.get((f - base) & il.MASK) != (dst - base) & il.MASK for f, to in w["xrefs"]):
+
+    def kflows(f):  # a reference kflow recorded, from a source that is not a jump to dst now (review s177 m1)
+        return rec.get((f - base) & il.MASK) == (dst - base) & il.MASK and not il.branches_to(f, dst, arch)
+    if any(to == dst and (jmp or f != j.code) and not kflows(f) for f, to in w["xrefs"]):
         return ""
     return T.HIDDEN_JMP % (dst, "on" if j.branch else "off") if jmp else T.HIDDEN_NOP % dst
 
@@ -554,6 +560,74 @@ if key is not None:
     finally:
         il.hidden_path_text, il.jump_pseudo_text = real_hidden, real_jtext
     assert decompile([key.code])[key.code] == want_key
+# re-review s177 N3: hidden_expected() has the code's rule. On a spread of this file's sites (NOP and jump state) it
+# gives what the code gives; at every site that jumps to the very next instruction (x86 'eb 00', arm64 'b .+4'; made at
+# a site when the file has none) it expects no sentence, with and without IDA's own reference from the site
+jumping = [j for j in t["jump"] if il.in_text(j.code) and il.branches_to(j.code, j.target, arch)]
+checked = [s for s in (key, nop) if s is not None] + t["jump"][::max(1, len(t["jump"]) // 150)] + \
+    jumping[::max(1, len(jumping) // 50)]
+for j in checked:
+    assert hidden_expected(j) == il.hidden_path_text(j, arch), ("the oracle is not the code's rule", hex(j.code))
+item_end = sys.modules["ida_bytes"].get_item_end
+# a site that is a jump, with a hidden next instruction: its own (unrecorded) reference there is a path, for both
+hj = next((j for j in jumping if j.target != item_end(j.code) and hidden_expected(j)), None)
+if hj is not None:
+    after = item_end(hj.code)
+    w["xrefs"][(hj.code, after)] = True
+    w["by_from"].setdefault(hj.code, set()).add(after)
+    assert hidden_expected(hj) == "" == il.hidden_path_text(hj, arch), hex(hj.code)
+    del w["xrefs"][(hj.code, after)]
+    w["by_from"][hj.code].discard(after)
+    assert hidden_expected(hj) == il.hidden_path_text(hj, arch) != ""
+# a source kflow recorded for the NOP site's target counts as kflow's, until it is itself a jump there (patched)
+other = next((a for a in all_eas if il.in_text(a) and nop is not None and a != nop.code), None)
+if other is not None:
+    d, rec = nop.target, w["netnodes"][il.NODE]
+    w["xrefs"][(other, d)] = True
+    w["by_from"].setdefault(other, set()).add(d)
+    rec[(other - w.get("imagebase", 0)) & il.MASK], kept = (d - w.get("imagebase", 0)) & il.MASK, rec.get(
+        (other - w.get("imagebase", 0)) & il.MASK)
+    assert hidden_expected(nop) == il.hidden_path_text(nop, arch) == T.HIDDEN_NOP % d
+    real_get = sys.modules["ida_bytes"].get_bytes
+    jb = (b"\xe9" + ((d - other - 5) & 0xFFFFFFFF).to_bytes(4, "little")) if arch == "x86_64" else \
+        (0x14000000 | (((d - other) >> 2) & 0x3FFFFFF)).to_bytes(4, "little")
+    sys.modules["ida_bytes"].get_bytes = lambda ea, n: jb[:n] if ea == other else real_get(ea, n)
+    assert il.branches_to(other, d, arch) and hidden_expected(nop) == "" == il.hidden_path_text(nop, arch)
+    sys.modules["ida_bytes"].get_bytes = real_get
+    del w["xrefs"][(other, d)]
+    w["by_from"][other].discard(d)
+    if kept is None:
+        del rec[(other - w.get("imagebase", 0)) & il.MASK]
+    else:
+        rec[(other - w.get("imagebase", 0)) & il.MASK] = kept
+eb00 = [j for j in jumping if j.target == item_end(j.code)]
+real_get, made = sys.modules["ida_bytes"].get_bytes, None
+if not eb00 and (nop or key) is not None:
+    s0 = (nop or key).code
+    raw = b"\xeb\x00" if arch == "x86_64" else (0x14000001).to_bytes(4, "little")
+    sys.modules["ida_bytes"].get_bytes = lambda ea, n: raw[:n] if ea == s0 else real_get(ea, n)
+    w.setdefault("item_end", {})[s0] = s0 + len(raw)
+    made = types.SimpleNamespace(code=s0, target=s0 + len(raw), branch=0)
+    eb00 = [made]
+for j in eb00:
+    assert il.branches_to(j.code, j.target, arch) and item_end(j.code) == j.target
+    for own in (False, True):  # IDA's own jump reference from the site to the next instruction, or none
+        if own:
+            w["xrefs"][(j.code, j.target)] = False
+            w["by_from"].setdefault(j.code, set()).add(j.target)
+        assert hidden_expected(j) == "" == il.hidden_path_text(j, arch), ("eb 00", hex(j.code), hidden_expected(j))
+        if own:
+            del w["xrefs"][(j.code, j.target)]
+            w["by_from"][j.code].discard(j.target)
+    if j is not made and one(j.code):
+        assert decompile([j.code])[j.code] == il.jump_pseudo_text(j, il.site_key_name(j)), hex(j.code)
+if made is not None:
+    sys.modules["ida_bytes"].get_bytes = real_get
+    del w["item_end"][made.code]
+print("OK oracle: agrees with the code at %d sites; no sentence at %d jump%s to the next instruction%s; jump site's own "
+      "reference to its next instruction: %s; recorded source patched to a jump: %s"
+      % (len(checked), len(eb00), "" if len(eb00) == 1 else "s", " (made)" if made is not None else "",
+         "0x%X" % hj.code if hj is not None else "no such site", "checked" if other is not None else "no NOP site"))
 # a function with none of the sites
 assert decompile([1, 2, 3]) == {1: "", 2: "", 3: ""}
 # Annotate again: the map is rebuilt, the comments are not doubled
