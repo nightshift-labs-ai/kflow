@@ -305,7 +305,13 @@ def install_ui(w, log):
         auto = types.ModuleType("ida_auto")
         auto.auto_is_ok = lambda: w.get("auto_ok", True)
         sys.modules["ida_auto"] = auto
+    if not hasattr(sys.modules["ida_auto"], "auto_wait"):  # s174: the decompile check waits for IDA before its AFTER pass
+        sys.modules["ida_auto"].auto_wait = lambda: AUTO_WAITS.append(len(DC_STATE["s"]["calls"]) if "s" in DC_STATE else -1)
     return types.SimpleNamespace(kw=kw, fn=fn, lines=lines_mod, get_func=get_func)
+
+
+AUTO_WAITS = []  # s174: one entry per fake ida_auto.auto_wait() call: how many decompile() calls had happened by then
+DC_STATE = {}
 
 
 def add_decompiler(hx, annotated):
@@ -314,6 +320,7 @@ def add_decompiler(hx, annotated):
     true; state["crash"] makes it raise RuntimeError. Results are cached per function like Hex-Rays' cache, so a
     second decompile() returns the first result unless mark_cfunc_dirty(ea) or clear_cached_cfuncs() erased it."""
     state = {"always": set(), "after": set(), "crash": None, "calls": [], "cache": {}, "dirty": 0}
+    DC_STATE["s"] = state
 
     class DecompilationFailure(Exception):
         pass

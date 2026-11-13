@@ -629,6 +629,8 @@ if picked:
     assert got == ["[kflow] decompile check: %d functions with static-key sites decompile before and after Annotate\n"
                    % len(picked)], got
     assert sorted(dc["calls"][-2 * len(picked):]) == sorted(picked * 2), "each picked function decompiled twice"
+    # review s174 api MAJOR 1: IDA's auto-analysis runs after Annotate and before the AFTER pass
+    assert T.AUTO_WAITS and T.AUTO_WAITS[-1] == len(dc["calls"]) - len(picked), (T.AUTO_WAITS[-3:], len(dc["calls"]))
     # fails after Annotate: blamed by name; the AFTER decompile is not the cached BEFORE result
     victim = picked[len(picked) // 2]
     dc["after"] = {victim}
@@ -669,9 +671,10 @@ else:
 # check is skipped (no decompile at all) and says why
 assert picked, "the gate kernel must give the check something to pick"
 w["auto_ok"] = False
-n_calls = len(dc["calls"])
+n_calls, n_waits = len(dc["calls"]), len(T.AUTO_WAITS)
 got = check_lines()
 w["auto_ok"] = True
+assert len(T.AUTO_WAITS) == n_waits, "no auto_wait while the check is skipped"
 assert got == ["[kflow] decompile check skipped: IDA's auto-analysis is still running; after it finishes, Remove "
                "annotations and Annotate again to run the check\n"], got
 assert len(dc["calls"]) == n_calls, "no decompile while auto-analysis runs"

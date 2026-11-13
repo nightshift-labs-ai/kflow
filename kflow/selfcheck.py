@@ -163,6 +163,11 @@ def finish(check):
     if check is None:
         return None
     try:
+        if check.skip is None and check.error is None:
+            import ida_auto
+            # review s174 api MAJOR 1: auto-analysis was idle before Annotate (start() checked it), so this only lets IDA
+            # react to the references Annotate just added; the AFTER pass then sees what F5 will see
+            ida_auto.auto_wait()
         check.after()
         return check.text()
     except Exception as e:  # noqa: BLE001

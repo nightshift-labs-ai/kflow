@@ -25,6 +25,7 @@ sys.modules["idapro"] = idapro
 auto_ok = [True]  # IDA's auto-analysis state after open_database (review s159 NIT 2: the runner asks IDA, not the flag)
 sys.modules["ida_auto"] = types.ModuleType("ida_auto")
 sys.modules["ida_auto"].auto_is_ok = lambda: auto_ok[0]
+sys.modules["ida_auto"].auto_wait = lambda: calls.append(("auto_wait",))
 import kflow_headless as H  # noqa: E402
 from kflow import idalayer as IL  # noqa: E402
 seen_done, _annotate_text = [], IL.annotate_text
