@@ -38,7 +38,7 @@ assert p.init() == 1 and [x[1] for x in log if x[0] == "reg"] == ACTION_NAMES
 assert m.STATE["hx"] is None
 assert m.AnnotateAction().activate(None) == 1
 assert [x for x in log if x[0] == "msg" and "jump references added: " in x[1] and "static-key site -> key references: " in x[1]], "Annotate reports its counts"
-HEADLINE = re.compile(r"^kflow: (\d+) of (\d+) static-key sites \(NOPs here\) jump to code nothing else in this "
+HEADLINE = re.compile(r"^kflow: (\d+) of (\d+) static-key sites \(NOPs here\) can jump to code nothing else in this "
                       r"database reaches\n")  # review s184 #4: M counts sites, not references
 
 
