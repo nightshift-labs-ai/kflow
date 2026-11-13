@@ -95,7 +95,7 @@ def main(argv=None):
         else:
             import ida_auto  # an existing database opened with --no-analysis may be fully analysed already
             from kflow import selfcheck
-            check = selfcheck.start(t, arch)  # with Hex-Rays: decompile a few functions before and after Annotate
+            check = selfcheck.start(t, arch, headless=True)  # with Hex-Rays: decompile a few functions before and after Annotate
             res = idalayer.annotate(t, arch)
             line = selfcheck.finish(check)
             print("[kflow] %s" % idalayer.annotate_text(res, analysis_done=ida_auto.auto_is_ok()))

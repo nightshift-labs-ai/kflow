@@ -799,3 +799,24 @@ print("OK pseudocode: comments on BUG/WARN %s, static key %s, NOP static key %s,
       "after Remove or at stale addresses after a rebase; no decompiler: no hook; decompiler loaded after kflow: hooked "
       "then; hook error reported once"
       % tuple("yes" if s is not None else "none in file" for s in (bug, key, nop, ex)))
+
+
+# re-review s175 code NIT 3: a hexrays_failure_t Hex-Rays never filled (code MERR_OK = 0, desc() 'ok') gives no reason,
+# so the blamed function is not shown as '(fn: ok)'; a filled one keeps its text on one line
+class _UnfilledHF(object):
+    code = 0
+
+    def desc(self):
+        return "ok"
+
+
+class _FilledHF(_UnfilledHF):
+    code = -1
+
+    def desc(self):
+        return "bad\n  thing"
+
+
+assert sc.failure_reason(_UnfilledHF()) is None, sc.failure_reason(_UnfilledHF())
+assert sc.failure_reason(_FilledHF()) == "bad thing"
+print("OK decompile check reason: none from an unfilled hexrays_failure_t")

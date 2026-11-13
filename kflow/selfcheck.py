@@ -89,7 +89,7 @@ def try_decompile(ea):
 
 def failure_reason(hf):
     """Hex-Rays' text in hf on one line, cut to REASON_CHARS; None when there is none."""
-    if hf is None:
+    if hf is None or getattr(hf, "code", None) == 0:  # re-review s175 NIT 3: code MERR_OK = Hex-Rays never filled it
         return None
     try:
         text = " ".join(str(hf.desc()).split())
@@ -112,8 +112,9 @@ def fname(ea):
 class DecompileCheck:
     """before() runs before Annotate, after() after it, text() gives the summary line (None without a decompiler)."""
 
-    def __init__(self, seconds=TIME_LIMIT):
+    def __init__(self, seconds=TIME_LIMIT, headless=False):
         self.seconds = seconds
+        self.headless = headless  # tools/kflow_headless.py: name its --remove, not the menu action
         self.picked = []
         self.before_ok = {}
         self.after_ok = {}
@@ -174,9 +175,11 @@ class DecompileCheck:
             text = "decompile check: none of %s with static-key sites decompiled before Annotate" % n(len(self.before_ok))
         elif blamed:
             text = ("decompile check: %d of %s decompiled before Annotate but %s after (%s): kflow's jump "
-                    "references may confuse Hex-Rays there; kflow: Remove annotations takes them out"
+                    "references may confuse Hex-Rays there; %s"
                     % (len(blamed), n(len(checked)), "fails" if len(blamed) == 1 else "fail",  # re-review s174 NIT 3
-                       ", ".join(fname(ea) + (": " + self.reasons[ea] if ea in self.reasons else "") for ea in blamed)))
+                       ", ".join(fname(ea) + (": " + self.reasons[ea] if ea in self.reasons else "") for ea in blamed),
+                       "run with --remove to take them out" if self.headless
+                       else "kflow: Remove annotations takes them out"))
         else:
             text = "decompile check: %s with static-key sites %s before and after Annotate" % (
                 n(len(checked)), "decompiles" if len(checked) == 1 else "decompile")
@@ -188,19 +191,25 @@ class DecompileCheck:
         return text
 
 
-def start(t, arch):
-    """A DecompileCheck that has done its BEFORE pass, or None without the decompiler. Call before annotate()."""
+def start(t, arch, headless=False):
+    """A DecompileCheck that has done its BEFORE pass, or None without the decompiler. Call before annotate().
+    headless=True (tools/kflow_headless.py): the skip lines give its command-line steps instead of menu actions."""
     if not hexrays():
         return None
-    check = DecompileCheck()
+    check = DecompileCheck(headless=headless)
     try:
         if idalayer.annotated():  # re-review s175: BEFORE would see kflow's own references and blame them on 'before'
-            check.skip = ("kflow's references from an earlier Annotate are still in the database; Remove annotations "
+            check.skip = ("kflow's references from an earlier run are still in the database; run with --remove, then "
+                          "again to run the check" if headless else
+                          "kflow's references from an earlier Annotate are still in the database; Remove annotations "
                           "and Annotate again to run the check")
             return check
         import ida_auto
         if not ida_auto.auto_is_ok():  # BEFORE and AFTER would compare a database that is still changing
-            check.skip = ("IDA's auto-analysis is still running; after it finishes, Remove annotations and Annotate "
+            # re-review s175 code NIT 1 / claims NIT 5: headless, analysis was skipped (--no-analysis), not running
+            check.skip = ("IDA's auto-analysis has not finished (--no-analysis skips it); run with --remove, then "
+                          "again without --no-analysis to run the check" if headless else
+                          "IDA's auto-analysis is still running; after it finishes, Remove annotations and Annotate "
                           "again to run the check")
             return check
     except Exception as e:  # noqa: BLE001  (the check must never stop Annotate)

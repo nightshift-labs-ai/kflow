@@ -93,9 +93,33 @@ lines = [x for x in out.getvalue().splitlines() if "decompile check" in x]
 assert len(lines) == 1 and lines[0].startswith("[kflow] decompile check: "), out.getvalue()
 if picked:
     assert ("1 of %d functions decompiled before Annotate but fails after" % len(picked)) in lines[0], lines
+    assert "run with --remove to take them out" in lines[0] and "kflow: Remove annotations" not in lines[0], lines
+with contextlib.redirect_stdout(io.StringIO()):
+    assert H.main([sys.argv[1], "--remove"]) == 0
+first_line = lines[0]
+
+
+def headless_check_line(argv):
+    o = io.StringIO()
+    with contextlib.redirect_stdout(o):
+        assert H.main(argv) == 0
+    got = [x for x in o.getvalue().splitlines() if "decompile check" in x]
+    assert len(got) == 1, o.getvalue()
+    return got[0]
+
+
+# re-review s175 code NIT 1 / claims NIT 5: headless skip lines give headless steps, not menu actions
+auto_ok[0] = False  # --no-analysis on a fresh file: IDA's auto-analysis did not run
+line = headless_check_line([sys.argv[1], "--no-analysis"])
+auto_ok[0] = True
+assert line.startswith("[kflow] decompile check skipped: ") and "--no-analysis" in line and "--remove" in line, line
+assert "Remove annotations" not in line and "Annotate again" not in line and "still running" not in line, line
+line = headless_check_line([sys.argv[1]])  # kflow's references from the previous run are still in the database
+assert line.startswith("[kflow] decompile check skipped: ") and "--remove" in line, line
+assert "Remove annotations" not in line and "Annotate again" not in line, line
 with contextlib.redirect_stdout(io.StringIO()):
     assert H.main([sys.argv[1], "--remove"]) == 0
 sys.modules["ida_hexrays"] = None
 w.pop("func_of")
-print("OK headless decompile check: %s" % lines[0])
+print("OK headless decompile check: %s" % first_line)
 print("OK headless: annotate + remove, database saved both times")
