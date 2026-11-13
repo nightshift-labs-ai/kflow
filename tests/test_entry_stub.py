@@ -648,7 +648,7 @@ if picked:
     victim = picked[len(picked) // 2]
     dc["after"] = {victim}
     got = check_lines()
-    assert len(got) == 1 and ("1 of %d functions decompiled before Annotate but fail after (%s)"
+    assert len(got) == 1 and ("1 of %d functions decompiled before Annotate but fails after (%s)"
                               % (len(picked), ui.fn.get_func_name(victim) or "0x%X" % victim)) in got[0], got
     assert "kflow: Remove annotations takes them out" in got[0], got
     # review s174 api MINOR 6: the same when decompile() returns None instead of raising (current IDA)

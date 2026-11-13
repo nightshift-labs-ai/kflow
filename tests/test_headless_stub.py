@@ -92,7 +92,7 @@ with contextlib.redirect_stdout(out):
 lines = [x for x in out.getvalue().splitlines() if "decompile check" in x]
 assert len(lines) == 1 and lines[0].startswith("[kflow] decompile check: "), out.getvalue()
 if picked:
-    assert ("1 of %d functions decompiled before Annotate but fail after" % len(picked)) in lines[0], lines
+    assert ("1 of %d functions decompiled before Annotate but fails after" % len(picked)) in lines[0], lines
 with contextlib.redirect_stdout(io.StringIO()):
     assert H.main([sys.argv[1], "--remove"]) == 0
 sys.modules["ida_hexrays"] = None

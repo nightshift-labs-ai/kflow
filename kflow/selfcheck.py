@@ -136,9 +136,10 @@ class DecompileCheck:
         if not good:
             text = "decompile check: none of %s with static-key sites decompiled before Annotate" % n(len(self.before_ok))
         elif blamed:
-            text = ("decompile check: %d of %s decompiled before Annotate but fail after (%s): kflow's jump "
+            text = ("decompile check: %d of %s decompiled before Annotate but %s after (%s): kflow's jump "
                     "references may confuse Hex-Rays there; kflow: Remove annotations takes them out"
-                    % (len(blamed), n(len(checked)), ", ".join(fname(ea) for ea in blamed)))
+                    % (len(blamed), n(len(checked)), "fails" if len(blamed) == 1 else "fail",  # re-review s174 NIT 3
+                       ", ".join(fname(ea) for ea in blamed)))
         else:
             text = "decompile check: %s with static-key sites %s before and after Annotate" % (
                 n(len(checked)), "decompiles" if len(checked) == 1 else "decompile")
