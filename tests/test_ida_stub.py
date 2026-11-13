@@ -34,7 +34,8 @@ FF_FLOW = 0x10000  # bytes.hpp: "Exec flow from prev instruction"
 X86_LEN = [(b"\xe9", 5), (b"\xeb", 2), (b"\x0f\x1f\x44\x00\x00", 5), (b"\x66\x90", 2), (b"\x0f\x0b", 2), (b"\xe8", 5)]
 # ida_ua.decode_insn: the instructions the fake decodes (ida_allins.pyi codes) and which of them the fake processor
 # modules mark CF_STOP (ida_idp.has_insn_feature). arm64 B and B.cond share ARM_b, as in IDA's ARM module; brk is not
-# marked (IDA's answer is not known: kflow/warnflow.py only logs it); w["arm_b_stop"] False: B is not marked either
+# marked (IDA's answer is not known: kflow/warnflow.py only logs it); w["arm_b_stop"] False: B is not marked either;
+# w["arm_ret_stop"] False: ret is not marked either. br, eret, retaa... decode as ARM_NOP here: never marked
 NN_CALL, NN_INT3, NN_JMP, NN_MOV, NN_NOP, NN_RETN, NN_UD2 = 16, 48, 86, 122, 129, 159, 632
 ARM_RET, ARM_NOP, ARM_B, ARM_BL, ARM_BRK = 1, 2, 3, 4, 542
 CF_STOP = 1
@@ -274,8 +275,8 @@ def install(w, names=True):
         return size
     ua.insn_t, ua.decode_insn = insn_t, decode_insn
     idp.CF_STOP = CF_STOP
-    idp.has_insn_feature = lambda icode, bit: bool(bit & CF_STOP) and (icode in (NN_JMP, NN_RETN, NN_UD2, ARM_RET) or (
-        icode == ARM_B and w.get("arm_b_stop", True)))
+    idp.has_insn_feature = lambda icode, bit: bool(bit & CF_STOP) and (icode in (NN_JMP, NN_RETN, NN_UD2) or (
+        icode == ARM_B and w.get("arm_b_stop", True)) or (icode == ARM_RET and w.get("arm_ret_stop", True)))
     sys.modules.update(m)
     sys.modules.pop("kflow.idalayer", None)
     return importlib.import_module("kflow.idalayer")
@@ -982,10 +983,18 @@ def target_blocks(path):
         w["arm_b_stop"] = True
         assert block(nop + brk + nop)[0] == (8, 2, False)  # brk #0x800, a BUG/WARN trap
         assert block(nop + ret + nop)[0] == (8, 2, False)
+        w["arm_ret_stop"] = False  # if IDA's ARM module did not mark ret as CF_STOP: the bytes still end the block
+        assert block(nop + ret + nop)[0] == (8, 2, False), "ret ended the block only because the fake marks it CF_STOP"
+        w["arm_ret_stop"] = True
+        # br x16, eret, retaa, retab, eretaa, eretab: decided by their bytes, whatever IDA marks (review s178 MINOR 2)
+        for word in (0xD61F0200, 0xD69F03E0, 0xD65F0BFF, 0xD65F0FFF, 0xD69F0BFF, 0xD69F0FFF):
+            assert block(nop + word.to_bytes(4, "little") + nop)[0] == (8, 2, False), "%08x did not end the block" % word
+        blr = (0xD63F0200).to_bytes(4, "little")  # blr x16 returns to the next instruction: not an end
+        assert block(nop + blr + ret)[0] == (12, 3, False)
         w["insns"] = {a + 4: (0, 0)}
         assert block(nop + nop + ret) == (None, "?")
         del w["insns"]
-        kinds = "B, brk, ret end it (B.cond does not)"
+        kinds = "B, brk, ret, br, eret end it (B.cond, blr do not)"
     full = (len(seq), 3, False)
     # a join: IDA's jump reference from elsewhere to the second instruction ends the block before it
     w["xrefs"][(other, starts[1])] = False

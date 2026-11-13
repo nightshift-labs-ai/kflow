@@ -352,14 +352,22 @@ def hidden_path_text(j, arch=None):
 def _stops(insn, raw, arch):
     """True when the decoded instruction does not pass execution to the next one: IDA's processor module marks it
     CF_STOP (x86_64 jmp, ret, ud2...). On arm64 the bytes decide for B (stops) and B.cond (does not: IDA's ARM module
-    gives B and B.cond one instruction code), and brk, the BUG/WARN trap, stops as ud2 does in tools/reach.py."""
+    gives B and B.cond one instruction code), for ret, br and eret (and their pointer-authentication forms; IDA's ARM
+    module may decide these in its emulator, which is not checked here) and brk, the BUG/WARN trap, stops as ud2 does
+    in tools/reach.py."""
     if arch == "aarch64" and len(raw) >= 4:
         word = int.from_bytes(raw[:4], "little")
         if word >> 24 == 0x54:  # B.cond, BC.cond
             return False
         if word >> 26 == 0b000101 or word & 0xFFE0001F == 0xD4200000:  # B; brk #imm
             return True
+        if word & 0xFFFFFC1F in (0xD65F0000, 0xD61F0000) or word in _ARM64_STOP_WORDS:  # ret Xn, br Xn; eret...
+            return True
     return bool(ida_idp.has_insn_feature(insn.itype, ida_idp.CF_STOP))
+
+
+# arm64 eret, retaa, retab, eretaa, eretab (fixed encodings)
+_ARM64_STOP_WORDS = frozenset((0xD69F03E0, 0xD65F0BFF, 0xD65F0FFF, 0xD69F0BFF, 0xD69F0FFF))
 
 
 def target_block(ea, arch=None):
