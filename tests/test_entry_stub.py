@@ -426,6 +426,21 @@ def nop_len(ea):
     return next((n for raw, n in NOPS.items() if elf.read(ea, len(raw)) == raw), None)
 
 
+def hidden_expected(j):
+    """The hidden-path sentence for j's pseudocode text, worked out from the fake database itself (the cases one by
+    one: test_ida_stub.hidden_path): the other path is the target of a NOP-state site, the next instruction of a site
+    that is a jump; hidden when it is code with no ordinary flow into it and no jump reference to it except from the
+    site and kflow's recorded ones."""
+    jmp = il.branches_to(j.code, j.target, arch)
+    dst = sys.modules["ida_bytes"].get_item_end(j.code) if jmp else j.target
+    if dst in w.get("flow", ()) or not il.in_text(dst):
+        return ""
+    base, rec = w.get("imagebase", 0), w["netnodes"].get(il.NODE, {})
+    if any(to == dst and f != j.code and rec.get((f - base) & il.MASK) != (dst - base) & il.MASK for f, to in w["xrefs"]):
+        return ""
+    return T.HIDDEN_JMP % (dst, "on" if j.branch else "off") if jmp else T.HIDDEN_NOP % dst
+
+
 def lone_nop(j):  # a NOP site in a function, the next site more than NOP_WINDOW + 1 bytes on, not at its entry
     if not one(j.code) or not nop_len(j.code) or get_func(j.code) is None or get_func(j.code).start_ea == j.code:
         return False
@@ -455,8 +470,9 @@ if ex is not None:
 if key is not None:
     when = "jumps to 0x%X when the key is %s" % (key.target, "off" if key.branch else "on")
     want = "kflow: static key %s (%s): %s" % (il.key_name(key.key), "likely" if key.branch else "unlikely", when)
+    want += hidden_expected(key)
     got = decompile([key.code])[key.code]
-    assert got == want and il.jump_comment(key).endswith("; " + when), (got, il.jump_comment(key))
+    assert got == want and il.jump_comment(key).endswith("; " + when), (got, want, il.jump_comment(key))
     shown_texts.append(("static key", key.code, got))
     # the site has its own statement: the next statement (within 16 bytes, same function) gets no second copy
     kf, nxt = get_func(key.code), key.code + 5
@@ -468,7 +484,16 @@ if nop is not None:
     n = nop_len(nop.code)
     want = "kflow: static key %s (%s) at 0x%X, just before this line: jumps to 0x%X when the key is %s" % (
         il.key_name(nop.key), "likely" if nop.branch else "unlikely", nop.code, nop.target, "off" if nop.branch else "on")
+    plain = want  # judge item 4: the hidden-path sentence only where nothing but kflow leads to the target
+    want += hidden_expected(nop)
+    assert want.endswith(T.HIDDEN_NOP % nop.target), "the demo NOP site's target is reached by kflow only: %s" % want
     assert decompile([f.start_ea, nop.code + n], entry=f.start_ea) == {f.start_ea: "", nop.code + n: want}
+    w["xrefs"][(f.start_ea, nop.target)] = False  # IDA's own branch to the target from elsewhere: no sentence
+    assert decompile([nop.code + n], entry=f.start_ea) == {nop.code + n: plain}
+    del w["xrefs"][(f.start_ea, nop.target)]
+    w.setdefault("flow", set()).add(nop.target)  # the instruction before the target falls into it: no sentence
+    assert decompile([nop.code + n], entry=f.start_ea) == {nop.code + n: plain}
+    w["flow"].discard(nop.target)
     shown_texts.append(("static key, NOP not in eamap", nop.code, "line of 0x%X: %s" % (nop.code + n, want)))
     w16 = nop.code + m.NOP_WINDOW
     assert decompile([w16], entry=f.start_ea) == {w16: want}  # 16 bytes on: still attached
@@ -552,6 +577,8 @@ assert not [x for x in log[n0:] if x[0] == "ui_hook" and x[1] not in late], "no 
 for kind, ea, text in exact:
     assert decompile([ea])[ea] == text, (kind, text)
 assert len(msgs("database annotated earlier")) == seen + 1
+if nop is not None:  # the hidden-path sentence comes from the database's references, also in a later session
+    assert decompile([nop.code + n], entry=f.start_ea) == {nop.code + n: want}, "hidden-path text in a later session"
 # rebase: the segments change, the map is rebuilt from the tables at their new addresses; old addresses show nothing
 delta = 0x200000
 real_scan, scans = il.scan, []

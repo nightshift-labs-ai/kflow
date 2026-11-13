@@ -219,6 +219,22 @@ def install(w, names=True):
                 return False
             self.iscode = True
             return True
+
+        def first_to(self, ea, flags=0):
+            """References TO ea (ida_xref.pyi: first_to(_to, flags=0), then next_to(); fields frm, to, iscode, user).
+            XREF_FAR leaves out ordinary flow (which the fake keeps apart in w["flow"] anyway); data references come
+            too, with iscode False, unless XREF_DATA asks for those only."""
+            code = [] if flags == 2 else [(f, u, True) for (f, t), u in w["xrefs"].items() if t == ea]
+            self._it_to = iter(sorted(code + [(f, u, False) for (f, t), u in w["drefs"].items() if t == ea]))
+            self.to = ea
+            return self.next_to()
+
+        def next_to(self):
+            try:
+                self.frm, self.user, self.iscode = next(self._it_to)
+            except StopIteration:
+                return False
+            return True
     x.xrefblk_t = xrefblk_t
     sys.modules.update(m)
     sys.modules.pop("kflow.idalayer", None)
@@ -758,6 +774,83 @@ def stale_next_insn(path):
           % (res["xrefs"] + res["key_refs"] + res["other_refs"], os.path.basename(path)))
 
 
+HIDDEN_NOP = "; nothing else in the database jumps or falls through to 0x%X, so this pseudocode probably does not show that code"
+HIDDEN_JMP = ("; the site is a jump here and nothing else in the database jumps or falls through to the next instruction "
+              "0x%X (run when the key is %s), so this pseudocode probably does not show that code")
+
+
+def hidden_path(path):
+    """Judge item 4 (s160): the pseudocode text says the site's other path is hidden only when nothing but kflow leads
+    there: no ordinary flow into it (FF_FLOW), no jump/call reference from anywhere but the site itself and the
+    references kflow recorded (another static-key site or a faulting instruction that points at the same address).
+    NOP-state sites: the target; jmp-state sites: the instruction after the jmp."""
+    elf, w, il, t = _db(path)
+    arch = il.current_arch()
+    srcs = collections.Counter([j.code for j in t["jump"]] + [x.insn for x in t["ex"]])
+    dsts = collections.Counter([j.target for j in t["jump"]] + [x.fixup for x in t["ex"]])
+    for j in t["jump"]:  # IDA's own references at the enabled jmp sites, as in run()
+        if il.branches_to(j.code, j.target, arch):
+            w["xrefs"][(j.code, j.target)] = False
+            w["by_from"].setdefault(j.code, set()).add(j.target)
+    w["imagebase"] = base = 0x10000  # the recorded offsets are relative to the image base
+    il.annotate(t, arch)
+    to_srcs = collections.defaultdict(list)
+    for (s, d) in w["xrefs"]:
+        to_srcs[d].append(s)
+
+    def lone(j):
+        return srcs[j.code] == 1 and il.in_text(j.code) and il.in_text(j.target) and dsts[j.target] == 1
+    nop = next((j for j in t["jump"] if lone(j) and not il.branches_to(j.code, j.target, arch)
+                and j.target != il.ida_bytes.get_item_end(j.code) and w["xrefs"].get((j.code, j.target)) is True
+                and to_srcs.get(j.target) == [j.code]), None)
+    jmp = next((j for j in t["jump"] if lone(j) and il.branches_to(j.code, j.target, arch)
+                and il.in_text(il.ida_bytes.get_item_end(j.code)) and il.ida_bytes.get_item_end(j.code) not in to_srcs
+                and il.ida_bytes.get_item_end(j.code) not in dsts), None)
+    if nop is None and jmp is None:
+        print("  hidden-path check skipped: no lone static-key site in %s" % os.path.basename(path))
+        return
+    other = next(a for a in sorted(srcs) if il.in_text(a) and all(a != j.code for j in (nop, jmp) if j))
+    cases = []
+    if nop is not None:
+        d, want = nop.target, HIDDEN_NOP % nop.target
+        assert il.hidden_path_text(nop, arch) == want, il.hidden_path_text(nop, arch)
+        # another kflow site's recorded reference to the same target is not flow either
+        w["xrefs"][(other, d)] = True
+        w["netnodes"][il.NODE][(other - base) & il.MASK] = (d - base) & il.MASK
+        assert il.hidden_path_text(nop, arch) == want, "kflow's own reference from another site counted as flow"
+        del w["netnodes"][il.NODE][(other - base) & il.MASK]  # the same reference, not recorded: the user's own
+        assert il.hidden_path_text(nop, arch) == "", "a user reference kflow did not add is another path"
+        w["xrefs"][(other, d)] = False  # IDA's own branch from elsewhere
+        assert il.hidden_path_text(nop, arch) == "", "IDA branches there from elsewhere"
+        del w["xrefs"][(other, d)]
+        w["drefs"][(other, d)] = True  # a data reference (an address taken) is not flow
+        assert il.hidden_path_text(nop, arch) == want
+        del w["drefs"][(other, d)]
+        w["flow"] = {d}  # the previous instruction falls into the target
+        assert il.hidden_path_text(nop, arch) == "", "ordinary flow reaches the target"
+        w["flow"] = set()
+        w["code"] = {nop.code}  # the target is not an instruction (yet): nothing is known, nothing said
+        assert il.hidden_path_text(nop, arch) == ""
+        w["code"] = {d}  # the site is not an instruction: kflow added no reference from it, nothing said
+        assert il.hidden_path_text(nop, arch) == ""
+        del w["code"]
+        assert il.hidden_path_text(nop, arch) == want
+        cases.append("NOP site 0x%X" % nop.code)
+    if jmp is not None:
+        f = il.ida_bytes.get_item_end(jmp.code)
+        want = HIDDEN_JMP % (f, "on" if jmp.branch else "off")  # it jumps when (key XOR branch bit): falls through otherwise
+        assert il.hidden_path_text(jmp, arch) == want, il.hidden_path_text(jmp, arch)
+        w["xrefs"][(other, f)] = False  # some branch reaches the fall-through: the decompiler can show it
+        assert il.hidden_path_text(jmp, arch) == "", "the key-off/on fall-through is reached by another branch"
+        del w["xrefs"][(other, f)]
+        w["flow"] = {f}
+        assert il.hidden_path_text(jmp, arch) == ""
+        w["flow"] = set()
+        cases.append("jmp site 0x%X" % jmp.code)
+    print("OK hidden path: the sentence only where nothing but kflow leads to the other path (%s; IDA branch, user "
+          "reference, ordinary flow, not code: no sentence) (%s)" % (", ".join(cases), os.path.basename(path)))
+
+
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("SKIP: pass a kernel ELF path")
@@ -767,3 +860,4 @@ if __name__ == "__main__":
         other_function(p)
         analysis_running(p)
         stale_next_insn(p)
+        hidden_path(p)

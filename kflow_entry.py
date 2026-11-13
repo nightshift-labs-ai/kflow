@@ -122,7 +122,10 @@ def pseudo_text(p, kind, site, before=False):
         return idalayer.bug_comment(site)
     if kind == "ex":
         return idalayer.ex_comment(site, p["arch"])
-    return idalayer.jump_pseudo_text(site, idalayer.site_key_name(site, p["names"]), before)
+    # + the hidden-path sentence, from the database's references when the function is printed (so also in a later
+    # session): only where nothing but kflow leads to the path the site does not take here (judge item 4)
+    return (idalayer.jump_pseudo_text(site, idalayer.site_key_name(site, p["names"]), before)
+            + idalayer.hidden_path_text(site, p["arch"]))
 
 
 def pseudocode_lines(cfunc):

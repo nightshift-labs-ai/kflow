@@ -283,6 +283,52 @@ def jump_pseudo_text(j, name=None, before=False):
                                              jump_when(j))
 
 
+def code_refs_to(ea):
+    """The sources of the jump/call references to ea (ordinary flow excluded; data references left out)."""
+    out = []
+    xb = ida_xref.xrefblk_t()
+    ok = xb.first_to(ea, ida_xref.XREF_FAR)
+    while ok:
+        if xb.iscode:
+            out.append(xb.frm)
+        ok = xb.next_to()
+    return out
+
+
+def other_path_to(dst, site):
+    """True unless dst is an instruction that nothing in the database leads to but kflow: no ordinary flow from the
+    instruction before it (FF_FLOW) and no jump/call reference to it except from site and the references kflow
+    recorded (other static-key sites or faulting instructions pointing at the same address). True as well when dst
+    is not an instruction: then nothing is known."""
+    flags = ida_bytes.get_flags(dst)
+    if not ida_bytes.is_code(flags) or ida_bytes.is_flow(flags):
+        return True
+    node = ida_netnode.netnode(NODE, 0, False)
+    recorded = node.index() != ida_netnode.BADNODE
+    base = ida_nalt.get_imagebase()
+    val = (dst - base) & MASK
+    return any(src != site and not (recorded and node.altval((src - base) & MASK) == val) for src in code_refs_to(dst))
+
+
+def hidden_path_text(j, arch=None):
+    """'; ...' when the path this static-key site does not take in the database is reached by nothing but kflow, else
+    ''. A NOP-state site never runs its target here; a site that is a jump now never falls through to the next
+    instruction (run when the key is in the other state). The decompiler part ('probably') is not checked in IDA."""
+    if not is_insn(j.code):
+        return ""
+    if branches_to(j.code, j.target, arch or current_arch()):
+        after = ida_bytes.get_item_end(j.code)
+        if other_path_to(after, j.code):
+            return ""
+        return ("; the site is a jump here and nothing else in the database jumps or falls through to the next "
+                "instruction 0x%X (run when the key is %s), so this pseudocode probably does not show that code"
+                % (after, "on" if j.branch else "off"))
+    if other_path_to(j.target, j.code):
+        return ""
+    return ("; nothing else in the database jumps or falls through to 0x%X, so this pseudocode probably does not show "
+            "that code" % j.target)
+
+
 def ex_comment(x, arch):
     if x.handler is not None:
         t = " (handler %s)" % name_or_hex(x.handler)
