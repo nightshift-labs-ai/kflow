@@ -644,6 +644,15 @@ if picked:
     sc.MAX_FUNC_BYTES = real_max
     assert big not in small and all(get_func(ea).end_ea - get_func(ea).start_ea <= get_func(big).end_ea - get_func(big).start_ea - 1
                                     for ea in small), (hex(big), len(small))
+    # re-review s175 claims NIT 3: the cap is inclusive ('functions over 16 KB are not picked'): a function of exactly
+    # MAX_FUNC_BYTES is still picked, one byte less is not (no limit, so the even spread cannot drop it)
+    size = sc.ida_funcs.calc_func_size(get_func(big))
+    sc.MAX_FUNC_BYTES = size
+    exact = sc.pick_functions(t, arch, limit=1 << 30)
+    sc.MAX_FUNC_BYTES = size - 1
+    below = sc.pick_functions(t, arch, limit=1 << 30)
+    sc.MAX_FUNC_BYTES = real_max
+    assert big in exact and big not in below, (hex(big), size, len(exact), len(below))
 
 
 def check_lines(remove=True):
