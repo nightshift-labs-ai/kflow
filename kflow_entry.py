@@ -308,7 +308,7 @@ class AnnotateAction(ida_kernwin.action_handler_t):
         return ida_kernwin.AST_ENABLE_ALWAYS
 
 
-HEADLINE = "kflow: %d of %d static-key jump references lead to code nothing else in this database reaches"
+HEADLINE = "kflow: %d of %d static-key sites (NOPs here) jump to code nothing else in this database reaches"
 SUMMARY_BUTTONS = ("Static-key sites", "BUG/WARN sites", "Close")  # ask_buttons: 1, 0, -1 (Esc; the default)
 
 
