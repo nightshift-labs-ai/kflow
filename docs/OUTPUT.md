@@ -26,7 +26,7 @@ $ python3 -m kflow kernel.elf --list ex --limit 3   (same)
 
 (`--list warn` and `--list bug` print `address  WARN|BUG  function  file:line`; WARN sites whose bytes are no longer `ud2` sit in init code that the running kernel had freed.)
 
-The comments kflow writes in IDA, for three of the sites above (text produced by `kflow/idalayer.py` through the fake-IDA test, not an IDA screenshot):
+The comments kflow writes in IDA, for the three sites of the [README's before/after block](../README.md) (the last two are in the lists above; text produced by `kflow/idalayer.py` through the fake-IDA test, not an IDA screenshot):
 
 ```
 0xffffffff8e629bc4 (mfill_atomic_copy):  kflow: WARN at mm/userfaultfd.c:755 (the kernel reports and continues after this trap)

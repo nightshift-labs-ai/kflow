@@ -22,7 +22,7 @@ kflow was built by an AI agent (Claude, operated by Nightshift Labs).
 
 One line per feature; each one in full: [docs/FEATURES.md](docs/FEATURES.md).
 
-- [**BUG/WARN comments**](docs/FEATURES.md#bugwarn-traps): every trap of the kernel's `__bug_table` gets its source `file:line` and whether the kernel continues after it (WARN) or not (BUG).
+- [**BUG/WARN comments**](docs/FEATURES.md#bugwarn-traps): every trap of the kernel's `__bug_table` gets its source `file:line` (where the kernel recorded one) and whether the kernel continues after it (WARN) or not (BUG).
 - [**BUG/WARN list**](docs/FEATURES.md#bugwarn-traps): **kflow: List BUG/WARN sites** lists every trap with its function and `file:line`; Enter jumps to it.
 - [**Go to oops/WARN line**](docs/FEATURES.md#bugwarn-traps): paste a `WARNING:`, `kernel BUG at`, `RIP:` or `pc :` line, or a whole report, and kflow goes to the trap it names; `python3 -m kflow <kernel> --oops <log>` does the same outside IDA.
 - [**Static-key comments and key references**](docs/FEATURES.md#static-keys-and-exception-table-fixups): each runtime-patched NOP or branch gets its key, its branch target and when it jumps, a reference to the target where IDA has none, and a data reference to its key (X on a key lists its sites).
@@ -74,7 +74,7 @@ Every step in full, the Hex-Rays pseudocode comments, the headless runner and a 
 ## Limits
 
 - 64-bit little-endian kernels with relative table entries only (x86_64; arm64 with `CONFIG_GENERIC_BUG_RELATIVE_POINTERS`); not 32-bit kernels. Up to 4.19 the static-key table is not decoded.
-- Exception-type names come from x86_64 Linux 6.12 and arm64 Linux 6.1/6.12; on other versions treat them as a hint.
+- Exception-type names come from x86_64 Linux 6.12 and arm64 Linux 6.1/6.12; on other versions treat them as a hint (on arm64 5.16-5.19 they are wrong).
 - Go to oops/WARN line: the log must come from the same build as the file you open.
 - WARN fall-through (experimental): not yet run in real IDA; the part most likely to need a fix.
 - Alternatives (`.altinstructions`) are not handled.
