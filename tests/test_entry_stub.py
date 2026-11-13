@@ -611,6 +611,8 @@ picked = sc.pick_functions(t, arch)
 assert len(picked) <= sc.MAX_FUNCS and len(set(picked)) == len(picked)
 assert all(get_func(ea) is not None and get_func(ea).start_ea == ea for ea in picked)
 # review s174 api MINOR 4: very large functions are not picked (one huge decompile could blow the time budget)
+assert sc.MAX_FUNC_BYTES == 0x4000, "the docs promise 16 KB"  # re-review s174 NIT 6
+assert all(get_func(ea).end_ea - get_func(ea).start_ea <= 0x4000 for ea in picked)
 if picked:
     big = max(picked, key=lambda ea: get_func(ea).end_ea - get_func(ea).start_ea)
     real_max = getattr(sc, "MAX_FUNC_BYTES", None)
@@ -714,7 +716,6 @@ if picked:
     got = check_lines()
     sys.modules["ida_auto"].auto_wait = real_wait
     assert got == ["[kflow] decompile check skipped: fake auto_wait failure\n"], got
-    assert any(c.startswith("kflow: ") for c in w["cmts"].values()) and any(w["xrefs"].values())
     assert any(c.startswith("kflow: ") for c in w["cmts"].values()) and any(w["xrefs"].values())
 else:
     assert got == ["[kflow] decompile check: no function has a static-key site that gets a new jump reference\n"], got
