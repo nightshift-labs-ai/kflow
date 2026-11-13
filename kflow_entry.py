@@ -284,7 +284,8 @@ class AnnotateAction(ida_kernwin.action_handler_t):
             ida_kernwin.hide_wait_box()
         import ida_auto
         done = ida_auto.auto_is_ok()
-        report(idalayer.annotate_text(res, analysis_done=done))
+        counts = idalayer.annotate_text(res, analysis_done=done)
+        report(counts)
         if line:
             report(line)
         if not done:
@@ -295,10 +296,51 @@ class AnnotateAction(ida_kernwin.action_handler_t):
             STATE["pseudo"] = pseudo_index(t, idalayer.current_arch(), idalayer.layout())
             flush_pseudocode()
             report("pseudocode comments on: functions decompiled from now on show the sites (display only)")
+        if any(res.get(k) for k in ("comments", "kept_user_comments", "xrefs", "key_refs", "other_refs")):
+            summary_window(t, [counts] + ([line.strip().replace("[kflow] ", "", 1)] if line else []))
         return 1
 
     def update(self, ctx):
         return ida_kernwin.AST_ENABLE_ALWAYS
+
+
+HEADLINE = "kflow: %d of %d static-key jump references lead to code nothing else in this database reaches"
+SUMMARY_BUTTONS = ("Static-key sites", "BUG/WARN sites", "Close")  # ask_buttons: 1, 0, -1 (Esc; the default)
+
+
+def hidden_count(t, arch):
+    """(N, M) for the summary window: M = static-key sites that are NOP-state instructions (Annotate gives each a
+    reference to its target), N = those whose target nothing else in the database reaches (idalayer.hidden_path_text,
+    the rule of the pseudocode sentence). A site whose check fails counts as not hidden, like pseudo_text."""
+    hidden = total = 0
+    for j in t["jump"]:
+        try:
+            if not idalayer.is_insn(j.code) or idalayer.branches_to(j.code, j.target, arch):
+                continue
+        except Exception:  # noqa: BLE001
+            continue
+        total += 1
+        try:
+            hidden += bool(idalayer.hidden_path_text(j, arch))
+        except Exception:  # noqa: BLE001
+            pass
+    return hidden, total
+
+
+def summary_window(t, lines):
+    """The window Annotate ends with (menu action only; the headless runner prints text): the headline, the counts
+    and decompile-check line already in the Output window, and buttons to the two lists. Never in the way: if it
+    fails, the Output window has the text (one line says so)."""
+    try:
+        hidden, total = hidden_count(t, idalayer.current_arch())
+        text = "\n".join(([HEADLINE % (hidden, total)] if total else []) + lines + ["Details: Output window"])
+        answer = ida_kernwin.ask_buttons(*SUMMARY_BUTTONS, -1, text.replace("%", "%%"))  # printf-style format
+        if answer == 1:
+            show_key_sites(t)
+        elif answer == 0:
+            show_bug_sites(t)
+    except Exception as e:  # noqa: BLE001
+        report("summary window not shown (%s: %s); the counts are above" % (type(e).__name__, e))
 
 
 BUG_COLUMNS = [["Address", 18 | ida_kernwin.Choose.CHCOL_HEX], ["Kind", 6], ["Function", 30], ["Source", 40]]
@@ -346,11 +388,15 @@ class ListAction(ida_kernwin.action_handler_t):
         t = scan_or_warn()  # rescan: cheap, and right after a rebase or a database switch
         if t is None:
             return 0
-        SitesChooser(bug_site_rows(t["bug"])).Show()
-        return 1
+        return show_bug_sites(t)
 
     def update(self, ctx):
         return ida_kernwin.AST_ENABLE_ALWAYS
+
+
+def show_bug_sites(t):
+    SitesChooser(bug_site_rows(t["bug"])).Show()
+    return 1
 
 
 def bug_site_rows(sites):
@@ -493,17 +539,22 @@ class KeySitesAction(ida_kernwin.action_handler_t):
         t = scan_or_warn()
         if t is None:
             return 0
-        if not t["jump"]:
-            ida_kernwin.warning("kflow: no static-key sites in this database (%s)." % (
-                "no __jump_table found" if "jump" in t["missing"] else
-                "the __jump_table could not be decoded: %s" % t["errors"]["jump"] if "jump" in t.get("errors", {}) else
-                "the table is empty"))
-            return 0
-        KeySitesChooser(key_site_rows(t), [j.target for j in t["jump"]], idalayer.current_arch()).Show()
-        return 1
+        return show_key_sites(t)
 
     def update(self, ctx):
         return ida_kernwin.AST_ENABLE_ALWAYS
+
+
+def show_key_sites(t):
+    """The static-key list (List static keys, and the summary window's button); a warning when there is none."""
+    if not t["jump"]:
+        ida_kernwin.warning("kflow: no static-key sites in this database (%s)." % (
+            "no __jump_table found" if "jump" in t["missing"] else
+            "the __jump_table could not be decoded: %s" % t["errors"]["jump"] if "jump" in t.get("errors", {}) else
+            "the table is empty"))
+        return 0
+    KeySitesChooser(key_site_rows(t), [j.target for j in t["jump"]], idalayer.current_arch()).Show()
+    return 1
 
 
 class RemoveAction(ida_kernwin.action_handler_t):

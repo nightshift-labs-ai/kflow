@@ -98,6 +98,13 @@ SHAPES = [("ida_hexrays", "Hexrays_Hooks", r"def func_printed\(self, cfunc: cfun
           ("ida_hexrays", "udc_filter_t", r"def match\(self, cdg: codegen_t\) -> bool:"),
           ("ida_hexrays", None, r"def install_microcode_filter\(filter: microcode_filter_t, install: bool = True\) -> bool:"),
           ("ida_kernwin", None, r"def info\((message: str|\*args: Any)\) -> int:"),  # 9.5: info(message); 9.1-9.4: info(*args), printf-style: kflow's two info() texts hold no '%' once Python has formatted them (ISSUES_URL has none)
+          # the summary window after Annotate: ask_buttons(Yes, No, Cancel, deflt, format) -> 1 / 0 / -1 (Esc = Cancel,
+          # the third button); format is printf-style (kflow doubles any '%')
+          ("ida_kernwin", None, r"def ask_buttons\((\*?args: Any|Yes: str, No: str, Cancel: str, deflt: int, format: str)\) -> int:"),
+          ("ida_kernwin", None, r"[:@]param Yes: text for the first button\s*[:@]param No: text for the second button\s*"
+                                r"[:@]param Cancel: text for the third button\s*[:@]param deflt: default choice"),
+          ("ida_kernwin", None, r"^ASKBTN_YES: int  # 1\s*$"), ("ida_kernwin", None, r"^ASKBTN_NO: int  # 0\s*$"),
+          ("ida_kernwin", None, r"^ASKBTN_CANCEL: int  # -1\s*$"),
           # Go to oops/WARN line: the multi-line text dialog, the jump, and IDA's name list for name.<suffix>
           ("ida_kernwin", None, r"def ask_text\(max_size: int, defval: str, prompt: str\) -> Union\[str, None\]:"),
           ("ida_kernwin", None, r"def jumpto\(ea: ida_idaapi.ea_t, opnum: int = -1"),
