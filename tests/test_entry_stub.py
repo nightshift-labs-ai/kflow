@@ -149,6 +149,16 @@ assert m.AnnotateAction().activate(None) == 1
 assert len([x for x in log[n:] if x[0] == "msg" and "summary window not shown" in x[1]]) == 1, log[n:]
 assert not [x for x in log[n:] if x[0] in ("warning", "show", "buttons")], log[n:]
 sys.modules["ida_kernwin"].ask_buttons = real_buttons
+# review s184 #2: no window when nothing was annotated (an all-zero annotate result); the counts still go to Output
+real_annotate, n = m.idalayer.annotate, len(log)
+m.idalayer.annotate = lambda t, arch=None: dict.fromkeys(("comments", "xrefs", "other_refs", "changed_refs", "key_refs",
+                                                         "kept_user_comments", "not_code", "next_insn_refs"), 0)
+try:
+    assert m.AnnotateAction().activate(None) == 1
+finally:
+    m.idalayer.annotate = real_annotate
+assert not [x for x in log[n:] if x[0] in ("buttons", "show", "warning")], log[n:]
+assert [x for x in log[n:] if x[0] == "msg" and "jump references added: 0" in x[1]], log[n:]
 print("OK summary window: one per Annotate, buttons open the static-key / BUG/WARN lists, Close opens nothing; %s"
       % ("headline %d of %d" % first_nm if first_nm else "no headline (no NOP-state static-key site)"))
 
