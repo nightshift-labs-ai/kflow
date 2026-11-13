@@ -656,6 +656,16 @@ if picked:
     got_none = check_lines()
     dc["none"] = False
     assert got_none == got, (got_none, got)
+    # review s174 api MINOR 5 (second half): Hex-Rays' own reason for the failure is kept in the line
+    dc["none"], dc["reason"] = True, "too big  function\n"
+    got_r = check_lines()
+    dc["none"], dc["reason"] = False, ""
+    assert len(got_r) == 1 and ("but fails after (%s: too big function)" % (ui.fn.get_func_name(victim) or "0x%X" % victim)
+                                in got_r[0]), got_r
+    dc["reason"] = "x" * 300  # a long reason is cut, the line stays readable
+    got_r = check_lines()
+    dc["reason"] = ""
+    assert len(got_r) == 1 and ": " + "x" * 80 + "...)" in got_r[0] and "x" * 81 not in got_r[0], got_r
     # fails already before Annotate (and after): counted apart, never blamed on kflow
     dc["always"], dc["after"] = {victim}, {victim}
     got = check_lines()

@@ -63,17 +63,45 @@ def pick_functions(t, arch, limit=MAX_FUNCS):
     return funcs
 
 
-def decompiles(ea):
-    """True when Hex-Rays decompiles the function at ea now. Its cache entry is erased first (mark_cfunc_dirty), so
-    the answer is not an older result kept from before Annotate."""
+REASON_CHARS = 80  # Hex-Rays' failure text is cut to this many characters in the summary line
+
+
+def try_decompile(ea):
+    """(True, None) when Hex-Rays decompiles the function at ea now, else (False, Hex-Rays' own reason or None). Its
+    cache entry is erased first (mark_cfunc_dirty), so the answer is not an older result kept from before Annotate."""
     import ida_hexrays
     ida_hexrays.mark_cfunc_dirty(ea)
+    hf = None
+    try:  # review s174 api MINOR 5: Hex-Rays writes why it failed into a hexrays_failure_t the caller passes
+        hf = ida_hexrays.hexrays_failure_t()
+    except Exception:  # noqa: BLE001  (without it: the same check, no reason)
+        hf = None
     try:
         # review s174 api MINOR 5: DECOMP_NO_WAIT = no Hex-Rays wait box of its own, so no user Cancel there that would be
-        # read as a kflow failure; hf None keeps the documented failure path (None, or DecompilationFailure)
-        return ida_hexrays.decompile(ea, None, ida_hexrays.DECOMP_NO_WAIT) is not None
+        # read as a kflow failure. Failure = None (current IDAPython) or DecompilationFailure (older ones)
+        if ida_hexrays.decompile(ea, hf, ida_hexrays.DECOMP_NO_WAIT) is not None:
+            return True, None
     except ida_hexrays.DecompilationFailure:
-        return False
+        pass
+    return False, failure_reason(hf)
+
+
+def failure_reason(hf):
+    """Hex-Rays' text in hf on one line, cut to REASON_CHARS; None when there is none."""
+    if hf is None:
+        return None
+    try:
+        text = " ".join(str(hf.desc()).split())
+    except Exception:  # noqa: BLE001
+        return None
+    if len(text) > REASON_CHARS:
+        text = text[:REASON_CHARS] + "..."
+    return text or None
+
+
+def decompiles(ea):
+    """True when Hex-Rays decompiles the function at ea now (try_decompile without the reason)."""
+    return try_decompile(ea)[0]
 
 
 def fname(ea):
@@ -92,6 +120,7 @@ class DecompileCheck:
         self.stopped = False
         self.error = None
         self.skip = None     # a reason to skip the whole check (auto-analysis still running)
+        self.reasons = {}    # function -> Hex-Rays' reason for its last failed decompile
 
     def _run(self, funcs, out, limit):
         for ea in funcs:
@@ -99,8 +128,10 @@ class DecompileCheck:
                 self.stopped = True
                 return
             start = clock()
-            out[ea] = decompiles(ea)
+            out[ea], why = try_decompile(ea)
             self.spent += clock() - start
+            if why:
+                self.reasons[ea] = why
 
     def before(self, t, arch):
         try:
@@ -139,7 +170,7 @@ class DecompileCheck:
             text = ("decompile check: %d of %s decompiled before Annotate but %s after (%s): kflow's jump "
                     "references may confuse Hex-Rays there; kflow: Remove annotations takes them out"
                     % (len(blamed), n(len(checked)), "fails" if len(blamed) == 1 else "fail",  # re-review s174 NIT 3
-                       ", ".join(fname(ea) for ea in blamed)))
+                       ", ".join(fname(ea) + (": " + self.reasons[ea] if ea in self.reasons else "") for ea in blamed)))
         else:
             text = "decompile check: %s with static-key sites %s before and after Annotate" % (
                 n(len(checked)), "decompiles" if len(checked) == 1 else "decompile")
