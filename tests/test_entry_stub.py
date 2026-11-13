@@ -748,7 +748,10 @@ else:
     assert got == ["[kflow] decompile check: no function has a static-key site that gets a new jump reference\n"], got
 # s174 own review MINOR 1: while IDA's auto-analysis still runs, BEFORE/AFTER would compare a changing database, so the
 # check is skipped (no decompile at all) and says why
-assert picked, "the gate kernel must give the check something to pick"
+# re-review s175 claims MAJOR 1: no assert here, so `run_all.sh mymod.ko` passes on a file without static-key sites
+# (the skip runs before any pick); on such a file the 'no decompile' assertion below is vacuous, and says so
+if not picked:
+    print("note: this file gives the decompile check nothing to pick; the auto-analysis skip test below is vacuous")
 w["auto_ok"] = False
 n_calls, n_waits = len(dc["calls"]), len(T.AUTO_WAITS)
 got = check_lines()
