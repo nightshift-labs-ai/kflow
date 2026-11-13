@@ -26,7 +26,7 @@ auto_ok = [True]  # IDA's auto-analysis state after open_database (review s159 N
 sys.modules["ida_auto"] = types.ModuleType("ida_auto")
 sys.modules["ida_auto"].auto_is_ok = lambda: auto_ok[0]
 sys.modules["ida_auto"].auto_wait = lambda: calls.append(("auto_wait",))
-dialogs = []  # judge s180 first-run #2: the summary window is the menu action's; the headless runner shows none
+dialogs = []  # tripwire only: kflow_headless never imports kflow_entry (the summary window lives there), so this stays empty unless that import is ever added
 if "ida_kernwin" not in sys.modules:
     sys.modules["ida_kernwin"] = types.ModuleType("ida_kernwin")
 sys.modules["ida_kernwin"].ask_buttons = lambda *a: dialogs.append(a) or -1
