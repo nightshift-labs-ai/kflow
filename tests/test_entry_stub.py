@@ -63,6 +63,7 @@ first_text, first_nm = summary(log)
 nop_state = [j for j in m.STATE["tables"]["jump"] if m.idalayer.is_insn(j.code) and not m.idalayer.branches_to(
     j.code, j.target, m.idalayer.current_arch())]
 assert (first_nm is not None) == bool(nop_state), (first_nm, len(nop_state))
+assert first_nm is None or first_nm[1] == len(nop_state), ("M is the NOP-state site count", first_nm, len(nop_state))
 assert not [x for x in log if x[0] == "msg" and "auto-analysis is still running" in x[1]]
 # Annotate while auto-analysis still runs (no instructions, no functions yet): it works, adds no reference from a site
 # that is not an instruction yet, and says to run it again afterwards
@@ -556,16 +557,26 @@ assert samples and (nop is not None or not t["jump"] or not elf.funcs), "no NOP 
 # before Annotate: the hook is there, the lines are untouched
 assert set(decompile(sample_eas).values()) == {""}
 n_log = len(log)
+# review s184 #1: one ordinary code xref (not kflow's) into a NOP-state target, so N < M and a headline printing M as N
+# (or M as every static-key site) fails
+other_ref = (get_func(nop.code).start_ea, nop.target) if nop is not None else None
+if other_ref is not None:
+    w["xrefs"][other_ref] = False
 assert m.AnnotateAction().activate(None) == 1 and hx_log["flushed"] == 1 and msgs("pseudocode comments on")
-# the summary window's headline N of M: N is the oracle's count of NOP-state sites with a hidden target
+# the summary window's headline N of M: N is the oracle's count of NOP-state sites with a hidden target, M the number
+# of NOP-state sites
 _, nm = summary(log[n_log:])
 by_dst = collections.defaultdict(list)
 for f, to in w["xrefs"]:
     by_dst[to].append((f, to))
 nop_sites = [j for j in t["jump"] if il.in_text(j.code) and not il.branches_to(j.code, j.target, arch)]
 want_n = sum(bool(hidden_expected(j, by_dst)) for j in nop_sites)
-assert (nm is not None) == bool(nop_sites) and (nm is None or nm[0] == want_n), (nm, want_n, len(nop_sites))
-print("OK summary headline: %s of %d NOP-state sites (oracle)" % (nm and nm[0], len(nop_sites)))
+assert (nm is not None) == bool(nop_sites) and (nm is None or nm == (want_n, len(nop_sites))), (nm, want_n, len(nop_sites))
+assert other_ref is None or want_n < len(nop_sites), ("the extra xref makes N < M", want_n, len(nop_sites))
+if other_ref is not None:
+    del w["xrefs"][other_ref]
+print("OK summary headline: %s of %s NOP-state sites (oracle %d of %d)" % (nm and nm[0], nm and nm[1], want_n,
+                                                                          len(nop_sites)))
 shown_texts = []
 if bug is not None:
     got = decompile([bug.addr], extra=("lost", "far"))[bug.addr]
