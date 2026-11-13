@@ -44,12 +44,12 @@ One line per feature; each one in full: [docs/FEATURES.md](docs/FEATURES.md).
 hcli plugin install kflow
 ```
 
-Hex-Rays added kflow to the plugin index on Nov 12 ([plugin-repository#48](https://github.com/HexRaysSA/plugin-repository/pull/48)); it appears after their next index sync, and the index can lag a day or more behind the [GitHub releases](https://github.com/nightshift-labs-ai/kflow/releases). Until `hcli plugin install kflow` works (or if `hcli plugin status` shows an older version):
+The plugin index can lag a day or more behind the [GitHub releases](https://github.com/nightshift-labs-ai/kflow/releases). If `hcli plugin status` shows an older version than the newest release:
 
 - install a release zip directly, for example `hcli plugin install https://github.com/nightshift-labs-ai/kflow/archive/refs/tags/v0.0.4.zip`,
-- or copy this folder into your IDA `plugins` directory.
+- or copy this folder into the `plugins` folder of your IDA user directory: `$IDAUSR/plugins` if `IDAUSR` is set, otherwise `~/.idapro/plugins` (Linux, macOS) or `%APPDATA%\Hex-Rays\IDA Pro\plugins` (Windows).
 
-The command-line decoder needs only Python 3.8+ and no packages: `python3 -m kflow <kernel ELF>` from this folder.
+The command-line decoder needs only Python 3.8+ and no packages: `python3 -m kflow <kernel ELF>` from the plugin's folder (after `hcli plugin install`, for example `cd ~/.idapro/plugins/kflow && python3 -m kflow kernel.elf`).
 
 ## Try it
 
