@@ -312,13 +312,15 @@ def other_path_to(dst, site):
 
 def hidden_path_text(j, arch=None):
     """'; ...' when the path this static-key site does not take in the database is reached by nothing but kflow, else
-    ''. A NOP-state site never runs its target here; a site that is a jump now never falls through to the next
-    instruction (run when the key is in the other state). The decompiler part ('probably') is not checked in IDA."""
+    ''. A NOP-state site never runs its target here; a site that is a jump now does not fall through to the next
+    instruction (run when the key is in the other state). A jump to the next instruction itself (x86 'eb 00') does
+    run it: IDA's own reference from the site counts as a path there, so no sentence (review s177 B1). The decompiler
+    part ('probably') is not checked in IDA."""
     if not is_insn(j.code):
         return ""
     if branches_to(j.code, j.target, arch or current_arch()):
         after = ida_bytes.get_item_end(j.code)
-        if other_path_to(after, j.code):
+        if other_path_to(after, ida_idaapi.BADADDR):  # the site's own jump counts: kflow records none to after
             return ""
         return ("; the site is a jump here and nothing else in the database jumps or falls through to the next "
                 "instruction 0x%X (run when the key is %s), so this pseudocode probably does not show that code"

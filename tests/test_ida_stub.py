@@ -847,6 +847,34 @@ def hidden_path(path):
         assert il.hidden_path_text(jmp, arch) == ""
         w["flow"] = set()
         cases.append("jmp site 0x%X" % jmp.code)
+    # review s177 B1: a site that jumps to the very next instruction (x86 'eb 00', arm64 'b .+4'; 13 on the demo
+    # kernel) runs it in both key states, and IDA's own jump reference from the site is that path: no sentence.
+    # Where the ELF has none, one is made at a site (its bytes, item end and IDA's reference).
+    nxt = [j for j in t["jump"] if il.in_text(j.code) and il.is_insn(j.code)
+           and j.target == il.ida_bytes.get_item_end(j.code) and il.branches_to(j.code, j.target, arch)]
+    get, made = il.ida_bytes.get_bytes, None
+    if not nxt:
+        s = (jmp or nop).code
+        raw = b"\xeb\x00" if arch == "x86_64" else (0x14000001).to_bytes(4, "little")
+        il.ida_bytes.get_bytes = lambda ea, n: raw[:n] if ea == s else get(ea, n)
+        w.setdefault("item_end", {})[s] = s + len(raw)
+        w["xrefs"][(s, s + len(raw))] = False
+        w["by_from"].setdefault(s, set()).add(s + len(raw))
+        made = types.SimpleNamespace(code=s, target=s + len(raw), branch=0)
+        nxt = [made]
+    for j in nxt:
+        got = il.hidden_path_text(j, arch)
+        assert got == "", "site 0x%X jumps to the next instruction itself: %s" % (j.code, got)
+    j = nxt[0]
+    w["xrefs"].pop((j.code, j.target))  # without IDA's own jump reference nothing would lead there: the sentence
+    assert il.hidden_path_text(j, arch) == HIDDEN_JMP % (j.target, "on" if j.branch else "off")
+    w["xrefs"][(j.code, j.target)] = False
+    if made is not None:
+        il.ida_bytes.get_bytes = get
+        del w["item_end"][made.code], w["xrefs"][(made.code, made.target)]
+        w["by_from"][made.code].discard(made.target)
+    cases.append("%d jump%s to the next instruction%s" % (len(nxt), "" if len(nxt) == 1 else "s",
+                                                          " (made)" if made else ""))
     print("OK hidden path: the sentence only where nothing but kflow leads to the other path (%s; IDA branch, user "
           "reference, ordinary flow, not code: no sentence) (%s)" % (", ".join(cases), os.path.basename(path)))
 
