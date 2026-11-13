@@ -491,22 +491,10 @@ def site_records(elf, t, path):
 
 
 def oops_example(elf, t):
-    """A 'WARNING: CPU: 0 PID: 1 at file:line func+0xoff/0xsize' line (plus ' [module]' for a module) for the first WARN
-    site, in address order, that has a file:line and lies in a function whose name no other function has and whose
-    printed size is known: the line a kernel would log at that trap, so --oops finds it exactly. None if there is none."""
+    """--oops-example: oops.example_line on this file (the module's name for a .ko)."""
     from . import oops
-    mod = oops.module_name(elf.path) if elf.relocatable else None
-    for b in sorted(t.get("bug", []), key=lambda s: s.addr):
-        if not (b.warn and b.file and b.line):
-            continue
-        name = elf.func(b.addr)
-        starts = elf.function_starts(name) if name else []
-        if len(starts) != 1 or starts[0][2] is None:
-            continue
-        start, _size, printed, _full = starts[0]
-        return "WARNING: CPU: 0 PID: 1 at %s:%d %s+0x%x/0x%x%s" % (b.file, b.line, name, b.addr - start, printed,
-                                                                 " [%s]" % mod if mod else "")
-    return None
+    return oops.example_line(t.get("bug", []), elf.func, elf.function_starts,
+                             oops.module_name(elf.path) if elf.relocatable else None)
 
 
 def oops_main(elf, t, log_text, json_path=None):

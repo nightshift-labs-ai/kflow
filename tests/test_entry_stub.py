@@ -112,6 +112,24 @@ def ask(text):
     return m.OopsAction().activate(None), log[n:]
 
 
+# judge s180 #3: the first time (no earlier text) the dialog's default is a WARNING line built from this database's own
+# table, which, pasted back unchanged, is found exactly; after a paste the default is the last text, as before
+m.STATE["oops_text"] = ""
+_, first = ask(None)
+asks = [e for e in first if e[0] == "ask"]
+assert len(asks) == 1, first
+example_default = asks[0][2]
+assert example_default == "" or example_default.startswith("WARNING: CPU: 0 PID: 1 at "), example_default
+assert example_default or not __import__("kflow.cli", fromlist=["oops_example"]).oops_example(cli_elf, T.load(cli_elf)), "the CLI builds an example line, the dialog offers none"
+if example_default:
+    m.STATE["oops_text"] = ""
+    _, used = ask(example_default)
+    assert any("exact" in str(e) for e in used), used
+    _, again = ask(None)
+    assert [e for e in again if e[0] == "ask"][0][2] == example_default, again  # the last text, no new scan needed
+m.STATE["oops_text"] = ""
+
+
 def went(new):
     return [x[1] for x in new if x[0] == "jump"]
 
@@ -149,7 +167,8 @@ if site is not None:
                       "[  152.334340][  T123]  some_caller+0x5d1/0x1e70"])
     r, new = ask(text)
     assert r == 1 and went(new) == [site.addr], new
-    assert new[0] == ("ask", 0, "", m.OOPS_PROMPT), new[0]
+    first_ask = next(e for e in new if e[0] == "ask")  # first use: the default is this database's example line (s180 #3)
+    assert first_ask[:2] == ("ask", 0) and first_ask[3] == m.OOPS_PROMPT and first_ask[2] == example_default, first_ask
     assert said(new, "exact: the WARN site at %s+%#x (%#x)" % (name, off, site.addr)), new
     assert not [x for x in new if x[0] in ("warning", "show")], new
     r, new = ask("%s+%#x" % (name, off))  # just func+0xoff; the dialog offers the last text

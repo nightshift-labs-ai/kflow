@@ -409,7 +409,18 @@ class OopsAction(ida_kernwin.action_handler_t):
     kernel prints the trap's own address), else the sites at the WARNING / kernel BUG line's file:line."""
     @guarded
     def activate(self, ctx):
-        text = ida_kernwin.ask_text(0, STATE["oops_text"], OOPS_PROMPT)
+        default, pre = STATE["oops_text"], None
+        if not default and idalayer.current_arch() is not None:  # a first try: a WARNING line from this database's own
+            ida_kernwin.show_wait_box("HIDECANCEL\nkflow: reading the kernel's site tables")  # table (judge s180 #3)
+            try:
+                pre = idalayer.scan()
+                default = oops.example_line(pre["bug"], ida_funcs.get_func_name, function_starts,
+                                            oops.module_name(ida_nalt.get_input_file_path() or "")) or ""
+            except Exception:  # noqa: BLE001  the example is a convenience; the action goes on without it
+                pre, default = None, ""
+            finally:
+                ida_kernwin.hide_wait_box()
+        text = ida_kernwin.ask_text(0, default, OOPS_PROMPT)
         if not text:
             return 0
         STATE["oops_text"] = text
@@ -418,7 +429,7 @@ class OopsAction(ida_kernwin.action_handler_t):
             ida_kernwin.warning("kflow: found no WARNING / kernel BUG line, trap RIP / pc line, func+0xoff or file:line in the "
                                 "pasted text.%s" % "".join(" Note: " + n for n in oops.not_traps(rep)))
             return 0
-        t = scan_or_warn()
+        t = pre if pre is not None else scan_or_warn()
         if t is None:
             return 0
         path = ida_nalt.get_input_file_path() or ""

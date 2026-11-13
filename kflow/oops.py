@@ -712,3 +712,20 @@ def match_record(report, match, func_of):
             "from": match.loc.record() if match.loc else None,
             "report": {"kind": report.kind, "file": report.file, "line": report.line},
             "frames": [f.record() for f in report.frames], "notes": list(match.notes)}
+
+
+def example_line(sites, func_name, function_starts, module=None):
+    """A 'WARNING: CPU: 0 PID: 1 at file:line func+0xoff/0xsize' line (' [module]' for a module) for the first WARN site,
+    in address order, that has a file:line and lies in a function whose name no other function has and whose printed
+    size is known: the line a kernel would log at that trap, so resolve() finds it exactly. None if there is none.
+    func_name(address) -> name or None; function_starts(name) -> [(start, size, printed size, name)]."""
+    for site in sorted(sites, key=lambda s: s.addr):
+        if not (site.warn and site.file and site.line):
+            continue
+        name = func_name(site.addr)
+        starts = function_starts(name) if name else []
+        if len(starts) != 1 or starts[0][2] is None or starts[0][0] > site.addr:
+            continue
+        return "WARNING: CPU: 0 PID: 1 at %s:%d %s+0x%x/0x%x%s" % (site.file, site.line, name, site.addr - starts[0][0],
+                                                                 starts[0][2], " [%s]" % module if module else "")
+    return None
