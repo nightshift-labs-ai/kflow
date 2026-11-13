@@ -319,7 +319,7 @@ def add_decompiler(hx, annotated):
     DecompilationFailure) for functions in state["always"], and for functions in state["after"] while annotated() is
     true; state["crash"] makes it raise RuntimeError. Results are cached per function like Hex-Rays' cache, so a
     second decompile() returns the first result unless mark_cfunc_dirty(ea) or clear_cached_cfuncs() erased it."""
-    state = {"always": set(), "after": set(), "crash": None, "calls": [], "cache": {}, "dirty": 0}
+    state = {"always": set(), "after": set(), "crash": None, "calls": [], "cache": {}, "dirty": 0, "none": False}
     DC_STATE["s"] = state
 
     class DecompilationFailure(Exception):
@@ -332,6 +332,8 @@ def add_decompiler(hx, annotated):
         if ea not in state["cache"]:
             state["cache"][ea] = not (ea in state["always"] or (ea in state["after"] and annotated()))
         if not state["cache"][ea]:
+            if state["none"]:  # current IDAPython returns None on failure (SDK hexrays.i decompile_function pythonappend)
+                return None
             raise DecompilationFailure("fake failure at 0x%X" % ea)
         return ("cfunc", ea)
 
