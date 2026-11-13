@@ -2,7 +2,7 @@
 
 <img src="assets/logo.png" width="96" align="right" alt="kflow logo">
 
-For kernel reverse engineers (Linux and Android vulnerability research, patch diffing, crash triage): kflow turns the bare traps, NOPs and faulting instructions of a kernel into source lines, static keys and fixups. A `WARNING: CPU: 1 PID: 9 at mm/userfaultfd.c:755 mfill_atomic_copy+0x674/0x9d0` line pasted from a kernel log leads to the trap it names, and a NOP says which key patches it and where it then jumps.
+For kernel reverse engineers (Linux and Android vulnerability research, patch diffing, crash triage): kflow turns the bare traps, NOPs and faulting instructions of a kernel into source lines, static keys and fixups. A `WARNING: CPU: 1 PID: 9 at mm/userfaultfd.c:755 mfill_atomic_copy+0x674/0x9d0` line pasted from a kernel log leads to the trap it names, and a NOP says which key patches it and where it then jumps. On the MemLens demo kernel, 96% of the 8,349 static-key NOP sites jump to code that no direct branch targets and no instruction falls into ([measured](tools/reach_results.md)), so kflow's reference is the only one that leads there.
 
 Before: what the disassembly shows at three addresses of the [MemLens demo kernel](https://github.com/nightshift-labs-ai/memlens/releases/tag/demo-data) (`objdump -d`). After: the comment kflow writes at each one (text from kflow's fake-IDA test, not an IDA screenshot):
 
@@ -29,7 +29,7 @@ One line per feature; each one in full: [docs/FEATURES.md](docs/FEATURES.md).
 - [**Static-key chooser**](docs/FEATURES.md#static-keys-and-exception-table-fixups): **kflow: List static-key sites** shows every site with its key, `jump` / `no jump` now, the target, the size of the out-of-line block there (`bytes / insns`) and the function; the filter finds every site of one key.
 - [**Exception-table fixups**](docs/FEATURES.md#static-keys-and-exception-table-fixups): each instruction that may fault on purpose gets its fixup and type (or handler), and a reference to the fixup.
 - [**What the references add, measured**](tools/reach_results.md): on the MemLens demo kernel, 96% of the 8,349 static-key NOP sites jump to code that no direct branch targets and no instruction falls into; the same holds after 90% of the 7,504 WARN traps.
-- [**Hex-Rays pseudocode comments**](docs/USAGE.md#hex-rays-pseudocode-comments): a `// kflow: ...` comment at the end of the site's pseudocode line (display text only).
+- [**Hex-Rays pseudocode comments**](docs/USAGE.md#hex-rays-pseudocode-comments): a `// kflow: ...` comment at the end of the site's pseudocode line (display text only); at a static-key site whose skipped code nothing else in the database reaches, it adds that this pseudocode probably does not show that code.
 - [**Decompile check**](docs/USAGE.md#hex-rays-pseudocode-comments): with the decompiler, Annotate decompiles up to 20 functions that get a new static-key jump reference, before and after, and names any that stopped decompiling.
 - [**Kernel modules**](docs/modules.md) (`.ko`, `.ko.xz`, `.ko.gz`): the command line applies the module's relocations; IDA relocates a `.ko` itself.
 - [**Clean removal**](docs/USAGE.md#step-by-step): **kflow: Remove annotations** takes out only the comments and references kflow added (also after a rebase).
@@ -65,7 +65,7 @@ A stripped `vmlinux` (from `extract-vmlinux`) still has `__bug_table` and `__ex_
 ### Steps in short
 
 1. Outside IDA, see what is there: `python3 -m kflow kernel.elf` ([output](docs/OUTPUT.md#what-you-get-real-output-not-ida-screenshots)).
-2. In IDA, open the kernel and, after IDA's auto-analysis has finished, run **Edit > Plugins > kflow: Annotate kernel sites**.
+2. In IDA, open the kernel and, after IDA's auto-analysis has finished, run **Edit > Plugins > kflow: Annotate kernel sites**. Its counts (and, with the decompiler, the decompile check's result) are in IDA's Output window.
 3. **kflow: List BUG/WARN sites** and **kflow: List static-key sites** list the sites; **kflow: Go to oops/WARN line** takes a log line such as `WARNING: CPU: 1 PID: 9 at mm/userfaultfd.c:755 mfill_atomic_copy+0x674/0x9d0`, or the whole report.
 4. **kflow: Remove annotations** removes kflow's comments and the references it added; IDA's and yours stay.
 
