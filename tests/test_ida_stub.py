@@ -818,6 +818,14 @@ def hidden_path(path):
         w["xrefs"][(other, d)] = True
         w["netnodes"][il.NODE][(other - base) & il.MASK] = (d - base) & il.MASK
         assert il.hidden_path_text(nop, arch) == want, "kflow's own reference from another site counted as flow"
+        # review s177 m1: the user then patched that other site to a jump there: its old record does not make it kflow's
+        get = il.ida_bytes.get_bytes
+        jb = (b"\xe9" + ((d - other - 5) & 0xFFFFFFFF).to_bytes(4, "little")) if arch == "x86_64" else \
+            (0x14000000 | (((d - other) >> 2) & 0x3FFFFFF)).to_bytes(4, "little")
+        il.ida_bytes.get_bytes = lambda ea, n: jb[:n] if ea == other else get(ea, n)
+        assert il.branches_to(other, d, arch)
+        assert il.hidden_path_text(nop, arch) == "", "a recorded site patched to jump there counted as kflow's"
+        il.ida_bytes.get_bytes = get
         del w["netnodes"][il.NODE][(other - base) & il.MASK]  # the same reference, not recorded: the user's own
         assert il.hidden_path_text(nop, arch) == "", "a user reference kflow did not add is another path"
         w["xrefs"][(other, d)] = False  # IDA's own branch from elsewhere

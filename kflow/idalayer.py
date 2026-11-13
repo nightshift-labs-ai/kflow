@@ -295,11 +295,12 @@ def code_refs_to(ea):
     return out
 
 
-def other_path_to(dst, site):
+def other_path_to(dst, site, arch=None):
     """True unless dst is an instruction that nothing in the database leads to but kflow: no ordinary flow from the
     instruction before it (FF_FLOW) and no jump/call reference to it except from site and the references kflow
-    recorded (other static-key sites or faulting instructions pointing at the same address). True as well when dst
-    is not an instruction: then nothing is known."""
+    recorded (other static-key sites or faulting instructions pointing at the same address). A recorded source that
+    is now itself a jump to dst (patched after Annotate; _add never records one) is a path (review s177 m1). True as
+    well when dst is not an instruction: then nothing is known."""
     flags = ida_bytes.get_flags(dst)
     if not ida_bytes.is_code(flags) or ida_bytes.is_flow(flags):
         return True
@@ -307,7 +308,9 @@ def other_path_to(dst, site):
     recorded = node.index() != ida_netnode.BADNODE
     base = ida_nalt.get_imagebase()
     val = (dst - base) & MASK
-    return any(src != site and not (recorded and node.altval((src - base) & MASK) == val) for src in code_refs_to(dst))
+    arch = arch or current_arch()
+    return any(src != site and not (recorded and node.altval((src - base) & MASK) == val
+                                    and not branches_to(src, dst, arch)) for src in code_refs_to(dst))
 
 
 def hidden_path_text(j, arch=None):
@@ -318,14 +321,15 @@ def hidden_path_text(j, arch=None):
     part ('probably') is not checked in IDA."""
     if not is_insn(j.code):
         return ""
-    if branches_to(j.code, j.target, arch or current_arch()):
+    arch = arch or current_arch()
+    if branches_to(j.code, j.target, arch):
         after = ida_bytes.get_item_end(j.code)
-        if other_path_to(after, ida_idaapi.BADADDR):  # the site's own jump counts: kflow records none to after
+        if other_path_to(after, ida_idaapi.BADADDR, arch):  # the site's own jump counts: kflow records none to after
             return ""
         return ("; the site is a jump here and nothing else in the database jumps or falls through to the next "
                 "instruction 0x%X (run when the key is %s), so this pseudocode probably does not show that code"
                 % (after, "on" if j.branch else "off"))
-    if other_path_to(j.target, j.code):
+    if other_path_to(j.target, j.code, arch):
         return ""
     return ("; nothing else in the database jumps or falls through to 0x%X, so this pseudocode probably does not show "
             "that code" % j.target)
