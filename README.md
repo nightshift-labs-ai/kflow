@@ -59,7 +59,9 @@ The command-line decoder needs only Python 3.8+ and no packages: `python3 -m kfl
 
 ## Try it
 
-You need a 64-bit kernel ELF that still has the kernel's symbol names, for example:
+**In a few minutes:** download [`kflow-try-module.zip`](https://github.com/nightshift-labs-ai/kflow/releases/download/try-module/kflow-try-module.zip) (129 KB): Debian 13's x86_64 `dm-mod.ko` (sources in its `README.txt`). Open `dm-mod.ko` in IDA (a module is analysed in seconds) and run **Edit > Plugins > kflow: Annotate kernel sites**: `python3 -m kflow dm-mod.ko` finds 74 BUG/WARN sites (37 WARN), 22 static-key sites and 2 exception-table fixups in it. A whole kernel takes IDA much longer to analyse.
+
+For the full picture you need a 64-bit kernel ELF that still has the kernel's symbol names, for example:
 
 - a distribution's debug `vmlinux` (Debian/Ubuntu: `/usr/lib/debug/boot/vmlinux-<version>` from the `linux-image-<version>-dbg` / `-dbgsym` package);
 - the `kernel.elf` of the [MemLens demo data](https://github.com/nightshift-labs-ai/memlens/releases/tag/demo-data) (22 MB zip; a Debian 13 6.12 kernel exported from a memory image, so freed init code reads as other bytes);
