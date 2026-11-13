@@ -1418,6 +1418,23 @@ def cli_check(path, elf, bugs, reg, tag):
                                                                 % ("WARN" if site.warn else "BUG", name,
                                                                    site.addr - start, site.where())), got
             assert (rec["status"], rec["address"], rec["site"]) == ("mismatch", None, None), rec
+        # --oops-example: a WARNING line built from this file's own table, which --oops then finds exactly (judge s180 #3)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
+            code = cli.main([path, "--oops-example"])
+        if code == 0:
+            example = buf.getvalue().strip()
+            assert example.startswith("WARNING: CPU: 0 PID: 1 at ") and len(example.splitlines()) == 1, example
+            code, got = run(example + "\n")
+            assert code == 0 and got.splitlines()[1].startswith("exact: the WARN site at "), (example, got)
+        else:
+            assert code == 1 and not any(b.warn and b.file for b in bugs), buf.getvalue()
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            try:
+                code = cli.main([path, "--oops-example", "--list", "warn"])
+            except SystemExit as e:
+                code = e.code
+        assert code == 2 and "--oops-example cannot be combined" in err.getvalue(), err.getvalue()
         code, got = run("hello, world\n")
         assert code == 1 and "no match" in got, got
         for more in (["--list", "warn"], ["--limit", "5"]):  # those are for the table listing, not --oops

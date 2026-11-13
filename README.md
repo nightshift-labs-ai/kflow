@@ -74,7 +74,7 @@ A stripped `vmlinux` (from `extract-vmlinux`) still has `__bug_table` and `__ex_
 
 1. Outside IDA, see what is there: `python3 -m kflow kernel.elf` ([output](docs/OUTPUT.md#what-you-get-real-output-not-ida-screenshots)).
 2. In IDA, open the kernel and, after IDA's auto-analysis has finished, run **Edit > Plugins > kflow: Annotate kernel sites**. Its counts (and, with the decompiler, the decompile check's result) are in IDA's Output window.
-3. **kflow: List BUG/WARN sites** and **kflow: List static-key sites** list the sites; **kflow: Go to oops/WARN line** takes a log line such as `WARNING: CPU: 1 PID: 9 at mm/userfaultfd.c:755 mfill_atomic_copy+0x674/0x9d0`, or the whole report.
+3. **kflow: List BUG/WARN sites** and **kflow: List static-key sites** list the sites; **kflow: Go to oops/WARN line** takes a log line such as `WARNING: CPU: 1 PID: 9 at mm/userfaultfd.c:755 mfill_atomic_copy+0x674/0x9d0`, or the whole report. No log for your kernel? `python3 -m kflow kernel.elf --oops-example` prints a `WARNING:` line built from its own `__bug_table` to paste.
 4. **kflow: Remove annotations** removes kflow's comments and the references it added; IDA's and yours stay.
 
 Every step in full, the Hex-Rays pseudocode comments, the headless runner and a one-minute module example: [docs/USAGE.md](docs/USAGE.md).

@@ -2,6 +2,7 @@
 
     python3 -m kflow <kernel.elf> [--list bug|warn|jump|ex] [--limit N] [--json out.json]
     python3 -m kflow <kernel.elf> --oops <log file, or - for stdin> [--json out.json]
+    python3 -m kflow <kernel.elf> --oops-example     (a WARNING line from this file's own table, to try --oops)
 """
 import argparse
 import bisect
@@ -412,10 +413,14 @@ def main(argv=None):
     ap.add_argument("--json")
     ap.add_argument("--oops", metavar="LOG", help="a kernel log (a WARNING / kernel BUG / RIP / pc line or a whole "
                     "report; - reads stdin): print the BUG/WARN site it names")
+    ap.add_argument("--oops-example", action="store_true", help="print a WARNING line built from this file's own "
+                    "__bug_table, to try --oops (or Go to oops/WARN line in IDA) on a kernel without a real log")
     ap.add_argument("--version", action="version", version="kflow " + __version__)
     a = ap.parse_args(argv)
     if a.oops is not None and (a.list or a.limit is not None):
         ap.error("--oops cannot be combined with --list or --limit")
+    if a.oops_example and (a.oops is not None or a.list or a.limit is not None or a.json):
+        ap.error("--oops-example cannot be combined with --oops, --list, --limit or --json")
     limit = 20 if a.limit is None else a.limit
     try:
         if a.oops is not None:
@@ -431,6 +436,13 @@ def main(argv=None):
         return 2
     if a.oops is not None:
         return oops_main(elf, t, log_text, a.json)
+    if a.oops_example:
+        line = oops_example(elf, t)
+        if line is None:
+            print("kflow: no WARN site with a file:line inside a uniquely named function in this file", file=sys.stderr)
+            return 1
+        print(line)
+        return 0
     for line in summary(elf, t):
         print(line)
     if a.list:
@@ -476,6 +488,25 @@ def site_records(elf, t, path):
         "ex": [{"addr": h(x.insn), "fixup": h(x.fixup), "type": None if x.data is None else x.type_name(elf.arch),
                 "handler": h(x.handler), "function": elf.func(x.insn) or None} for x in t.get("ex", [])],
     }
+
+
+def oops_example(elf, t):
+    """A 'WARNING: CPU: 0 PID: 1 at file:line func+0xoff/0xsize' line (plus ' [module]' for a module) for the first WARN
+    site, in address order, that has a file:line and lies in a function whose name no other function has and whose
+    printed size is known: the line a kernel would log at that trap, so --oops finds it exactly. None if there is none."""
+    from . import oops
+    mod = oops.module_name(elf.path) if elf.relocatable else None
+    for b in sorted(t.get("bug", []), key=lambda s: s.addr):
+        if not (b.warn and b.file and b.line):
+            continue
+        name = elf.func(b.addr)
+        starts = elf.function_starts(name) if name else []
+        if len(starts) != 1 or starts[0][2] is None:
+            continue
+        start, _size, printed, _full = starts[0]
+        return "WARNING: CPU: 0 PID: 1 at %s:%d %s+0x%x/0x%x%s" % (b.file, b.line, name, b.addr - start, printed,
+                                                                 " [%s]" % mod if mod else "")
+    return None
 
 
 def oops_main(elf, t, log_text, json_path=None):
