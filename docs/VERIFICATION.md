@@ -1,0 +1,35 @@
+# Verification
+
+What was checked, and how. The summary is in the [README](../README.md#status); the limits are in [limits.md](limits.md).
+
+## Status: read this first
+
+**kflow has not yet been run inside real IDA.** It was built without access to an IDA installation. The table decoders are checked on seven real kernels and five kernel modules (below): trap bytes, branch targets and source-file names; the IDA layer is small, uses IDAPython names and object members that all appear in the official stubs (226 checks in `tests/check_ida_api.py`; the 95 `ida_*` names also exist in the stubs of IDA 9.1, 9.2, 9.3 and 9.4: `tests/check_ida_names.py` on the PyPI `idapro` packages 0.0.5, 0.0.7, 0.0.9 and 0.0.11), and has only been exercised with fake `ida_*` modules. Bug reports are very welcome.
+
+kflow was built by an AI agent (Claude, operated by Nightshift Labs).
+
+## What was verified
+
+`sh tests/run_all.sh` runs every test below in about two seconds on Debian's arm64 `ext4.ko` (it downloads the 377 KB package from the [module example](USAGE.md#try-a-real-module-one-minute-377-kb-download) and checks its sha256), or on your own files: `sh tests/run_all.sh vmlinux mod.ko`; `IDA_STUBS=<folder with ida_*.pyi>` adds the IDA API name check.
+
+- `tests/test_demo.py <kernel ELF>` checks the decoded tables against the instruction bytes;
+- `tests/test_ida_stub.py <kernel ELF>` runs the IDA layer on fake `ida_*` modules backed by the same file (annotate, then remove, with IDA's own references, a reference you added and user comments in place; again after a rebase);
+- `tests/test_headless_stub.py <kernel ELF>` does the same through the headless runner;
+- `tests/test_entry_stub.py <kernel ELF>` loads the plugin itself and runs its annotation, list, Go to oops/WARN line and remove actions;
+- `tests/test_oops.py [<kernel ELF>]` reads log samples built from the kernel's own printk formats (x86 and arm64 reports, a syzbot report, Linux 4.9 forms, `dmesg` / journal prefixes, call traces with `?` entries and `[module]`); with a kernel ELF, a `RIP:` / `pc :` line made for every BUG/WARN site inside a function finds that site (also with and after the `WARNING:` / `Kernel BUG at` line a kernel without `CONFIG_DEBUG_BUGVERBOSE` prints for it), and `--oops` is run;
+- `tests/test_warnflow_stub.py <kernel ELF>` runs the two experimental WARN fall-through actions on fake `ida_*` modules that model IDA's reanalysis and processor hooks, and function tails with a simplified model (see the test's docstring);
+- `python3 tests/test_core.py` covers the layouts on synthetic tables and the relocation of a synthetic module.
+
+| Kernel (banner) | BUG/WARN sites | static-key sites | exception-table entries | what the tests check |
+|---|---|---|---|---|
+| 6.12.115+deb13.1-amd64, x86_64 (MemLens demo, memory image) | 9,850 (7,831 WARN) | 9,237 | 671 (12-byte, type field) | the 663 sites that are a `jmp` now branch to the decoded target; the other sites outside init code are 2/5-byte NOPs (225 sites in freed init memory are skipped); WARN/BUG sites in functions are `ud2`; >=95% of file names are kernel paths |
+| 6.12.115+deb13.1-cloud-amd64, x86_64, stripped `vmlinux` | 9,993 (7,615 WARN) | needs symbols | 630 | tables found by section name; file names are kernel paths (the trap-byte check needs function symbols, so the CLI's "7,615 WARN sites are ud2" is not a test) |
+| 5.10.198-android12-9, arm64 (vmlinux-to-elf) | 24,386 (17,374 WARN, all `brk #0x800`) | 75,316 | 1,488 (8-byte, no type) | the 54,896 sites outside init code compiled as a `b` branch to the decoded target (most are `static_branch_likely` sites, not keys switched on); the other sites outside init code are `nop`; file pointers here are entry-relative (before Linux 5.19) |
+| 5.10.0-32-amd64 (Debian 11, 5.10.223), x86_64 (vmlinux-to-elf) | 6,573 (4,671 WARN) | 3,820 | 548 (12-byte, third field = handler function) | WARN/BUG sites are `ud2`; the 169 `jmp` sites outside init code branch to the decoded target; file pointers are entry-relative; all 548 handlers are the kernel's `ex_handler_*` functions (288 `ex_handler_uaccess`, 114 `ex_handler_default`, ...), and the 49 MSR handlers sit on `rdmsr`/`wrmsr` |
+| module `nf_tables.ko` from 6.12.115+deb13.1-cloud-amd64, x86_64 (relocations applied by the command line) | 141 (138 WARN) | 8 | none in this module | WARN/BUG sites are `ud2`; the 2 sites compiled as a `jmp` branch to the decoded target; all 141 `file:line` pairs checked against the v6.12.115 sources: 133 lines hold a `WARN`/`BUG` macro, the other 8 a `memcpy` (fortified copies warn on overflow); keys named, e.g. `nft_trace_enabled` |
+| modules `fat.ko`, `vfat.ko` (Debian installer package `fat-modules`), `ext4.ko`, `jbd2.ko` (`ext4-modules`) from 6.12.94+deb13-arm64, arm64 | 25 + 5 + 484 + 162 (250 WARN, all `brk #0x800`) | 0 + 0 + 153 + 25 (all `nop` on disk; every target in the same function as its site; 174 of 178 keys are tracepoints) | 25 + 0 + 11 + 0 (12-byte, all UACCESS_ERR_ZERO) | all 676 `file:line` pairs checked against the v6.12.94 sources: 554 lines hold a `WARN`/`BUG` macro, 116 an assertion macro built on `BUG_ON` (`ASSERT`, `J_ASSERT*`, `assert_spin_locked`), 6 a fortified copy (`memcpy`; these warn on overflow); every fixup lies in the same function as its faulting instruction |
+| 6.1.57-android14-11, arm64 (vmlinux-to-elf) | 12,223 (8,792 WARN, all `brk #0x800`) | 10,629 | 1,043 (12-byte: 1,022 UACCESS_ERR_ZERO, 12 LOAD_UNALIGNED_ZEROPAD, 9 KACCESS_ERR_ZERO) | the 1,099 `b` sites outside init code branch to the decoded target; the other sites outside init code are `nop` |
+| 6.8.0-149-generic (Ubuntu 24.04, 6.8.12), x86_64 (`vmlinuz` from the `linux-image-unsigned` package, vmlinux-to-elf) | 11,027 (8,259 WARN) | 8,304 | 632 (12-byte, type field) | WARN/BUG sites in functions are `ud2`; the 243 `jmp` sites outside init code branch to the decoded target; the other sites outside init code are NOPs; >=95% of file names are kernel paths; the 45 WRMSR and 41 RDMSR entries all sit on `wrmsr`/`rdmsr` |
+| 6.8.0-149-generic (Ubuntu 24.04, 6.8.12), arm64 (`vmlinuz` from the `linux-image` package, vmlinux-to-elf) | 10,803 (8,085 WARN, all `brk #0x800`) | 31,250 | 935 (12-byte: 917 UACCESS_ERR_ZERO, 9 KACCESS_ERR_ZERO, 9 LOAD_UNALIGNED_ZEROPAD) | the 192 `b` sites outside init code branch to the decoded target; the other sites outside init code are `nop`; >=95% of file names are kernel paths |
+
+The entry layout is chosen from the data: for `__bug_table` the layout whose entries name source files, for `__ex_table` the layout that gives the address-sorted list the kernel build produces (arm64 before 5.16 has 8-byte entries).
