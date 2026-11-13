@@ -661,6 +661,13 @@ if picked:
     assert dc["flags"] and all(f & 1 for f in dc["flags"][-2 * len(picked):]), dc["flags"][-3:]
     # review s174 api MAJOR 1: IDA's auto-analysis runs after Annotate and before the AFTER pass
     assert T.AUTO_WAITS and T.AUTO_WAITS[-1] == len(dc["calls"]) - len(picked), (T.AUTO_WAITS[-3:], len(dc["calls"]))
+    # re-review s175 (code MINOR 2, claims MINOR 1): Annotate again without Remove: BEFORE would see kflow's own
+    # references (and blame them on 'before'), so the check is skipped with the reason and decompiles nothing
+    n_calls = len(dc["calls"])
+    again = check_lines(remove=False)
+    assert again == ["[kflow] decompile check skipped: kflow's references from an earlier Annotate are still in the "
+                     "database; Remove annotations and Annotate again to run the check\n"], again
+    assert len(dc["calls"]) == n_calls, "no decompile when the database is already annotated"
     # fails after Annotate: blamed by name; the AFTER decompile is not the cached BEFORE result
     victim = picked[len(picked) // 2]
     dc["after"] = {victim}

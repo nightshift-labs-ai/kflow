@@ -188,6 +188,10 @@ def start(t, arch):
         return None
     check = DecompileCheck()
     try:
+        if idalayer.annotated():  # re-review s175: BEFORE would see kflow's own references and blame them on 'before'
+            check.skip = ("kflow's references from an earlier Annotate are still in the database; Remove annotations "
+                          "and Annotate again to run the check")
+            return check
         import ida_auto
         if not ida_auto.auto_is_ok():  # BEFORE and AFTER would compare a database that is still changing
             check.skip = ("IDA's auto-analysis is still running; after it finishes, Remove annotations and Annotate "
