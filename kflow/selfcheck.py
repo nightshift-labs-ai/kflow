@@ -87,6 +87,7 @@ class DecompileCheck:
         self.spent = 0.0
         self.stopped = False
         self.error = None
+        self.skip = None     # a reason to skip the whole check (auto-analysis still running)
 
     def _run(self, funcs, out, limit):
         for ea in funcs:
@@ -105,7 +106,7 @@ class DecompileCheck:
             self.error = e
 
     def after(self):
-        if self.error is not None:
+        if self.error is not None or self.skip is not None:
             return
         try:
             self._run(list(self.before_ok), self.after_ok, self.seconds)
@@ -113,6 +114,8 @@ class DecompileCheck:
             self.error = e
 
     def text(self):
+        if self.skip is not None:
+            return "decompile check skipped: %s" % self.skip
         if self.error is not None:
             return "decompile check skipped: %s" % (str(self.error) or type(self.error).__name__)
         if not self.picked:
@@ -142,6 +145,15 @@ def start(t, arch):
     if not hexrays():
         return None
     check = DecompileCheck()
+    try:
+        import ida_auto
+        if not ida_auto.auto_is_ok():  # BEFORE and AFTER would compare a database that is still changing
+            check.skip = ("IDA's auto-analysis is still running; after it finishes, Remove annotations and Annotate "
+                          "again to run the check")
+            return check
+    except Exception as e:  # noqa: BLE001  (the check must never stop Annotate)
+        check.error = e
+        return check
     check.before(t, arch)
     return check
 

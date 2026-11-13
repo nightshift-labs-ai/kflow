@@ -665,6 +665,16 @@ if picked:
     assert any(c.startswith("kflow: ") for c in w["cmts"].values()) and any(w["xrefs"].values())
 else:
     assert got == ["[kflow] decompile check: no function has a static-key site that gets a new jump reference\n"], got
+# s174 own review MINOR 1: while IDA's auto-analysis still runs, BEFORE/AFTER would compare a changing database, so the
+# check is skipped (no decompile at all) and says why
+assert picked, "the gate kernel must give the check something to pick"
+w["auto_ok"] = False
+n_calls = len(dc["calls"])
+got = check_lines()
+w["auto_ok"] = True
+assert got == ["[kflow] decompile check skipped: IDA's auto-analysis is still running; after it finishes, Remove "
+               "annotations and Annotate again to run the check\n"], got
+assert len(dc["calls"]) == n_calls, "no decompile while auto-analysis runs"
 real_pick = sc.pick_functions
 sc.pick_functions = lambda t, arch, limit=0: 1 // 0
 got = check_lines()
