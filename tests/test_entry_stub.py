@@ -610,6 +610,23 @@ t = il.scan()
 picked = sc.pick_functions(t, arch)
 assert len(picked) <= sc.MAX_FUNCS and len(set(picked)) == len(picked)
 assert all(get_func(ea) is not None and get_func(ea).start_ea == ea for ea in picked)
+# claims review s174 F4: the documented choice = the full list ordered NOP-site functions first (by each function's
+# first qualifying site), then spread evenly when longer than MAX_FUNCS
+allf = sc.pick_functions(t, arch, limit=10 ** 9)
+first_nop = {}
+for j in t["jump"]:
+    f = get_func(j.code)
+    if f is not None and f.start_ea not in first_nop and sc.gets_jump_ref(j, arch):
+        if f.end_ea - f.start_ea <= sc.MAX_FUNC_BYTES:
+            first_nop[f.start_ea] = sc.is_nop(j.code, arch)
+assert sorted(allf) == sorted(first_nop), (len(allf), len(first_nop))
+assert [first_nop[ea] for ea in allf] == sorted((first_nop[ea] for ea in allf), reverse=True), "NOP-site functions first"
+if len(allf) > sc.MAX_FUNCS:
+    assert picked == [allf[i * len(allf) // sc.MAX_FUNCS] for i in range(sc.MAX_FUNCS)], "spread evenly"
+else:
+    assert picked == allf
+print("pick: %d functions qualify (%d with a NOP site first), %d picked" % (
+    len(allf), sum(first_nop.values()), len(picked)))
 # review s174 api MINOR 4: very large functions are not picked (one huge decompile could blow the time budget)
 assert sc.MAX_FUNC_BYTES == 0x4000, "the docs promise 16 KB"  # re-review s174 NIT 6
 assert all(get_func(ea).end_ea - get_func(ea).start_ea <= 0x4000 for ea in picked)
