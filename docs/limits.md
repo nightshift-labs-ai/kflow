@@ -1,6 +1,19 @@
 # Limits
 
-The full text of the README's [Limits](../README.md#limits) section; WARN fall-through and kernel modules have their own pages ([warnflow.md](warnflow.md), [modules.md](modules.md)).
+The full text of the [one-line list](#in-short) below; WARN fall-through and kernel modules have their own pages ([warnflow.md](warnflow.md), [modules.md](modules.md)).
+
+## In short
+
+One line per limit; the full text is in the sections below.
+
+- 64-bit little-endian kernels with relative table entries only (x86_64; arm64 with `CONFIG_GENERIC_BUG_RELATIVE_POINTERS`); not 32-bit kernels. Up to 4.19 the static-key table is not decoded. [More](#supported-kernels)
+- Exception-type names come from x86_64 Linux 6.12 and arm64 Linux 6.1/6.12; on other versions treat them as a hint (on arm64 5.16-5.19 they are wrong). [More](#exception-type-names)
+- Linux 6.19+: checked only on a stripped Ubuntu mainline 7.0.0 x86_64 `vmlinux`. [More](#linux-619-and-later)
+- WARN fall-through (experimental, off by default, x86_64 only): not yet run in real IDA, tested only on fake `ida_*` modules; the part most likely to need a fix. [More](warnflow.md)
+- Sites in freed init code (memory images) are decoded but not commented when they are outside code segments (MemLens demo kernel, fake-IDA test: 521 of 9,850 BUG/WARN, 225 of 9,237 static-key and 13 of 671 exception-table sites).
+- Kernel modules: checked on one x86_64 and four arm64 modules; absolute relocation types untested on real files; in IDA, kflow relies on IDA's own relocation of the `.ko` (not tried in IDA). [More](modules.md#what-was-checked)
+- Go to oops/WARN line: the log must come from the same build as the file you open; from another build the offsets differ, and when the log's own `WARNING:` / `kernel BUG at` line (or, without one, its function size) contradicts the site at that address kflow reports a mismatch and does not jump, but a log with neither can still land on an unrelated site inside that function (an offset past the function's end in this file goes nowhere); `foo+0x10` also tries the functions named `foo` plus a Clang LTO suffix (`foo.123`, `foo.llvm.N`, `foo.cfi`: the kernel prints them as `foo`), never GCC's `foo.isra.0` / `foo.part.0`; in IDA only the function IDA shows under the log's name is tried (IDA names one function so; the command line lists all same-named static functions), and a note says so for a static function unless the log's `WARNING:` / `kernel BUG at` line confirms the site; IDA's names for symbols with a dot and for same-named static functions are not verified (not yet run in real IDA). [More](#go-to-oopswarn-line)
+- Alternatives (`.altinstructions`) are not handled; see [ida-linux-alternatives](https://github.com/opensrcsec/ida-linux-alternatives).
 
 ## Supported kernels
 

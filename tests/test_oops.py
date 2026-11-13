@@ -11,6 +11,7 @@ arch/arm64/kernel/process.c (__show_regs; 4.9 'PC is at'), arch/arm64/kernel/sta
 kernel/kallsyms.c (%pS / %pB with ' [module]' and a build id), kernel/printk/printk.c (prefixes), and syzbot's
 symbolized reports (file:line after a symbol, '[inline]' frames).
 """
+import glob
 import json
 import os
 import re
@@ -959,15 +960,22 @@ class Resolve(unittest.TestCase):
                              (2, "mfill_atomic_copy", "exact", 0xFFFFFFFF8E629BC4))
 
     def test_readme_lines(self):
-        """Every WARNING line the README gives as an example to paste finds the demo kernel's site (review s157)."""
-        with open(os.path.join(HERE, "..", "README.md"), encoding="utf-8") as fh:
-            readme = fh.read()
-        lines = [t for t in re.findall(r"`(WARNING: [^`]*)`", readme) + re.findall(r"echo '(WARNING: [^']*)'", readme)
-                 if "mfill_atomic_copy" in t]
-        self.assertGreaterEqual(len(lines), 3)
-        for text in lines:
-            rep, m = find(text)
-            self.assertEqual((m.status, m.address), ("exact", 0xFFFFFFFF8E629BC4), text)
+        """Every WARNING line the README or a docs/*.md page gives as an example to paste finds the demo kernel's site
+        (review s157; the docs too since the README's details moved there)."""
+        root = os.path.join(HERE, "..")
+        found = {}
+        for path in [os.path.join(root, "README.md")] + sorted(glob.glob(os.path.join(root, "docs", "*.md"))):
+            with open(path, encoding="utf-8") as fh:
+                doc = fh.read()
+            found[os.path.relpath(path, root)] = [
+                t for t in re.findall(r"`(WARNING: [^`]*)`", doc) + re.findall(r"echo '(WARNING: [^']*)'", doc)
+                if "mfill_atomic_copy" in t]
+        self.assertGreaterEqual(len(found["README.md"]), 1, found)
+        self.assertGreaterEqual(sum(len(v) for v in found.values()), 3, found)
+        for name, lines in sorted(found.items()):
+            for text in lines:
+                rep, m = find(text)
+                self.assertEqual((m.status, m.address), ("exact", 0xFFFFFFFF8E629BC4), (name, text))
 
     def test_kernel_bug_and_module(self):
         rep, m = find(X86_BUG)  # RIP folio_unlock+0x70 = 0xffffffff81000110, the BUG at mm/filemap.c:1499
