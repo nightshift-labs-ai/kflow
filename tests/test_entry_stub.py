@@ -38,7 +38,7 @@ assert p.init() == 1 and [x[1] for x in log if x[0] == "reg"] == ACTION_NAMES
 assert m.STATE["hx"] is None
 assert m.AnnotateAction().activate(None) == 1
 assert [x for x in log if x[0] == "msg" and "jump references added: " in x[1] and "static-key site -> key references: " in x[1]], "Annotate reports its counts"
-TITLE_LINE = "TITLE kflow: Annotate finished\n"  # judge s189 #2: IDA's title prefix of ask_* texts, not a question
+TITLE_LINE = "kflow: Annotate finished\n"  # judge s189 #2: the window's first line; review j189 F1: plain, no "TITLE "
 HEADLINE = re.compile(r"^(\d+) of (\d+) static-key NOP sites can jump to code nothing else in this database reaches:\n"
                       r"kflow's reference is the only one that leads there(; the site's pseudocode comment says so)?\.\n",
                       re.M)  # review s184 #4: M counts sites, not references
@@ -59,7 +59,7 @@ def hidden_by_function():
 
 def summary(new):
     """judge s180 first-run #2, s189 #2: Annotate ends with one summary window (ask_buttons; Close, the third button,
-    is the default and Esc): IDA's TITLE line, the headline (when the database has NOP-state static-key sites), one
+    is the default and Esc): the first line, the headline (when the database has NOP-state static-key sites), one
     line per table in the README's nouns with the counts of STATE["tables"], a next step, then where the details are.
     The raw counts line stays in the Output window only. Returns (text, (N, M) or None)."""
     got = [x for x in new if x[0] == "buttons"]

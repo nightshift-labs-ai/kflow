@@ -308,7 +308,8 @@ class AnnotateAction(ida_kernwin.action_handler_t):
         return ida_kernwin.AST_ENABLE_ALWAYS
 
 
-SUMMARY_TITLE = "TITLE kflow: Annotate finished\n"  # IDA's title prefix of ask_* texts (IDAPython's own ask_yn uses it)
+SUMMARY_TITLE = "kflow: Annotate finished\n"  # a plain first line: the "TITLE " prefix that IDAPython's ask_yn passes is
+# not documented for ask_buttons (the SDK's apidoc lists only HIDECANCEL / HIDENO), so kflow does not rely on it
 HEADLINE = ("%d of %d static-key NOP sites can jump to code nothing else in this database reaches:\n"
             "kflow's reference is the only one that leads there%s.")
 SUMMARY_BUTTONS = ("Static-key sites", "BUG/WARN sites", "Close")  # ask_buttons: 1, 0, -1 (Esc; the default)
