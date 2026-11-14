@@ -505,6 +505,9 @@ def function_starts(name, suffixed=False):
 
 OOPS_PROMPT = ("kflow: paste a kernel log: a WARNING / kernel BUG / RIP / pc line, a whole oops or syzbot report, "
                "func+0xoff or file:line")
+# judge s189 #5: when the dialog starts with oops.example_line's text, say it is an example, not a crash from history
+OOPS_EXAMPLE_PROMPT = ("kflow: below is an example built from this database's __bug_table; replace it with your kernel "
+                       "log (a WARNING / kernel BUG / RIP / pc line, a whole report, func+0xoff or file:line)")
 
 
 class OopsAction(ida_kernwin.action_handler_t):
@@ -523,7 +526,7 @@ class OopsAction(ida_kernwin.action_handler_t):
                 pre, default = None, ""
             finally:
                 ida_kernwin.hide_wait_box()
-        text = ida_kernwin.ask_text(0, default, OOPS_PROMPT)
+        text = ida_kernwin.ask_text(0, default, OOPS_EXAMPLE_PROMPT if pre is not None and default else OOPS_PROMPT)
         if not text:
             return 0
         STATE["oops_text"] = text

@@ -1445,6 +1445,21 @@ def cli_check(path, elf, bugs, reg, tag):
             assert example.startswith("WARNING: CPU: 0 PID: 1 at ") and len(example.splitlines()) == 1, example
             code, got = run(example + "\n")
             assert code == 0 and got.splitlines()[1].startswith("exact: the WARN site at "), (example, got)
+            # judge s189 #5: the line itself as the --oops argument (no such file) is read as the log, with a note
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(io.StringIO()) as err:
+                code = cli.main([path, "--oops", example])
+            assert code == 0 and buf.getvalue().splitlines()[1] == got.splitlines()[1], (example, buf.getvalue(), got)
+            assert "reading the argument itself as the log" in err.getvalue(), err.getvalue()
+            # and - still reads stdin
+            real_stdin, sys.stdin = sys.stdin, io.StringIO(example + "\n")
+            try:
+                buf = io.StringIO()
+                with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(io.StringIO()) as err:
+                    code = cli.main([path, "--oops", "-"])
+            finally:
+                sys.stdin = real_stdin
+            assert code == 0 and buf.getvalue() == got and not err.getvalue(), (buf.getvalue(), got, err.getvalue())
             if os.path.basename(path) == "dm-mod.ko":  # judge s189 #1: the README's quick path quotes this line
                 with open(os.path.join(HERE, "..", "README.md"), encoding="utf-8") as fh:
                     assert "starts with `%s`" % example in fh.read(), example
@@ -1471,6 +1486,8 @@ def cli_check(path, elf, bugs, reg, tag):
         with contextlib.redirect_stderr(io.StringIO()) as err:
             code = cli.main([path, "--oops", os.path.join(d, "missing.txt")])
         assert code == 2 and "missing.txt" in err.getvalue(), err.getvalue()
+        # judge s189 #5: the error says the three ways to give the log
+        assert "--oops - " in err.getvalue() and "the line itself in quotes" in err.getvalue(), err.getvalue()
 
 
 if __name__ == "__main__":

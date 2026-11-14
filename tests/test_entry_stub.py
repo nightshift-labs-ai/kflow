@@ -233,6 +233,9 @@ _, first = ask(None)
 asks = [e for e in first if e[0] == "ask"]
 assert len(asks) == 1, first
 example_default = asks[0][2]
+# judge s189 #5: the pre-filled line is labelled as an example built from this database, not a crash from history
+assert m.OOPS_PROMPT != m.OOPS_EXAMPLE_PROMPT and "example built from this database" in m.OOPS_EXAMPLE_PROMPT
+assert "example" not in m.OOPS_PROMPT and asks[0][3] == (m.OOPS_EXAMPLE_PROMPT if example_default else m.OOPS_PROMPT), asks
 assert ("Go to oops/WARN line starts with a WARNING line built from this database" in first_text) == bool(
     example_default), (first_text, example_default)  # judge s189 #2: the summary window's next step
 if QUICK:  # judge s189 #1: the README's quick path quotes this dialog's first text and the trap it leads to
@@ -253,6 +256,7 @@ if example_default:
     assert any("exact" in str(e) for e in used), used
     _, again = ask(None)
     assert [e for e in again if e[0] == "ask"][0][2] == example_default, again  # the last text, no new scan needed
+    assert [e for e in again if e[0] == "ask"][0][3] == m.OOPS_PROMPT, again  # pasted (even unchanged): no example label
 m.STATE["oops_text"] = ""
 
 
@@ -294,11 +298,13 @@ if site is not None:
     r, new = ask(text)
     assert r == 1 and went(new) == [site.addr], new
     first_ask = next(e for e in new if e[0] == "ask")  # first use: the default is this database's example line (s180 #3)
-    assert first_ask[:2] == ("ask", 0) and first_ask[3] == m.OOPS_PROMPT and first_ask[2] == example_default, first_ask
+    assert first_ask[:2] == ("ask", 0) and first_ask[2] == example_default, first_ask
+    # judge s189 #5: a pre-filled example says it is one; an empty dialog has the plain prompt
+    assert first_ask[3] == (m.OOPS_EXAMPLE_PROMPT if example_default else m.OOPS_PROMPT), first_ask
     assert said(new, "exact: the WARN site at %s+%#x (%#x)" % (name, off, site.addr)), new
     assert not [x for x in new if x[0] in ("warning", "show")], new
     r, new = ask("%s+%#x" % (name, off))  # just func+0xoff; the dialog offers the last text
-    assert r == 1 and went(new) == [site.addr] and new[0][2] == text, new
+    assert r == 1 and went(new) == [site.addr] and new[0][2] == text and new[0][3] == m.OOPS_PROMPT, new  # after a paste
     # the module the log names is passed on (review s157 m7, M65): a note says this file is not that module
     r, new = ask("%s%s+%#x/%#x [kflow_other_mod]" % (reg, name, off, size))
     assert went(new) == [site.addr] and said(new, "the log puts %s in module kflow_other_mod; this file is %s" % (

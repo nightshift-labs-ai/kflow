@@ -1,7 +1,7 @@
 """kflow command line: decode the site tables of a kernel ELF (vmlinux, a MemLens kernel.elf, or a module .ko).
 
     python3 -m kflow <kernel.elf> [--list bug|warn|jump|ex] [--limit N] [--json out.json]
-    python3 -m kflow <kernel.elf> --oops <log file, or - for stdin> [--json out.json]
+    python3 -m kflow <kernel.elf> --oops <log file, - for stdin, or the line itself in quotes> [--json out.json]
     python3 -m kflow <kernel.elf> --oops-example     (a WARNING line from this file's own table, to try --oops)
 """
 import argparse
@@ -9,6 +9,7 @@ import bisect
 import collections
 import json
 import os
+import re
 import struct
 import sys
 
@@ -411,8 +412,8 @@ def main(argv=None):
     ap.add_argument("--list", choices=["bug", "warn", "jump", "ex"])
     ap.add_argument("--limit", type=row_count, help="rows for --list, 0 or more (default 20)")
     ap.add_argument("--json")
-    ap.add_argument("--oops", metavar="LOG", help="a kernel log (a WARNING / kernel BUG / RIP / pc line or a whole "
-                    "report; - reads stdin): print the BUG/WARN site it names")
+    ap.add_argument("--oops", metavar="LOG", help="a kernel log file (a WARNING / kernel BUG / RIP / pc line or a whole "
+                    "report), - for stdin, or the line itself in quotes: print the BUG/WARN site it names")
     ap.add_argument("--oops-example", action="store_true", help="print a WARNING line built from this file's own "
                     "__bug_table, to try --oops (or Go to oops/WARN line in IDA) on a kernel without a real log")
     ap.add_argument("--version", action="version", version="kflow " + __version__)
@@ -424,11 +425,7 @@ def main(argv=None):
     limit = 20 if a.limit is None else a.limit
     try:
         if a.oops is not None:
-            if a.oops == "-":
-                log_text = sys.stdin.read()
-            else:
-                with open(a.oops, encoding="utf-8", errors="replace") as fh:
-                    log_text = fh.read()
+            log_text = oops_log_text(a.oops)
         elf = Elf(a.kernel)
         t = load(elf)
     except (InputError, ValueError, OSError) as e:
@@ -488,6 +485,27 @@ def site_records(elf, t, path):
         "ex": [{"addr": h(x.insn), "fixup": h(x.fixup), "type": None if x.data is None else x.type_name(elf.arch),
                 "handler": h(x.handler), "function": elf.func(x.insn) or None} for x in t.get("ex", [])],
     }
+
+
+# a --oops argument that is no file but reads like a log line (judge s189 #5: the --oops-example line pasted as is)
+LOG_LIKE = re.compile(r"\n|WARNING:|BUG|RIP:|pc :|\+0x[0-9a-fA-F]|:\d")
+
+
+def oops_log_text(arg):
+    """--oops LOG: '-' reads stdin; an existing path is read as a file; otherwise an argument that reads like a log
+    line (a newline, WARNING:, BUG, RIP:, pc :, +0x.., :<digits>) is the log itself (a note on stderr says so).
+    Anything else: InputError naming the three ways."""
+    if arg == "-":
+        return sys.stdin.read()
+    if os.path.exists(arg) or not LOG_LIKE.search(arg):
+        try:
+            with open(arg, encoding="utf-8", errors="replace") as fh:
+                return fh.read()
+        except FileNotFoundError:
+            raise InputError("--oops %s: no such file. Give a log file, --oops - (stdin), or the line itself in quotes: "
+                             "--oops \"WARNING: ... at file.c:123 func+0x10/0x40\"" % arg) from None
+    print("kflow: --oops: no file of that name, so reading the argument itself as the log", file=sys.stderr)
+    return arg
 
 
 def oops_example(elf, t):
