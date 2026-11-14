@@ -120,7 +120,9 @@ SHAPES = [("ida_hexrays", "Hexrays_Hooks", r"def func_printed\(self, cfunc: cfun
           ("ida_kernwin", None, r"def jumpto\(ea: ida_idaapi.ea_t, opnum: int = -1"),
           ("ida_name", None, r"def get_name_ea\(_from: ida_idaapi.ea_t, name: str\) -> ida_idaapi.ea_t:"),
           ("ida_name", None, r"def get_nlist_name\(idx: int\) -> str:"),
-          ("ida_name", None, r"def get_nlist_ea\(idx: int\) -> ida_idaapi.ea_t:")]
+          ("ida_name", None, r"def get_nlist_ea\(idx: int\) -> ida_idaapi.ea_t:"),
+          # a static key's build default (idalayer.key_default): a key in an uninitialized segment (.bss) is off
+          ("ida_segment", None, r"^SEG_BSS: int  # 9\s*$")]
 for mod, cls, pattern in SHAPES:
     checked += 1
     src = open(os.path.join(sys.argv[1], mod + ".pyi")).read()

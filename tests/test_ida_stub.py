@@ -28,7 +28,7 @@ class PackedElf(Elf):
     BASE = 0x400000  # and not at the command line's base: only offsets inside a section may be compared
 
 
-SEG_XTRN = 1
+SEG_XTRN, SEG_BSS = 1, 9  # ida_segment.pyi values
 FF_CODE, MS_CLS = 0x600, 0x600  # ida_bytes.pyi values
 FF_FLOW = 0x10000  # bytes.hpp: "Exec flow from prev instruction"
 X86_LEN = [(b"\xe9", 5), (b"\xeb", 2), (b"\x0f\x1f\x44\x00\x00", 5), (b"\x66\x90", 2), (b"\x0f\x0b", 2), (b"\xe8", 5)]
@@ -48,6 +48,8 @@ def world_from(elf):
     for name, (a, e) in elf.sections.items():
         exe = any(a <= ta < e for ta, te in elf.text)
         segs.append(Seg(a, e, 1 if exe else 4, name))
+        if name in elf.nobits:  # SHT_NOBITS (.bss): an uninitialized segment, SEG_BSS (bytes not loaded)
+            segs[-1].type = SEG_BSS
     if not segs:  # ELF without section names: one segment per loaded range
         segs = [Seg(a, e, 1 if any(a <= ta < e for ta, te in elf.text) else 4, "seg%d" % i)
                 for i, (a, e, o) in enumerate(elf.loaded)]
@@ -79,6 +81,7 @@ def install(w, names=True):
     m["ida_segment"].getseg = getseg
     m["ida_segment"].get_segm_by_name = lambda n: next((s for s in w["segs"] if s.name == n), None)
     m["ida_segment"].SEGPERM_EXEC, m["ida_segment"].SEG_CODE, m["ida_segment"].SEG_XTRN = 1, 2, SEG_XTRN
+    m["ida_segment"].SEG_BSS = SEG_BSS
     m["ida_segment"].get_segm_qty = lambda: len(w["segs"])
     m["ida_segment"].getnseg = lambda n: w["segs"][n] if 0 <= n < len(w["segs"]) else None
     m["ida_bytes"].get_bytes = lambda ea, n: elf.read(ea, n)
@@ -504,6 +507,36 @@ def run(path):
             hit = il.SITE_KEY.get(j.entry)
             if hit and il.in_text(j.code):
                 assert (j.code, elf.externs[hit[1]]) in w["drefs"], (hex(j.code), hit)
+    # key classes and build defaults (judge s189 diff #3): as on the command line, site by site; hardening_keys (the
+    # summary window's line) names the hardening keys of the class column, with the command line's defaults
+    # review s192: and the key's state in this database (struct static_key's 'enabled'), as on the command line
+    want = [(il.core.key_class(cli_elf.key_name(c.key) or ""), cli_elf.key_default(c.key), cli_elf.key_enabled(c.key))
+            for c in ref.get("jump", [])]
+    names = {}
+    got = [(il.site_class(j, names), il.key_default(j), il.key_enabled(j)) for j in t["jump"]]
+    bad = [(hex(j.code), g, x) for j, g, x in zip(t["jump"], got, want) if g != x]
+    assert not bad, bad[:5]
+    hard = {}
+    for j, (cls, default, enabled) in zip(t["jump"], got):
+        if cls == "hardening":
+            n = il.site_key_name(j, names)
+            hard.setdefault(n, (n, default, enabled))
+    assert il.hardening_keys(t) == [hard[n] for n in il.core.HARDENING_KEYS if n in hard], (il.hardening_keys(t), hard)
+    inside = next((j for j in t["jump"] if not il.SITE_KEY.get(j.entry) and il.ida_segment.getseg(j.key) is not None
+                and il.ida_segment.getseg(j.key).type != SEG_XTRN), None)
+    if inside is not None:  # bytes not loaded: unknown, unless the segment is SEG_BSS (zero-filled: a false key)
+        seg, loaded = il.ida_segment.getseg(inside.key), il.ida_bytes.is_loaded
+        kind, il.ida_bytes.is_loaded = seg.type, lambda ea: False
+        try:
+            seg.type = 0
+            assert il.key_default(inside) is None and il.key_enabled(inside) is None
+            seg.type = SEG_BSS
+            assert il.key_default(inside) is False and il.key_enabled(inside) == 0
+        finally:
+            seg.type, il.ida_bytes.is_loaded = kind, loaded
+    print("  key classes as on the command line: %s; hardening keys: %s" % (
+        ", ".join("%s %d" % (c, sum(1 for g in got if g[0] == c)) for c in il.core.KEY_CLASSES),
+        il.core.hardening_text(il.hardening_keys(t)) or "none"))
     for a in filter(None, os.environ.get("KFLOW_SHOW", "").split(",")):  # print the comments at these addresses
         print("%s:  %s" % (a, w["cmts"].get(int(a, 16), "(none)")))
     if nxt is not None:

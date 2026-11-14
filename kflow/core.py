@@ -172,15 +172,22 @@ TRACEPOINT_KEY_OFFSET = 8  # struct tracepoint { const char *name; struct static
 DDEBUG_KEY_OFFSET = 0x28  # struct _ddebug { 4 pointers; lineno:18 ...; key } (Linux 4.x to 6.x, 64-bit)
 
 
+def ddebug_name(n):
+    """True for the symbol of a struct _ddebug: __UNIQUE_ID_ddebug<N> (pr_debug, dev_dbg...) or 'descriptor', the
+    static that pr_debug_ratelimited, dev_dbg_ratelimited and net_dbg_ratelimited define (GCC: descriptor.<N>)."""
+    return n.startswith("__UNIQUE_ID_ddebug") or n == "descriptor" or n.startswith("descriptor.")
+
+
 def ddebug_label(read, ea):
-    """'pr_debug file:line "format"' for the struct _ddebug at ea, or None if it does not read as one."""
+    """'pr_debug file:line "format"' for the struct _ddebug at ea, or None if it does not read as one: the file name
+    must be a source file name (_plausible_file) and the line not 0."""
     raw = read(ea, 0x24) if read else None
     if not raw or len(raw) < 0x24:
         return None
     _mod, _func, filename, fmt = struct.unpack_from("<QQQQ", raw)
     line = struct.unpack_from("<I", raw, 0x20)[0] & 0x3FFFF
     f, raw = _cstr(read, filename), read(fmt, 512) or b""
-    if not f or not line:
+    if not _plausible_file(f) or not line:
         return None
     m = raw.split(b"\0", 1)[0].decode("utf-8", "replace").strip()
     m = "".join(c if c.isprintable() else "\\n" if c == "\n" else " " for c in m).replace('"', "'")
@@ -190,9 +197,11 @@ def ddebug_label(read, ea):
 def key_label(name_at, ea, read=None, nearest=None):
     """Readable name for a static key. name_at(ea) -> symbol name exactly at ea, or "".
     A tracepoint's key is the member at offset 8 of struct tracepoint __tracepoint_<event>: 'tracepoint <event>';
-    a dynamic-debug key sits at offset 0x28 of a struct _ddebug (__UNIQUE_ID_ddebug*): 'pr_debug file:line "fmt"'.
-    Otherwise the symbol at or up to 64 bytes before the key ('sym+0x10'); then, if nearest(ea) -> (name, address) gives
-    the closest named address at or before ea, that name up to KEY_WINDOW bytes back (an array of keys); else None."""
+    a dynamic-debug key sits at offset 0x28 of a struct _ddebug (ddebug_name: __UNIQUE_ID_ddebug*, descriptor.N):
+    'pr_debug file:line "fmt"'. Otherwise the symbol at or up to 64 bytes before the key ('sym+0x10'); then, if
+    nearest(ea) -> (name, address) gives the closest named address at or before ea, that name up to KEY_WINDOW bytes
+    back (an array of keys; after a _ddebug, a _ddebug of its own without a symbol: 'pr_debug ...' when the struct at
+    the key - 0x28 validates); else None."""
     n = name_at(ea)
     if n:
         return n
@@ -201,15 +210,123 @@ def key_label(name_at, ea, read=None, nearest=None):
         if n:
             if n.startswith("__tracepoint_") and off == TRACEPOINT_KEY_OFFSET:
                 return "tracepoint " + n[len("__tracepoint_"):]
-            if n.startswith("__UNIQUE_ID_ddebug") and off == DDEBUG_KEY_OFFSET:
+            if ddebug_name(n) and off == DDEBUG_KEY_OFFSET:
                 d = ddebug_label(read, ea - off)
                 if d:
                     return d
             return "%s+%#x" % (n, off)
     hit = nearest(ea) if nearest else None
     if hit and hit[0] and 0 < ea - hit[1] <= KEY_WINDOW:
-        return "%s+%#x" % (hit[0], ea - hit[1])
+        # judge s189 3.7: the demo kernel's __dyndbg holds 2152 records, 1939 with a symbol; the others follow one
+        d = ddebug_label(read, ea - DDEBUG_KEY_OFFSET) if ddebug_name(hit[0]) else None
+        return d or "%s+%#x" % (hit[0], ea - hit[1])
     return None
+
+
+KEY_CLASSES = ("hardening", "feature", "tracepoint", "debug")  # the static-key list's order: keys that change what
+# the kernel does first, then tracing and dynamic debug (pr_debug / dev_dbg / net_dbg sites), which only log
+HARDENING_KEYS = (  # judge s189 diff #3: symbol names of static keys that switch a hardening or mitigation on, each a
+    # key with sites in the MemLens demo kernel (Debian 6.12) and in Ubuntu 6.8 amd64, except dynamic_scs_enabled (sites
+    # in GKI 6.1 / 6.6 / 6.12 arm64); cr_pinning and the five after bypass_usercopy_checks are x86 only (GKI 6.1 / 6.6
+    # arm64 have the other four and dynamic_scs_enabled)
+    "init_on_alloc",  # mm: zero pages and slab objects on allocation (init_on_alloc=, CONFIG_INIT_ON_ALLOC_DEFAULT_ON)
+    "init_on_free",  # ... on free (init_on_free=, CONFIG_INIT_ON_FREE_DEFAULT_ON)
+    "randomize_kstack_offset",  # random kernel stack offset per syscall (CONFIG_RANDOMIZE_KSTACK_OFFSET_DEFAULT)
+    "cr_pinning",  # x86: CR0.WP and CR4.SMEP/SMAP/UMIP... cannot be cleared once set (native_write_cr0/cr4)
+    "bypass_usercopy_checks",  # CONFIG_HARDENED_USERCOPY: on = the checks are skipped (hardened_usercopy=off)
+    "switch_mm_cond_ibpb", "switch_mm_always_ibpb",  # x86 Spectre v2 user: IBPB on context switch
+    "switch_to_cond_stibp",  # x86 Spectre v2 user: STIBP for tasks that ask for it
+    "switch_mm_cond_l1d_flush",  # x86: L1D flush on context switch for tasks that ask for it (prctl)
+    "cpu_buf_idle_clear",  # x86 MDS: clear CPU buffers before idle (older kernels call it mds_idle_clear: review s192
+    # looked again, no sample here has that symbol, so it is still not listed)
+    "dynamic_scs_enabled",  # arm64 CONFIG_DYNAMIC_SCS: shadow call stack switched on at boot on CPUs without pointer
+    # authentication (tested by scs_is_dynamic(); GKI 6.1 and 6.6: 5 sites, GKI 6.12: 6)
+)
+
+
+def key_class(label):
+    """The class of a static key from its label (key_label): 'tracepoint' (the key of a struct tracepoint), 'debug'
+    (of a struct _ddebug that validates), 'hardening' (a key named exactly as in HARDENING_KEYS) or 'feature'."""
+    label = label or ""
+    if label.startswith("tracepoint "):
+        return "tracepoint"
+    if label.startswith("pr_debug "):
+        return "debug"
+    return "hardening" if label in HARDENING_KEYS else "feature"
+
+
+JUMP_TYPE_TRUE = 1  # include/linux/jump_label.h: bit 0 of struct static_key's type word; set by STATIC_KEY_INIT_TRUE
+
+
+def key_default(read, ea, zero_filled=None):
+    """True / False: the static key at ea is on / off by default in this build (DEFINE_STATIC_KEY_TRUE / _FALSE, and
+    _MAYBE by its config option): bit 0 (JUMP_TYPE_TRUE) of the word after 'enabled' in struct static_key { atomic_t
+    enabled; union { unsigned long type; entries; next } }. A running kernel keeps the bit under the pointer it stores
+    there (memory images). Not a static key (the word is neither a type 0-3 nor a kernel pointer) or not readable: None,
+    unless zero_filled(ea) says the key lies in zero-filled memory (.bss): then False."""
+    raw = read(ea + 8, 8) if read else None
+    if not raw or len(raw) < 8:
+        return False if zero_filled is not None and zero_filled(ea) else None
+    word = struct.unpack("<Q", raw)[0]
+    if word > 3 and word >> 48 != 0xFFFF:
+        return None
+    return bool(word & JUMP_TYPE_TRUE)
+
+
+def key_enabled(read, ea, zero_filled=None):
+    """The state of the static key at ea in this file: the atomic_t 'enabled' at offset 0 of struct static_key, signed
+    (0 = off, 1 or more = on: static_key_slow_inc counts its users; -1 while the first user switches it on). On disk it
+    equals the build default (STATIC_KEY_INIT_TRUE sets it to 1); a memory image holds the running kernel's state.
+    None when the bytes are not readable or do not read as a static key (the same type-word check as key_default),
+    unless zero_filled(ea) says the key lies in zero-filled memory (.bss): then 0."""
+    raw = read(ea, 16) if read else None
+    if not raw or len(raw) < 16:
+        return 0 if zero_filled is not None and zero_filled(ea) else None
+    enabled, word = struct.unpack("<i4xQ", raw)
+    if word > 3 and word >> 48 != 0xFFFF:
+        return None
+    return enabled
+
+
+USERCOPY_BYPASS = "bypass_usercopy_checks"  # the one hardening key that is on when its hardening is off
+
+
+def _state_differs(k):
+    """(name, key_default[, key_enabled]): the key's state in this file is known (0 or more) and differs from its known
+    build default (hardening_text's '(on in this file)' / '(off in this file)' note)."""
+    default, enabled = k[1], (k[2] if len(k) > 2 else None)
+    return default is not None and enabled is not None and enabled >= 0 and (enabled > 0) != default
+
+
+def hardening_text(keys, most=None, width=None):
+    """'init_on_alloc on, init_on_free off' for [(name, key_default)] or [(name, key_default, key_enabled)]: on by
+    default first, then off, then unknown ('?'), each in the given order. With the state in this file (key_enabled; a
+    memory image's can differ from the build default), a note where it differs: 'cr_pinning off (on in this file)'; a
+    negative or unknown state, or an unknown default, gives none. bypass_usercopy_checks also says what the usercopy
+    checks do: 'off (checks on)'. With most, at most that many names, then '+N more': keys with that note are picked
+    first (review s193: the demo kernel's cr_pinning), the picked names stay in the order above; with width, fewer
+    names (at least one) while the text is longer than width characters."""
+    rank, word = {True: 0, False: 1, None: 2}, {True: "on", False: "off", None: "?"}
+    ordered = sorted(keys, key=lambda k: rank[k[1]])
+    words = []
+    for k in ordered:
+        name, default = k[0], k[1]
+        enabled = k[2] if len(k) > 2 else None
+        state = None if enabled is None or enabled < 0 else enabled > 0
+        note = []
+        if _state_differs(k):
+            note.append("%s in this file" % word[state])
+        if default is not None and name == USERCOPY_BYPASS:
+            note.append("checks %s" % word[not (default if state is None else state)])
+        words.append("%s %s" % (name, word[default]) + (" (%s)" % ": ".join(note) if note else ""))
+    first = sorted(range(len(ordered)), key=lambda i: not _state_differs(ordered[i]))  # stable: the order above
+    n = len(words) if most is None else min(most, len(words))
+    while True:
+        more = ["+%d more" % (len(words) - n)] if n < len(words) else []
+        text = ", ".join([words[i] for i in sorted(first[:n])] + more)
+        if width is None or len(text) <= width or n <= 1:
+            return text
+        n -= 1
 
 
 def decode_jump_table(read, start, stop, in_text=None):

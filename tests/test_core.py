@@ -170,6 +170,138 @@ class Keys(unittest.TestCase):
         self.assertIsNone(key_label(at, BASE + 0x500, m.read, lambda ea: ("far_away", ea - 0x1001)))
         self.assertIsNone(key_label(at, BASE + 0x500, m.read, lambda ea: None))
 
+    def test_ratelimited_and_unnamed_ddebug_keys(self):
+        """judge s189 3.7: pr_debug_ratelimited / net_dbg_ratelimited / dev_dbg_ratelimited name their struct _ddebug
+        'descriptor' (GCC: descriptor.N), and a _ddebug without a symbol of its own (the demo kernel's __dyndbg has 2152
+        records, 1939 named) used to read 'previous record+0x60': both get the pr_debug label when the struct validates."""
+        from kflow.core import key_label
+        m = Mem()
+        names = {BASE + 0x200: "descriptor.13", BASE + 0x300: "__UNIQUE_ID_ddebug7", BASE + 0x400: "descriptor",
+                 BASE + 0x500: "descriptor.2", BASE + 0x600: "other_struct", BASE + 0x700: "descriptor.4"}
+
+        def ddebug(ea, line, filename=BASE + 0x1000, fmt=BASE + 0x1100):
+            m.put(ea, struct.pack("<QQQQI", BASE + 0x1200, BASE + 0x1210, filename, fmt, line | (63 << 18)))
+        m.put(BASE + 0x1000, b"drivers/md/dm-ioctl.c\0")
+        m.put(BASE + 0x1100, b"device-mapper: ioctl: %s\0")
+        m.put(BASE + 0x1200, b"dm_mod\0")
+        m.put(BASE + 0x1210, b"dev_remove\0")
+        m.put(BASE + 0x1300, b"not a file name\0")
+        want = "pr_debug drivers/md/dm-ioctl.c:%d \"device-mapper: ioctl: %%s\""
+        for ea, line in ((0x200, 1001), (0x300, 1002), (0x338, 1003), (0x370, 1004), (0x400, 1005), (0x600, 1007)):
+            ddebug(BASE + ea, line)
+        ddebug(BASE + 0x500, 1006, filename=BASE + 0x1300)  # a file name with a space: not a _ddebug
+        ddebug(BASE + 0x700, 0)  # line 0: not a _ddebug
+        at = lambda ea: names.get(ea, "")  # noqa: E731
+
+        def near(ea):
+            return max(((n, a) for a, n in names.items() if a <= ea), key=lambda x: x[1], default=None)
+        self.assertEqual(key_label(at, BASE + 0x228, m.read, near), want % 1001)  # descriptor.13+0x28
+        self.assertEqual(key_label(at, BASE + 0x428, m.read, near), want % 1005)  # plain 'descriptor'
+        self.assertEqual(key_label(at, BASE + 0x328, m.read, near), want % 1002)  # as before
+        # records after __UNIQUE_ID_ddebug7 without names of their own: the struct at the key - 0x28 is read
+        self.assertEqual(key_label(at, BASE + 0x360, m.read, near), want % 1003)
+        self.assertEqual(key_label(at, BASE + 0x398, m.read, near), want % 1004)
+        # what does not validate keeps symbol+offset
+        self.assertEqual(key_label(at, BASE + 0x528, m.read, near), "descriptor.2+0x28")
+        self.assertEqual(key_label(at, BASE + 0x728, m.read, near), "descriptor.4+0x28")
+        self.assertEqual(key_label(at, BASE + 0x228, None, near), "descriptor.13+0x28")
+        # only dynamic-debug names: another struct with the same bytes is not read as one
+        self.assertEqual(key_label(at, BASE + 0x628, m.read, near), "other_struct+0x28")
+        self.assertEqual(key_label(at, BASE + 0x660, m.read, near), "other_struct+0x60")
+
+    def test_key_classes(self):
+        """judge s189 diff #3: every static key gets a class from its label; hardening keys are a short fixed list of
+        symbol names (checked against the demo kernel's keys), sorted first with the feature keys."""
+        from kflow import core
+        self.assertEqual(core.KEY_CLASSES, ("hardening", "feature", "tracepoint", "debug"))
+        self.assertEqual(core.HARDENING_KEYS, (
+            "init_on_alloc", "init_on_free", "randomize_kstack_offset", "cr_pinning", "bypass_usercopy_checks",
+            "switch_mm_cond_ibpb", "switch_mm_always_ibpb", "switch_to_cond_stibp", "switch_mm_cond_l1d_flush",
+            "cpu_buf_idle_clear", "dynamic_scs_enabled"))
+        cases = {"tracepoint sched_switch": "tracepoint", 'pr_debug init/main.c:1 "x"': "debug",
+                 "init_on_alloc": "hardening", "cpu_buf_idle_clear": "hardening", "init_on_alloc+0x10": "feature",
+                 "mds_idle_clear": "feature", "dynamic_scs_enabled": "hardening",  # mds_idle_clear: no sample has it
+                 "my_init_on_alloc": "feature", "sched_feat_keys+0x30": "feature", "0xFFFFFFFF81000000": "feature",
+                 "descriptor.1+0x28": "feature", "": "feature", None: "feature"}
+        self.assertEqual({k: core.key_class(k) for k in cases}, cases)
+        # the summary text: on by default first, then off, then unknown ('?'); at most `most` names, then '+N more'
+        pairs = [("init_on_free", False), ("init_on_alloc", True), ("cr_pinning", None), ("randomize_kstack_offset", True)]
+        self.assertEqual(core.hardening_text(pairs),
+                         "init_on_alloc on, randomize_kstack_offset on, init_on_free off, cr_pinning ?")
+        self.assertEqual(core.hardening_text(pairs, 2), "init_on_alloc on, randomize_kstack_offset on, +2 more")
+        self.assertEqual(core.hardening_text(pairs[:1], 3), "init_on_free off")
+        # review s192: the state in this file when it differs from the build default (a memory image: CR pinning is a
+        # false key that the running kernel switched on); with the default unknown or the state unknown, no note
+        triples = [("init_on_alloc", True, 1), ("init_on_free", False, 0), ("cr_pinning", False, 1),
+                   ("randomize_kstack_offset", True, 0), ("switch_mm_cond_ibpb", False, None), ("cpu_buf_idle_clear", None, 1),
+                   ("switch_to_cond_stibp", False, 2), ("switch_mm_always_ibpb", False, -1)]
+        self.assertEqual(core.hardening_text(triples),
+                         "init_on_alloc on, randomize_kstack_offset on (off in this file), init_on_free off, "
+                         "cr_pinning off (on in this file), switch_mm_cond_ibpb off, switch_to_cond_stibp off (on in this "
+                         "file), switch_mm_always_ibpb off, cpu_buf_idle_clear ?")
+        # review s193: with a cut, keys whose state in this file differs are picked first, then shown in the usual
+        # order. The MemLens demo kernel's (name, default, state) triples (python3 -m kflow kernel.elf): the IDA window
+        # (most=3) used to say 'init_on_alloc on, randomize_kstack_offset on, init_on_free off, +7 more'
+        demo = [("init_on_alloc", True, 1), ("init_on_free", False, 0), ("randomize_kstack_offset", True, 1),
+                ("cr_pinning", False, 1), ("bypass_usercopy_checks", False, 0), ("switch_mm_cond_ibpb", False, 0),
+                ("switch_mm_always_ibpb", False, 0), ("switch_to_cond_stibp", False, 0),
+                ("switch_mm_cond_l1d_flush", False, 0), ("cpu_buf_idle_clear", False, 0)]
+        self.assertEqual(core.hardening_text(demo, 3),
+                         "init_on_alloc on, randomize_kstack_offset on, cr_pinning off (on in this file), +7 more")
+        self.assertEqual(core.hardening_text(demo, 3, 110), core.hardening_text(demo, 3))
+        self.assertEqual(core.hardening_text(demo), core.hardening_text(demo, 10))  # no cut: every key, as before
+        self.assertEqual(core.hardening_text(triples, 3),
+                         "randomize_kstack_offset on (off in this file), cr_pinning off (on in this file), "
+                         "switch_to_cond_stibp off (on in this file), +5 more")
+        # width: fewer names while the text is longer (the window's line stays short; differing keys still first)
+        self.assertEqual(core.hardening_text(triples, 3, 110),
+                         "randomize_kstack_offset on (off in this file), cr_pinning off (on in this file), +6 more")
+        self.assertEqual(core.hardening_text(triples[2:4], 3, 60), "randomize_kstack_offset on (off in this file), +1 more")
+        self.assertEqual(core.hardening_text(triples[2:3], 3, 10), "cr_pinning off (on in this file)")  # one name: kept
+        # bypass_usercopy_checks is on when the usercopy checks are skipped: the note says what the checks do
+        self.assertEqual([core.hardening_text([("bypass_usercopy_checks",) + p]) for p in (
+            (False, 0), (False, None), (True, 1), (False, 1), (True, 0), (None, 0), (None, None))], [
+            "bypass_usercopy_checks off (checks on)", "bypass_usercopy_checks off (checks on)",
+            "bypass_usercopy_checks on (checks off)", "bypass_usercopy_checks off (on in this file: checks off)",
+            "bypass_usercopy_checks on (off in this file: checks on)", "bypass_usercopy_checks ?",
+            "bypass_usercopy_checks ?"])
+
+    def test_key_build_default(self):
+        """The build default of a key: bit 0 (JUMP_TYPE_TRUE) of the word after 'enabled' in struct static_key, set
+        for DEFINE_STATIC_KEY_TRUE; a running kernel keeps it under the entries pointer (memory images). A key in
+        zero-filled memory (.bss) is a false key; unreadable or not a static_key: None."""
+        from kflow.core import key_default
+        m = Mem()
+        m.put(BASE + 0x100, struct.pack("<iiQ", 1, 0, 1))  # vmlinux on disk: STATIC_KEY_INIT_TRUE
+        m.put(BASE + 0x110, struct.pack("<iiQ", 0, 0, 0))  # STATIC_KEY_INIT_FALSE
+        m.put(BASE + 0x120, struct.pack("<iiQ", 1, 0, 0xFFFFFFFF8F82FCF1))  # memory image: entries | JUMP_TYPE_TRUE
+        m.put(BASE + 0x130, struct.pack("<iiQ", 0, 0, 0xFFFF88FD41FE36A2))  # static_key_mod | JUMP_TYPE_LINKED
+        m.put(BASE + 0x140, struct.pack("<iiQ", 1, 0, 3))  # memory image: TRUE | LINKED, no entries
+        m.put(BASE + 0x150, struct.pack("<iiQ", 0, 0, 0x1234567))  # not a pointer, not a type: not a static_key
+        self.assertEqual([key_default(m.read, BASE + o) for o in (0x100, 0x110, 0x120, 0x130, 0x140, 0x150)],
+                         [True, False, True, False, True, None])
+        self.assertIsNone(key_default(m.read, BASE + 0x8000))  # not readable
+        self.assertFalse(key_default(m.read, BASE + 0x8000, lambda ea: ea == BASE + 0x8000))  # .bss: zero
+        self.assertIsNone(key_default(m.read, BASE + 0x8000, lambda ea: False))
+        self.assertIsNone(key_default(None, BASE + 0x100))
+
+    def test_key_state_in_this_file(self):
+        """review s192: key_enabled is the atomic_t 'enabled' at offset 0 of struct static_key (a running kernel's state
+        in a memory image; on disk it equals the build default); the MemLens demo kernel's cr_pinning reads enabled=1,
+        type=0x2 (a false key switched on at boot), so the summary says 'cr_pinning off (on in this file)'."""
+        from kflow.core import hardening_text, key_default, key_enabled
+        m = Mem()
+        m.put(BASE + 0x100, struct.pack("<iiQ", 1, 0, 2))  # demo kernel cr_pinning: enabled 1, JUMP_TYPE_LINKED
+        m.put(BASE + 0x110, struct.pack("<iiQ", 0, 0, 0))
+        m.put(BASE + 0x120, struct.pack("<iiQ", 3, 0, 0xFFFFFFFF8F82FCF1))  # a count above 1: on
+        m.put(BASE + 0x130, struct.pack("<iiQ", -1, 0, 0))  # being switched on (static_key_slow_inc): signed
+        self.assertEqual([key_enabled(m.read, BASE + o) for o in (0x100, 0x110, 0x120, 0x130)], [1, 0, 3, -1])
+        self.assertIsNone(key_enabled(m.read, BASE + 0x8000))
+        self.assertIsNone(key_enabled(None, BASE + 0x100))
+        ea = BASE + 0x100
+        self.assertEqual(hardening_text([("cr_pinning", key_default(m.read, ea), key_enabled(m.read, ea))]),
+                         "cr_pinning off (on in this file)")
+
 
 def module_elf(path, extended=False):
     """A minimal x86_64 relocatable ELF (.ko) with one BUG entry and one static-key entry, both only meaningful
@@ -245,6 +377,79 @@ class Module(unittest.TestCase):
         self.assertEqual(e.key_name(e.externs["my_key"] + 272), "my_key+0x110")
         self.assertEqual(e.key_name(e.externs["__tracepoint_foo"] + 0x600), "__tracepoint_foo+0x600")
         self.assertGreater(j.key, max(end for a, end in e.sections.values()))  # extern slot after the sections
+        self.assertIsNone(e.key_default(j.key))  # an imported key: its bytes are not in this file
+        self.assertIsNone(e.key_enabled(j.key))
+
+    def test_list_jump_class(self):
+        """--list jump --class <name> keeps the rows of one key class; the summary counts the sites per class."""
+        import contextlib
+        import io
+        import json
+        import tempfile
+        from kflow import cli
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "toy.ko")
+            module_elf(p)
+            outs = {}
+            for cls in (None, "feature", "tracepoint", "hardening", "debug"):
+                out = io.StringIO()
+                with contextlib.redirect_stdout(out):
+                    rc = cli.main([p, "--list", "jump"] + (["--class", cls] if cls else []))
+                self.assertEqual(rc, 0)
+                outs[cls] = out.getvalue().splitlines()
+            js = os.path.join(d, "toy.json")
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(cli.main([p, "--json", js]), 0)
+            with open(js) as fh:
+                jrecs = json.load(fh)["jump"]
+            err = io.StringIO()
+            for bad in ([p, "--class", "feature"], [p, "--list", "bug", "--class", "feature"],
+                        [p, "--list", "jump", "--class", "pr_debug"]):
+                with contextlib.redirect_stderr(err), self.assertRaises(SystemExit) as caught:
+                    cli.main(bad)
+                self.assertEqual(caught.exception.code, 2)
+        self.assertIn("--class", err.getvalue())
+        rows = {cls: [r for r in lines if " -> " in r] for cls, lines in outs.items()}
+        self.assertEqual([len(rows[c]) for c in (None, "feature", "tracepoint", "hardening", "debug")], [2, 1, 1, 0, 0])
+        self.assertTrue(rows["feature"][0].endswith("key my_key"), rows["feature"])
+        self.assertTrue(rows["tracepoint"][0].endswith("key tracepoint foo"), rows["tracepoint"])
+        self.assertIn("  sites by key class (--list jump --class): hardening 0, feature 1, tracepoint 1, debug 0",
+                      outs[None])
+        self.assertFalse([r for r in outs[None] if "hardening keys" in r])  # no hardening key: no line
+        # review s192: a class without sites says so instead of printing nothing after the summary
+        self.assertEqual([r for r in outs["hardening"] if r.startswith("(")], ["(no sites of class hardening)"])
+        self.assertEqual([r for r in outs["feature"] if r.startswith("(")], [])
+        # review s193: without a decoded __jump_table it does not say 'no sites of class' (a stripped vmlinux without
+        # __start___jump_table: 'not found'; a table kflow could not decode: 'not decoded'); an empty table still does
+        real_load = cli.load
+
+        def without_jump(error):
+            def fake(elf):
+                t = real_load(elf)
+                del t["jump"]
+                if error:
+                    t["errors"]["jump"] = "jump table size 8 is not a multiple of 16"
+                else:
+                    t["missing"].append("jump")
+                return t
+            return fake
+        got = []
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "toy.ko")
+            module_elf(p)
+            for fake in (without_jump(None), without_jump("size"), lambda elf: dict(real_load(elf), jump=[])):
+                cli.load, out = fake, io.StringIO()
+                try:
+                    with contextlib.redirect_stdout(out):
+                        self.assertEqual(cli.main([p, "--list", "jump", "--class", "hardening"]), 0)
+                finally:
+                    cli.load = real_load
+                got.append([r for r in out.getvalue().splitlines() if r.startswith("(")])
+        self.assertEqual(got, [["(no static-key sites: the __jump_table was not found)"],
+                               ["(no static-key sites: the __jump_table was not decoded)"],
+                               ["(no sites of class hardening)"]])
+        # --json: each static-key record has its class (all records: --class only filters the printed rows)
+        self.assertEqual([(r["key"], r["class"]) for r in jrecs], [("my_key", "feature"), ("tracepoint foo", "tracepoint")])
 
     def test_extended_section_numbering(self):
         import tempfile

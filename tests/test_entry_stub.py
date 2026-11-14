@@ -78,6 +78,17 @@ def summary(new):
         assert bool(re.search(pattern, body, re.M)) == bool(n_sites), (pattern, n_sites, text)
     if tb["bug"] and all(b.file for b in tb["bug"]):
         assert re.search(r"^\d+ BUG/WARN sites \(\d+ WARN\): a comment with the source file:line$", body, re.M), text
+    # judge s189 diff #3: one short line with the hardening keys and their build default, only when there are any;
+    # right after the static-key line, at most 3 names (on by default first; review s193: keys whose state in this
+    # file differs picked first, fewer names past 110 characters)
+    hard = m.idalayer.hardening_keys(tb)
+    hl = re.findall(r"^Hardening keys, default in this build: (.*)$", body, re.M)
+    assert hl == ([m.idalayer.core.hardening_text(hard, 3, 110)] if hard else []), (hl, hard)
+    if [h for h in hard if len(h) > 2 and h[2] is not None and h[2] >= 0 and h[1] is not None and (h[2] > 0) != h[1]]:
+        assert " in this file)" in hl[0] or " in this file: " in hl[0], (hl, hard)  # the demo kernel's cr_pinning
+    if hard:
+        assert len(hl[0]) <= 110 and re.search(r"^\d+ static-key sites: .*\nHardening keys, ", body, re.M), text
+        assert [h for h in hard if h[1] is None] or "?" not in hl[0], hl
     nxt = re.search(r"^Next: (.*)$", body, re.M)
     assert nxt, text
     # review j189 P1: the oracle is a full hidden-path pass (slow on a whole kernel); only the F5 line needs it
@@ -152,20 +163,33 @@ if jumps:
     kshown = [x for x in log if x[0] == "show"][-1]
     assert kshown[1] == "kflow: static-key sites" and kshown[2] == len(jumps), kshown
     rows = m.key_site_rows(m.STATE["tables"])
-    j = jumps[0]
-    assert rows[0][0] == j.code and rows[0][3] == ("likely" if j.branch else "unlikely") and rows[0][4] in ("jump", "no jump")
-    nj = sum(r[4] == "jump" for r in rows)
+    # judge s189 diff #3: a Class column; hardening and feature keys first (KEY_CLASSES order), table order within a
+    # class; each row's class is core.key_class of its key, and the chooser's targets follow the rows
+    _names = {}
+    _cls = [m.idalayer.site_class(x, _names) for x in jumps]
+    order = sorted(range(len(jumps)), key=lambda i: m.idalayer.core.KEY_CLASSES.index(_cls[i]))
+    assert [r[0] for r in rows] == [jumps[i].code for i in order], "rows not in class order"
+    assert [r[2] for r in rows] == [_cls[i] for i in order]
+    assert all(r[2] == m.idalayer.core.key_class(r[3]) for r in rows)
+    assert w["shown"].targets == [jumps[i].target for i in order], "the Block column's targets do not follow the rows"
+    j = jumps[order[0]]
+    assert rows[0][0] == j.code and rows[0][4] == ("likely" if j.branch else "unlikely") and rows[0][5] in ("jump", "no jump")
+    nj = sum(r[5] == "jump" for r in rows)
+    print("  static-key list: Class column, %s" % ", ".join(
+        "%s %d" % (c, _cls.count(c)) for c in m.idalayer.core.KEY_CLASSES))
     # spec step 3: the Block column, the out-of-line block at the target as 'bytes / insns', is decoded only when IDA
     # asks for a row (ida_ua.decode_insn), once per target; '?' when an instruction there cannot be decoded
     ch, karch, ilm = w["shown"], m.idalayer.current_arch(), m.idalayer
-    assert [c[0] for c in ch.cols] == ["Address", "Key", "Kind", "Now", "Target", "Block (bytes / insns)", "Function"]
+    assert [c[0] for c in ch.cols] == ["Address", "Class", "Key", "Kind", "Now", "Target", "Block (bytes / insns)",
+                                       "Function"]
+    assert m.BLOCK_COLUMN == 6
     assert not w.get("decoded"), "the chooser decoded instructions before IDA asked for a row"
     line = ch.OnGetLine(0)
     n1 = w.get("decoded", 0)
     assert n1 >= 1 and ch.OnGetLine(0) == line and w["decoded"] == n1, "the same row decoded again"
-    for i in [i for i, x in enumerate(jumps) if x.target == j.target][:20]:  # rows with the same target
-        assert ch.OnGetLine(i)[5] == line[5] and w["decoded"] == n1, "the same target decoded again"
-    assert list(line) == list(rows[0][1:6]) + [ilm.target_block_text(j.target, karch)] + list(rows[0][6:]), line
+    for i in [i for i, x in enumerate(ch.targets) if x == j.target][:20]:  # rows with the same target
+        assert ch.OnGetLine(i)[6] == line[6] and w["decoded"] == n1, "the same target decoded again"
+    assert list(line) == list(rows[0][1:7]) + [ilm.target_block_text(j.target, karch)] + list(rows[0][7:]), line
     real_get = sys.modules["ida_bytes"].get_bytes
     for code, text in (((b"\x48\x89\xc7" + b"\xe8" + bytes(4) + b"\xe9" + bytes(4), "13 / 3") if karch == "x86_64" else
                         (b"\x1f\x20\x03\xd5" + b"\x40\x00\x00\x54" + b"\x02\x00\x00\x14", "12 / 3")),
@@ -177,15 +201,16 @@ if jumps:
             real_get(j.target + len(code), n) or b""))[:n] if j.target <= ea < j.target + len(code) else real_get(ea, n)
         two = m.KeySitesChooser(rows[:1] * 2, [j.target] * 2, karch)
         n2 = w["decoded"]
-        assert two.OnGetLine(0)[5] == two.OnGetLine(1)[5] == text, (two.OnGetLine(0), text)
+        assert two.OnGetLine(0)[6] == two.OnGetLine(1)[6] == text, (two.OnGetLine(0), text)
         assert w["decoded"] - n2 == (3 if text != "?" else 1), w["decoded"] - n2
         sys.modules["ida_bytes"].get_bytes = real_get
         w.pop("insns", None)
-    print("  static-key list: Block column decoded per shown row, once per target; row 0: %s" % line[5])
+    print("  static-key list: Block column decoded per shown row, once per target; row 0: %s" % line[6])
     assert 0 < nj < len(rows) or len(rows) < 50 or elf.relocatable, nj  # kernels have both states; a module on disk is all NOPs
     if elf.relocatable:  # the list names each module key as the command line does, although IDA packs the imports
         want = [cli_elf.key_name(c.key) or "0x%X" % c.key for c in T.load(cli_elf).get("jump", [])]
-        bad = [(r[1], r[2], x) for r, x in zip(rows, want) if r[2] != x]
+        want = [want[i] for i in order]
+        bad = [(r[1], r[3], x) for r, x in zip(rows, want) if r[3] != x]
         assert len(want) == len(rows) and not bad, bad[:5]
         print("  static-key list on the packed module: %d rows, every key named as on the command line" % len(rows))
 else:
@@ -218,6 +243,34 @@ finally:
 _w = [x[1] for x in log[n:] if x[0] == "buttons"]
 assert len(_w) == 1 and "Go to oops/WARN line" not in _w[0], _w
 assert not [x for x in log[n:] if x[0] == "msg" and "summary window not shown" in x[1]], log[n:]
+# the hardening line (judge s189 diff #3): at most 3 names, on by default first, then '+N more'; when the lookup
+# fails, the window shows without it
+real_hard = m.idalayer.hardening_keys
+for fake, want in ((lambda t: [("init_on_alloc", True), ("init_on_free", False), ("cr_pinning", None),
+                               ("randomize_kstack_offset", True)],
+                    "Hardening keys, default in this build: init_on_alloc on, randomize_kstack_offset on, "
+                    "init_on_free off, +1 more"),
+                   # review s192: the state in this database, where it differs from the default (a memory image)
+                   (lambda t: [("init_on_alloc", True, 1), ("cr_pinning", False, 1), ("bypass_usercopy_checks", False, 0)],
+                    "Hardening keys, default in this build: init_on_alloc on, cr_pinning off (on in this file), "
+                    "bypass_usercopy_checks off (checks on)"),
+                   # review s193: the MemLens demo kernel's keys; the window's cut used to hide cr_pinning's note
+                   (lambda t: [("init_on_alloc", True, 1), ("init_on_free", False, 0), ("randomize_kstack_offset", True, 1),
+                               ("cr_pinning", False, 1), ("bypass_usercopy_checks", False, 0)] + [
+                               (k, False, 0) for k in ("switch_mm_cond_ibpb", "switch_mm_always_ibpb",
+                                                       "switch_to_cond_stibp", "switch_mm_cond_l1d_flush",
+                                                       "cpu_buf_idle_clear")],
+                    "Hardening keys, default in this build: init_on_alloc on, randomize_kstack_offset on, "
+                    "cr_pinning off (on in this file), +7 more"), (lambda t: 1 // 0, None)):
+    m.idalayer.hardening_keys, n = fake, len(log)
+    try:
+        m.summary_window(m.STATE["tables"], {"comments": 1}, [])
+    finally:
+        m.idalayer.hardening_keys = real_hard
+    _w = [x[1] for x in log[n:] if x[0] == "buttons"]
+    assert len(_w) == 1 and [x for x in _w[0].split("\n") if x.startswith("Hardening keys")] == ([want] if want else []), _w
+    assert not want or re.search(r"^\d+ static-key sites: .*\nHardening keys, ", _w[0], re.M), _w  # under the static-key line
+    assert not [x for x in log[n:] if x[0] == "msg" and "summary window not shown" in x[1]], log[n:]
 # review s184 #2: no window when nothing was annotated (an all-zero annotate result); the counts still go to Output
 real_annotate, n = m.idalayer.annotate, len(log)
 m.idalayer.annotate = lambda t, arch=None: dict.fromkeys(("comments", "xrefs", "other_refs", "changed_refs", "key_refs",
@@ -228,8 +281,9 @@ finally:
     m.idalayer.annotate = real_annotate
 assert not [x for x in log[n:] if x[0] in ("buttons", "show", "warning")], log[n:]
 assert [x for x in log[n:] if x[0] == "msg" and "jump references added: 0" in x[1]], log[n:]
-print("OK summary window: one per Annotate, buttons open the static-key / BUG/WARN lists, Close opens nothing; %s"
-      % ("headline %d of %d" % first_nm if first_nm else "no headline (no NOP-state static-key site)"))
+print("OK summary window: one per Annotate, buttons open the static-key / BUG/WARN lists, Close opens nothing; %s%s"
+      % ("headline %d of %d" % first_nm if first_nm else "no headline (no NOP-state static-key site)",
+         "".join("; " + x for x in first_text.split("\n") if x.startswith("Hardening keys"))))
 
 
 # ---- Go to oops/WARN line: pasted kernel log text -> the BUG/WARN site (ask_text answers w["ask_text"]) ----

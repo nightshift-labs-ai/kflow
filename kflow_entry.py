@@ -364,7 +364,8 @@ def hidden_count(t, arch):
 
 
 def table_lines(t):
-    """One line per table Annotate worked on, in the README's nouns (judge s189 #2)."""
+    """One line per table Annotate worked on, in the README's nouns (judge s189 #2); the static-key line is followed by
+    the hardening line when there is one (hardening_line)."""
     out = []
     bugs = t["bug"]
     if bugs:
@@ -376,10 +377,26 @@ def table_lines(t):
     if t["jump"]:
         out.append("%d static-key sites: key and target in a comment; a reference to the target where IDA has none, "
                    "and one to the key" % len(t["jump"]))
+        out += hardening_line(t)
     if t["ex"]:
         out.append("%d exception-table fixups: fixup in a comment; a reference to the fixup where IDA has none"
                    % len(t["ex"]))
     return out
+
+
+HARDENING_LINE = "Hardening keys, default in this build: "  # judge s189 diff #3: one short line, only when there are any
+
+
+def hardening_line(t):
+    """[the summary window's line naming the hardening keys this database's sites test (idalayer.hardening_keys) with
+    their build default, and their state in this database where it differs ('cr_pinning off (on in this file)': a
+    memory image), at most 3 of them (those with that note picked first; fewer if the names pass 110 characters), on
+    by default first], or [] when there is none or the lookup fails."""
+    try:
+        hard = idalayer.hardening_keys(t)
+    except Exception:  # noqa: BLE001  a convenience: the window goes on without it
+        return []
+    return [HARDENING_LINE + idalayer.core.hardening_text(hard, 3, 110)] if hard else []
 
 
 def next_step(t, best):
@@ -428,9 +445,9 @@ def summary_window(t, res, lines, nm=None, analysis_done=True):
 
 
 BUG_COLUMNS = [["Address", 18 | ida_kernwin.Choose.CHCOL_HEX], ["Kind", 6], ["Function", 30], ["Source", 40]]
-KEY_COLUMNS = [["Address", 18 | ida_kernwin.Choose.CHCOL_HEX], ["Key", 34], ["Kind", 8], ["Now", 7],
+KEY_COLUMNS = [["Address", 18 | ida_kernwin.Choose.CHCOL_HEX], ["Class", 10], ["Key", 34], ["Kind", 8], ["Now", 7],
                ["Target", 18 | ida_kernwin.Choose.CHCOL_HEX], ["Block (bytes / insns)", 12], ["Function", 30]]
-BLOCK_COLUMN = 5  # the Block column's place in a static-key chooser line
+BLOCK_COLUMN = 6  # the Block column's place in a static-key chooser line
 
 
 class SitesChooser(ida_kernwin.Choose):
@@ -606,18 +623,28 @@ class OopsAction(ida_kernwin.action_handler_t):
         return ida_kernwin.AST_ENABLE_ALWAYS
 
 
-def key_site_rows(t):
-    """One row per static-key site: key, likely/unlikely, whether the bytes here are a jump to the target now
-    (the site jumps when the key's state XOR the entry's branch bit is set), target, function."""
+def key_site_table(t):
+    """(rows, targets) for the static-key list: one row per site with the key's class (core.key_class), key,
+    likely/unlikely, whether the bytes here are a jump to the target now (the site jumps when the key's state XOR the
+    entry's branch bit is set), target, function; hardening and feature keys first (core.KEY_CLASSES order, judge s189
+    diff #3), the table's order within a class. targets: each row's target address, for the Block column."""
     arch = idalayer.current_arch()
     names = {}
     rows = []
     for j in t["jump"]:
         name = idalayer.site_key_name(j, names)
+        cls = idalayer.core.key_class(name)
         now = "jump" if idalayer.branches_to(j.code, j.target, arch) else "no jump"
-        rows.append((j.code, "0x%X" % j.code, name, "likely" if j.branch else "unlikely", now,
-                     "0x%X" % j.target, ida_funcs.get_func_name(j.code) or ""))
-    return rows
+        rows.append((idalayer.core.KEY_CLASSES.index(cls), j.target, (
+            j.code, "0x%X" % j.code, cls, name, "likely" if j.branch else "unlikely", now, "0x%X" % j.target,
+            ida_funcs.get_func_name(j.code) or "")))
+    rows.sort(key=lambda r: r[0])  # stable: the table's order within a class
+    return [r[2] for r in rows], [r[1] for r in rows]
+
+
+def key_site_rows(t):
+    """The static-key list's rows (key_site_table)."""
+    return key_site_table(t)[0]
 
 
 class KeySitesAction(ida_kernwin.action_handler_t):
@@ -640,7 +667,7 @@ def show_key_sites(t):
             "the __jump_table could not be decoded: %s" % t["errors"]["jump"] if "jump" in t.get("errors", {}) else
             "the table is empty"))
         return 0
-    KeySitesChooser(key_site_rows(t), [j.target for j in t["jump"]], idalayer.current_arch()).Show()
+    KeySitesChooser(*key_site_table(t), idalayer.current_arch()).Show()
     return 1
 
 

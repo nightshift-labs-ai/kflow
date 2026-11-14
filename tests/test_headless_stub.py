@@ -77,6 +77,9 @@ if b0 is not None:
     assert r["file"] == b0.file and r["line"] == b0.line and r["kind"] == ("WARN" if b0.warn else "BUG")
     assert r["function"] == (elf.func(b0.addr) or None), r
 assert all(r["kind"] in ("likely", "unlikely") and r["now"] in ("jump", "no jump") and r["key"] for r in js["jump"])
+# review s192: each static-key record has its key's class, as the command line's --json
+from kflow import core  # noqa: E402
+assert all(r["class"] == core.key_class(r["key"]) for r in js["jump"]), [r for r in js["jump"] if r["class"] != core.key_class(r["key"])][:3]
 print("OK headless --json: %d BUG/WARN, %d static-key, %d exception-table records" % (len(js["bug"]), len(js["jump"]), len(js["ex"])))
 # with a (fake) Hex-Rays decompiler: one decompile check line after the counts, naming a function that stopped
 # decompiling after Annotate
