@@ -80,8 +80,9 @@ def summary(new):
         assert re.search(r"^\d+ BUG/WARN sites \(\d+ WARN\): a comment with the source file:line$", body, re.M), text
     nxt = re.search(r"^Next: (.*)$", body, re.M)
     assert nxt, text
-    best = hidden_by_function().most_common(1)
-    if m.STATE["hx"] is not None and best:
+    # review j189 P1: the oracle is a full hidden-path pass (slow on a whole kernel); only the F5 line needs it
+    best = hidden_by_function().most_common(1) if m.STATE["hx"] is not None else None
+    if best:
         assert nxt.group(1).startswith("press F5 in %s (%d " % best[0]), (nxt.group(0), best)
     elif tb["jump"]:
         assert nxt.group(1).startswith("Static-key sites lists"), nxt.group(0)
@@ -109,11 +110,12 @@ if QUICK:
     assert "`%d of %d static-key NOP sites can jump to code nothing else in this database reaches`" % first_nm in quick
     assert "lists the %d sites" % len(m.STATE["tables"]["jump"]) in quick, quick
     f5 = re.search(r"Press F5 in `(\w+)` \((\d+) `(\w+)` sites and the `(\w+)` tracepoint\)", quick)
-    assert f5 and f5.group(1) == hidden_by_function().most_common(1)[0][0], (f5 and f5.group(0), hidden_by_function())
+    _hbf = hidden_by_function()
+    assert f5 and f5.group(1) == _hbf.most_common(1)[0][0], (f5 and f5.group(0), _hbf)
     QUICK_F5 = f5.group(1)
     assert sorted(cli_elf.key_name(j.key) for j in _cli["jump"] if cli_elf.func(j.code) == QUICK_F5) == sorted(
         [f5.group(3)] * int(f5.group(2)) + ["tracepoint " + f5.group(4)]), f5.group(0)
-    assert hidden_by_function()[QUICK_F5] == int(f5.group(2)) + 1, (hidden_by_function()[QUICK_F5], f5.group(0))
+    assert _hbf[QUICK_F5] == int(f5.group(2)) + 1, (_hbf[QUICK_F5], f5.group(0))
 nop_state = [j for j in m.STATE["tables"]["jump"] if m.idalayer.is_insn(j.code) and not m.idalayer.branches_to(
     j.code, j.target, m.idalayer.current_arch())]
 assert (first_nm is not None) == bool(nop_state), (first_nm, len(nop_state))
