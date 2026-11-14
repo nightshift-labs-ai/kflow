@@ -648,14 +648,22 @@ def annotate_text(res, analysis_done=False):
     if res.get("next_insn_refs"):
         text += (", references to the next instruction removed (added by an earlier Annotate before IDA had made the "
                  "instruction): %d" % res["next_insn_refs"])
-    if res.get("not_code") and analysis_done:  # review s159 NIT: after analysis, waiting will not change them
-        text += ("; %d static-key / exception-table sites are not code in IDA, so no references were added there "
-                 "(press C at such a site to make it code, then run Annotate again)" % res["not_code"])
-    elif res.get("not_code"):
-        text += ("; %d static-key / exception-table sites are not instructions yet (IDA's auto-analysis has not reached "
-                 "them), so no references were added there: run Annotate again when auto-analysis has finished"
-                 % res["not_code"])
+    if res.get("not_code"):
+        text += "; " + not_code_text(res, analysis_done)
     return text
+
+
+def not_code_text(res, analysis_done=False):
+    """The sentence about static-key / exception-table sites that got no reference because IDA has no instruction
+    there ('' if none): in the counts line and in the menu's summary window."""
+    if not res.get("not_code"):
+        return ""
+    if analysis_done:  # review s159 NIT: after analysis, waiting will not change them
+        return ("%d static-key / exception-table sites are not code in IDA, so no references were added there "
+                "(press C at such a site to make it code, then run Annotate again)" % res["not_code"])
+    return ("%d static-key / exception-table sites are not instructions yet (IDA's auto-analysis has not reached "
+            "them), so no references were added there: run Annotate again when auto-analysis has finished"
+            % res["not_code"])
 
 
 def annotated():

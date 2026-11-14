@@ -38,24 +38,59 @@ assert p.init() == 1 and [x[1] for x in log if x[0] == "reg"] == ACTION_NAMES
 assert m.STATE["hx"] is None
 assert m.AnnotateAction().activate(None) == 1
 assert [x for x in log if x[0] == "msg" and "jump references added: " in x[1] and "static-key site -> key references: " in x[1]], "Annotate reports its counts"
-HEADLINE = re.compile(r"^kflow: (\d+) of (\d+) static-key sites \(NOPs here\) can jump to code nothing else in this "
-                      r"database reaches\n")  # review s184 #4: M counts sites, not references
+TITLE_LINE = "TITLE kflow: Annotate finished\n"  # judge s189 #2: IDA's title prefix of ask_* texts, not a question
+HEADLINE = re.compile(r"^(\d+) of (\d+) static-key NOP sites can jump to code nothing else in this database reaches:\n"
+                      r"kflow's reference is the only one that leads there(; the site's pseudocode comment says so)?\.\n",
+                      re.M)  # review s184 #4: M counts sites, not references
+
+
+def hidden_by_function():
+    """{function name: NOP-state static-key sites in it whose target nothing else reaches}, from the code's rule."""
+    tb, arch_ = m.STATE["tables"], m.idalayer.current_arch()
+    out = collections.Counter()
+    for j in tb["jump"]:
+        if m.idalayer.is_insn(j.code) and not m.idalayer.branches_to(j.code, j.target, arch_) and \
+                m.idalayer.hidden_path_text(j, arch_):
+            name = ui.fn.get_func_name(j.code)
+            if name:
+                out[name] += 1
+    return out
 
 
 def summary(new):
-    """judge s180 first-run #2: Annotate ends with one summary window (ask_buttons; Close, the third button, is the
-    default and Esc): the headline (when the database has NOP-state static-key sites), the counts the Output window
-    has, then where the details are. Returns (text, (N, M) or None)."""
+    """judge s180 first-run #2, s189 #2: Annotate ends with one summary window (ask_buttons; Close, the third button,
+    is the default and Esc): IDA's TITLE line, the headline (when the database has NOP-state static-key sites), one
+    line per table in the README's nouns with the counts of STATE["tables"], a next step, then where the details are.
+    The raw counts line stays in the Output window only. Returns (text, (N, M) or None)."""
     got = [x for x in new if x[0] == "buttons"]
     assert len(got) == 1, ("one summary window per Annotate", got)
     text, yes, no, cancel, deflt = got[0][1:]
     assert (yes, no, cancel, deflt) == ("Static-key sites", "BUG/WARN sites", "Close", -1), got[0]
+    assert text.startswith(TITLE_LINE), text
+    body = text[len(TITLE_LINE):]
     counts = [x[1] for x in new if x[0] == "msg" and "jump references added: " in x[1]]
-    assert counts and counts[-1][len("[kflow] "):].strip() in text, (counts[-1:], text)
+    assert counts and "jump references added: " not in text and "comments: " not in text, (counts[-1:], text)
+    tb = m.STATE["tables"]
+    for n_sites, pattern in ((len(tb["bug"]), r"^%d BUG/WARN sites \(%d WARN\): a comment" % (
+                                 len(tb["bug"]), sum(1 for b in tb["bug"] if b.warn))),
+                             (len(tb["jump"]), r"^%d static-key sites: key and target in a comment; " % len(tb["jump"])),
+                             (len(tb["ex"]), r"^%d exception-table fixups: fixup in a comment; " % len(tb["ex"]))):
+        assert bool(re.search(pattern, body, re.M)) == bool(n_sites), (pattern, n_sites, text)
+    if tb["bug"] and all(b.file for b in tb["bug"]):
+        assert re.search(r"^\d+ BUG/WARN sites \(\d+ WARN\): a comment with the source file:line$", body, re.M), text
+    nxt = re.search(r"^Next: (.*)$", body, re.M)
+    assert nxt, text
+    best = hidden_by_function().most_common(1)
+    if m.STATE["hx"] is not None and best:
+        assert nxt.group(1).startswith("press F5 in %s (%d " % best[0]), (nxt.group(0), best)
+    elif tb["jump"]:
+        assert nxt.group(1).startswith("Static-key sites lists"), nxt.group(0)
     assert text.rstrip().endswith("Details: Output window"), text
-    h = HEADLINE.match(text)
+    h = HEADLINE.search(body)
+    assert h is None or h.start() == 0, text
     if h:
         assert int(h.group(1)) <= int(h.group(2)) <= len(m.STATE["tables"]["jump"]), h.group(0)
+        assert bool(h.group(3)) == (m.STATE["hx"] is not None), (h.group(0), m.STATE["hx"])
     return text, h and (int(h.group(1)), int(h.group(2)))
 
 
@@ -69,13 +104,16 @@ assert not [x for x in log if x[0] == "msg" and "auto-analysis is still running"
 # that is not an instruction yet, and says to run it again afterwards
 w["auto_ok"], w["code"] = False, set()
 before = (dict(w["xrefs"]), dict(w["drefs"]))
+n_busy = len(log)
 assert m.AnnotateAction().activate(None) == 1
 assert [x for x in log if x[0] == "msg" and "auto-analysis is still running" in x[1]]
 assert len([x for x in log if x[0] == "buttons"]) <= 2, "at most one summary window per Annotate"
+busy = [x[1] for x in log[n_busy:] if x[0] == "buttons"]
 # the count names static-key / exception-table sites only (BUG/WARN sites get comments, no references): a module with
 # neither table (Debian arm64 vfat.ko: 5 BUG/WARN sites) has nothing to count and no such line
 refd = bool(m.STATE["tables"].get("jump") or m.STATE["tables"].get("ex"))
 assert bool([x for x in log if x[0] == "msg" and "sites are not instructions yet" in x[1]]) == refd, refd
+assert not busy or ("sites are not instructions yet" in busy[0]) == refd, busy  # judge s189 #2: in the window too
 assert (w["xrefs"], w["drefs"]) == before, "references added from addresses that are not instructions"
 w["auto_ok"] = True
 w.pop("code")
@@ -177,6 +215,8 @@ _, first = ask(None)
 asks = [e for e in first if e[0] == "ask"]
 assert len(asks) == 1, first
 example_default = asks[0][2]
+assert ("Go to oops/WARN line starts with a WARNING line built from this database" in first_text) == bool(
+    example_default), (first_text, example_default)  # judge s189 #2: the summary window's next step
 assert example_default == "" or example_default.startswith("WARNING: CPU: 0 PID: 1 at "), example_default
 assert example_default or not __import__("kflow.cli", fromlist=["oops_example"]).oops_example(cli_elf, T.load(cli_elf)), "the CLI builds an example line, the dialog offers none"
 if example_default:

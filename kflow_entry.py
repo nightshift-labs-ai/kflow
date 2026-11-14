@@ -301,22 +301,26 @@ class AnnotateAction(ida_kernwin.action_handler_t):
             flush_pseudocode()
             report("pseudocode comments on: functions decompiled from now on show the sites (display only)")
         if any(res.get(k) for k in ("comments", "kept_user_comments", "xrefs", "key_refs", "other_refs")):
-            summary_window(t, [counts] + ([line.strip().replace("[kflow] ", "", 1)] if line else []), nm)
+            summary_window(t, res, [line.strip().replace("[kflow] ", "", 1)] if line else [], nm, done)
         return 1
 
     def update(self, ctx):
         return ida_kernwin.AST_ENABLE_ALWAYS
 
 
-HEADLINE = "kflow: %d of %d static-key sites (NOPs here) can jump to code nothing else in this database reaches"
+SUMMARY_TITLE = "TITLE kflow: Annotate finished\n"  # IDA's title prefix of ask_* texts (IDAPython's own ask_yn uses it)
+HEADLINE = ("%d of %d static-key NOP sites can jump to code nothing else in this database reaches:\n"
+            "kflow's reference is the only one that leads there%s.")
 SUMMARY_BUTTONS = ("Static-key sites", "BUG/WARN sites", "Close")  # ask_buttons: 1, 0, -1 (Esc; the default)
 
 
 def hidden_count(t, arch):
-    """(N, M) for the summary window: M = static-key sites that are NOP-state instructions (Annotate gives each a
-    reference to its target), N = those whose target nothing else in the database reaches (idalayer.hidden_path_text,
-    the rule of the pseudocode sentence). A site whose check fails counts as not hidden, like pseudo_text."""
+    """(N, M, best) for the summary window: M = static-key sites that are NOP-state instructions (Annotate gives each
+    a reference to its target), N = those whose target nothing else in the database reaches (idalayer.hidden_path_text,
+    the rule of the pseudocode sentence), best = (function, its count of those N sites) for the function with the most
+    (the first such function on a tie), or None. A site whose check fails counts as not hidden, like pseudo_text."""
     hidden = total = 0
+    per_function = {}
     for j in t["jump"]:
         try:
             if not idalayer.is_insn(j.code) or idalayer.branches_to(j.code, j.target, arch):
@@ -325,19 +329,68 @@ def hidden_count(t, arch):
             continue
         total += 1
         try:
-            hidden += bool(idalayer.hidden_path_text(j, arch))
+            if idalayer.hidden_path_text(j, arch):
+                hidden += 1
+                name = ida_funcs.get_func_name(j.code)
+                if name:
+                    per_function[name] = per_function.get(name, 0) + 1
         except Exception:  # noqa: BLE001
             pass
-    return hidden, total
+    best = max(per_function.items(), key=lambda kv: kv[1]) if per_function else None  # max keeps the first on a tie
+    return hidden, total, best
 
 
-def summary_window(t, lines, nm=None):
-    """The window Annotate ends with (menu action only; the headless runner prints text): the headline, the counts
-    and decompile-check line already in the Output window, and buttons to the two lists. Never in the way: if it
-    fails, the Output window has the text (one line says so)."""
+def table_lines(t):
+    """One line per table Annotate worked on, in the README's nouns (judge s189 #2)."""
+    out = []
+    bugs = t["bug"]
+    if bugs:
+        located = sum(1 for b in bugs if b.file)
+        where = ("a comment with the source file:line" if located == len(bugs) else
+                 "a comment, with the source file:line at %d of them" % located if located else
+                 "a comment (this kernel's table has no file:line)")
+        out.append("%d BUG/WARN sites (%d WARN): %s" % (len(bugs), sum(1 for b in bugs if b.warn), where))
+    if t["jump"]:
+        out.append("%d static-key sites: key and target in a comment; a reference to the target where IDA has none, "
+                   "and one to the key" % len(t["jump"]))
+    if t["ex"]:
+        out.append("%d exception-table fixups: fixup in a comment; a reference to the fixup where IDA has none"
+                   % len(t["ex"]))
+    return out
+
+
+def next_step(t, best):
+    """The summary window's pointer to the best feature: F5 where the hidden-path sentence shows (with Hex-Rays), and
+    Go to oops/WARN line when its dialog will start with an example built from this database."""
+    out = []
+    if STATE["hx"] is not None and best:
+        out.append("Next: press F5 in %s (%d of these sites)." % best)
+    elif t["jump"]:
+        out.append("Next: Static-key sites lists every site with its key and target.")
+    example = None
+    if not STATE["oops_text"]:  # the dialog's first default (OopsAction); after a paste it offers the last text
+        example = oops.example_line(t["bug"], ida_funcs.get_func_name, function_starts,
+                                    oops.module_name(ida_nalt.get_input_file_path() or ""))
+    if example:
+        out.append(("" if out else "Next: ") + "Go to oops/WARN line starts with a WARNING line built from this database.")
+    return out
+
+
+def summary_window(t, res, lines, nm=None, analysis_done=True):
+    """The window Annotate ends with (menu action only; the headless runner prints text): a title, the headline, one
+    line per table, any sites left without a reference, the decompile-check line already in the Output window, a next
+    step, and buttons to the two lists. The raw counts stay in the Output window. Never in the way: if it fails, the
+    Output window has the text (one line says so)."""
     try:
-        hidden, total = nm if nm is not None else hidden_count(t, idalayer.current_arch())
-        text = "\n".join(([HEADLINE % (hidden, total)] if total else []) + lines + ["Details: Output window"])
+        hidden, total, best = nm if nm is not None else hidden_count(t, idalayer.current_arch())
+        head = [HEADLINE % (hidden, total, "; the site's pseudocode comment says so" if STATE["hx"] is not None else "")]
+        body = (head if total else []) + table_lines(t)
+        missed = idalayer.not_code_text(res, analysis_done)
+        if missed:
+            body.append(missed[0].upper() + missed[1:])
+        if res.get("kept_user_comments"):
+            body.append("%d sites keep your own comment (no kflow comment there)" % res["kept_user_comments"])
+        text = SUMMARY_TITLE + "\n".join(body + lines + next_step(t, best) + ["Details: Output window"])
         answer = ida_kernwin.ask_buttons(*SUMMARY_BUTTONS, -1, text.replace("%", "%%"))  # printf-style format
         if answer == 1:
             show_key_sites(t)
