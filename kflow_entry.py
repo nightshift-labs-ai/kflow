@@ -369,8 +369,11 @@ def next_step(t, best):
         out.append("Next: Static-key sites lists every site with its key and target.")
     example = None
     if not STATE["oops_text"]:  # the dialog's first default (OopsAction); after a paste it offers the last text
-        example = oops.example_line(t["bug"], ida_funcs.get_func_name, function_starts,
-                                    oops.module_name(ida_nalt.get_input_file_path() or ""))
+        try:
+            example = oops.example_line(t["bug"], ida_funcs.get_func_name, function_starts,
+                                        oops.module_name(ida_nalt.get_input_file_path() or ""))
+        except Exception:  # noqa: BLE001  a convenience, as in OopsAction: the window goes on without it
+            example = None
     if example:
         out.append(("" if out else "Next: ") + "Go to oops/WARN line starts with a WARNING line built from this database.")
     return out

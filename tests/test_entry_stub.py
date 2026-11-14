@@ -205,6 +205,16 @@ assert m.AnnotateAction().activate(None) == 1
 assert len([x for x in log[n:] if x[0] == "msg" and "summary window not shown" in x[1]]) == 1, log[n:]
 assert not [x for x in log[n:] if x[0] in ("warning", "show", "buttons")], log[n:]
 sys.modules["ida_kernwin"].ask_buttons = real_buttons
+# the window's oops pointer is a convenience: when building the example fails, the window still shows, without it
+real_example, n = m.oops.example_line, len(log)
+m.oops.example_line = lambda *a, **k: 1 // 0
+try:
+    assert m.AnnotateAction().activate(None) == 1
+finally:
+    m.oops.example_line = real_example
+_w = [x[1] for x in log[n:] if x[0] == "buttons"]
+assert len(_w) == 1 and "Go to oops/WARN line" not in _w[0], _w
+assert not [x for x in log[n:] if x[0] == "msg" and "summary window not shown" in x[1]], log[n:]
 # review s184 #2: no window when nothing was annotated (an all-zero annotate result); the counts still go to Output
 real_annotate, n = m.idalayer.annotate, len(log)
 m.idalayer.annotate = lambda t, arch=None: dict.fromkeys(("comments", "xrefs", "other_refs", "changed_refs", "key_refs",
