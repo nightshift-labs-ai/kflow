@@ -366,7 +366,7 @@ def next_step(t, best):
     Go to oops/WARN line when its dialog will start with an example built from this database."""
     out = []
     if STATE["hx"] is not None and best:
-        out.append("Next: press F5 in %s (%d of these sites)." % best)
+        out.append("Next: press F5 in %s (%d hidden-path static-key sites)." % best)
     elif t["jump"]:
         out.append("Next: Static-key sites lists every site with its key and target.")
     example = None
