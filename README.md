@@ -78,7 +78,7 @@ The command-line decoder needs only Python 3.8+ and no packages: `python3 -m kfl
 
 **In a few minutes:** download [`kflow-try-module.zip`](https://github.com/nightshift-labs-ai/kflow/releases/download/try-module/kflow-try-module.zip) (129 KB): Debian 13's x86_64 `dm-mod.ko` (sources in its `README.txt`). `python3 -m kflow dm-mod.ko` finds 74 BUG/WARN sites (37 WARN), 22 static-key sites and 2 exception-table fixups in it. Open `dm-mod.ko` in IDA (a module is analysed in seconds) and run **Edit > Plugins > kflow: Annotate kernel sites**. What you should then see (texts from kflow's fake-IDA test on this file; kflow has not yet run in real IDA):
 
-1. The summary window starts with the line **kflow: Annotate finished**, then `22 of 22 static-key NOP sites can jump to code nothing else in this database reaches` (the fake's count; expect close to all 22).
+1. The summary window starts with the line **kflow: Annotate finished**, then `22 of 22 static-key NOP sites can jump to code nothing else in this database reaches` (the fake's count; the fake IDA has no other references, so real IDA may show fewer where its own analysis already reaches a target).
 2. Its **Static-key sites** button lists the 22 sites. Press F5 in `dm_submit_bio` (4 `zoned_enabled` sites and the `block_split` tracepoint): the sites' `// kflow:` comments name the key and end `so this pseudocode probably does not show that code`.
 3. **kflow: Go to oops/WARN line** starts with `WARNING: CPU: 0 PID: 1 at drivers/md/dm-zone.c:35 dm_blk_do_report_zones.isra.0+0x91/0xc0 [dm_mod]`; OK jumps to that `ud2`, commented `WARN at drivers/md/dm-zone.c:35`.
 
