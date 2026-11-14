@@ -79,10 +79,13 @@ def summary(new):
     if tb["bug"] and all(b.file for b in tb["bug"]):
         assert re.search(r"^\d+ BUG/WARN sites \(\d+ WARN\): a comment with the source file:line$", body, re.M), text
     # judge s189 diff #3: one short line with the hardening keys and their build default, only when there are any;
-    # right after the static-key line, at most 3 names (on by default first)
+    # right after the static-key line, at most 3 names (on by default first; review s193: keys whose state in this
+    # file differs picked first, fewer names past 110 characters)
     hard = m.idalayer.hardening_keys(tb)
     hl = re.findall(r"^Hardening keys, default in this build: (.*)$", body, re.M)
-    assert hl == ([m.idalayer.core.hardening_text(hard, 3)] if hard else []), (hl, hard)
+    assert hl == ([m.idalayer.core.hardening_text(hard, 3, 110)] if hard else []), (hl, hard)
+    if [h for h in hard if len(h) > 2 and h[2] is not None and h[2] >= 0 and h[1] is not None and (h[2] > 0) != h[1]]:
+        assert " in this file)" in hl[0] or " in this file: " in hl[0], (hl, hard)  # the demo kernel's cr_pinning
     if hard:
         assert len(hl[0]) <= 110 and re.search(r"^\d+ static-key sites: .*\nHardening keys, ", body, re.M), text
         assert [h for h in hard if h[1] is None] or "?" not in hl[0], hl
@@ -250,7 +253,15 @@ for fake, want in ((lambda t: [("init_on_alloc", True), ("init_on_free", False),
                    # review s192: the state in this database, where it differs from the default (a memory image)
                    (lambda t: [("init_on_alloc", True, 1), ("cr_pinning", False, 1), ("bypass_usercopy_checks", False, 0)],
                     "Hardening keys, default in this build: init_on_alloc on, cr_pinning off (on in this file), "
-                    "bypass_usercopy_checks off (checks on)"), (lambda t: 1 // 0, None)):
+                    "bypass_usercopy_checks off (checks on)"),
+                   # review s193: the MemLens demo kernel's keys; the window's cut used to hide cr_pinning's note
+                   (lambda t: [("init_on_alloc", True, 1), ("init_on_free", False, 0), ("randomize_kstack_offset", True, 1),
+                               ("cr_pinning", False, 1), ("bypass_usercopy_checks", False, 0)] + [
+                               (k, False, 0) for k in ("switch_mm_cond_ibpb", "switch_mm_always_ibpb",
+                                                       "switch_to_cond_stibp", "switch_mm_cond_l1d_flush",
+                                                       "cpu_buf_idle_clear")],
+                    "Hardening keys, default in this build: init_on_alloc on, randomize_kstack_offset on, "
+                    "cr_pinning off (on in this file), +7 more"), (lambda t: 1 // 0, None)):
     m.idalayer.hardening_keys, n = fake, len(log)
     try:
         m.summary_window(m.STATE["tables"], {"comments": 1}, [])
@@ -270,8 +281,9 @@ finally:
     m.idalayer.annotate = real_annotate
 assert not [x for x in log[n:] if x[0] in ("buttons", "show", "warning")], log[n:]
 assert [x for x in log[n:] if x[0] == "msg" and "jump references added: 0" in x[1]], log[n:]
-print("OK summary window: one per Annotate, buttons open the static-key / BUG/WARN lists, Close opens nothing; %s"
-      % ("headline %d of %d" % first_nm if first_nm else "no headline (no NOP-state static-key site)"))
+print("OK summary window: one per Annotate, buttons open the static-key / BUG/WARN lists, Close opens nothing; %s%s"
+      % ("headline %d of %d" % first_nm if first_nm else "no headline (no NOP-state static-key site)",
+         "".join("; " + x for x in first_text.split("\n") if x.startswith("Hardening keys"))))
 
 
 # ---- Go to oops/WARN line: pasted kernel log text -> the BUG/WARN site (ask_text answers w["ask_text"]) ----

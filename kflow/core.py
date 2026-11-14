@@ -291,27 +291,42 @@ def key_enabled(read, ea, zero_filled=None):
 USERCOPY_BYPASS = "bypass_usercopy_checks"  # the one hardening key that is on when its hardening is off
 
 
-def hardening_text(keys, most=None):
+def _state_differs(k):
+    """(name, key_default[, key_enabled]): the key's state in this file is known (0 or more) and differs from its known
+    build default (hardening_text's '(on in this file)' / '(off in this file)' note)."""
+    default, enabled = k[1], (k[2] if len(k) > 2 else None)
+    return default is not None and enabled is not None and enabled >= 0 and (enabled > 0) != default
+
+
+def hardening_text(keys, most=None, width=None):
     """'init_on_alloc on, init_on_free off' for [(name, key_default)] or [(name, key_default, key_enabled)]: on by
-    default first, then off, then unknown ('?'), each in the given order; with most, at most that many names, then
-    '+N more'. With the state in this file (key_enabled; a memory image's can differ from the build default), a note
-    where it differs: 'cr_pinning off (on in this file)'; a negative or unknown state, or an unknown default, gives
-    none. bypass_usercopy_checks also says what the usercopy checks do: 'off (checks on)'."""
+    default first, then off, then unknown ('?'), each in the given order. With the state in this file (key_enabled; a
+    memory image's can differ from the build default), a note where it differs: 'cr_pinning off (on in this file)'; a
+    negative or unknown state, or an unknown default, gives none. bypass_usercopy_checks also says what the usercopy
+    checks do: 'off (checks on)'. With most, at most that many names, then '+N more': keys with that note are picked
+    first (review s193: the demo kernel's cr_pinning), the picked names stay in the order above; with width, fewer
+    names (at least one) while the text is longer than width characters."""
     rank, word = {True: 0, False: 1, None: 2}, {True: "on", False: "off", None: "?"}
+    ordered = sorted(keys, key=lambda k: rank[k[1]])
     words = []
-    for k in sorted(keys, key=lambda k: rank[k[1]]):
+    for k in ordered:
         name, default = k[0], k[1]
         enabled = k[2] if len(k) > 2 else None
         state = None if enabled is None or enabled < 0 else enabled > 0
         note = []
-        if default is not None and state is not None and state != default:
+        if _state_differs(k):
             note.append("%s in this file" % word[state])
         if default is not None and name == USERCOPY_BYPASS:
             note.append("checks %s" % word[not (default if state is None else state)])
         words.append("%s %s" % (name, word[default]) + (" (%s)" % ": ".join(note) if note else ""))
-    if most is not None and len(words) > most:
-        words = words[:most] + ["+%d more" % (len(words) - most)]
-    return ", ".join(words)
+    first = sorted(range(len(ordered)), key=lambda i: not _state_differs(ordered[i]))  # stable: the order above
+    n = len(words) if most is None else min(most, len(words))
+    while True:
+        more = ["+%d more" % (len(words) - n)] if n < len(words) else []
+        text = ", ".join([words[i] for i in sorted(first[:n])] + more)
+        if width is None or len(text) <= width or n <= 1:
+            return text
+        n -= 1
 
 
 def decode_jump_table(read, start, stop, in_text=None):

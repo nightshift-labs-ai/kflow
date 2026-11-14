@@ -369,12 +369,13 @@ HARDENING_LINE = "Hardening keys, default in this build: "  # judge s189 diff #3
 def hardening_line(t):
     """[the summary window's line naming the hardening keys this database's sites test (idalayer.hardening_keys) with
     their build default, and their state in this database where it differs ('cr_pinning off (on in this file)': a
-    memory image), at most 3 of them, on by default first], or [] when there is none or the lookup fails."""
+    memory image), at most 3 of them (those with that note picked first; fewer if the names pass 110 characters), on
+    by default first], or [] when there is none or the lookup fails."""
     try:
         hard = idalayer.hardening_keys(t)
     except Exception:  # noqa: BLE001  a convenience: the window goes on without it
         return []
-    return [HARDENING_LINE + idalayer.core.hardening_text(hard, 3)] if hard else []
+    return [HARDENING_LINE + idalayer.core.hardening_text(hard, 3, 110)] if hard else []
 
 
 def next_step(t, best):

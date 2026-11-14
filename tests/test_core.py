@@ -239,6 +239,25 @@ class Keys(unittest.TestCase):
                          "init_on_alloc on, randomize_kstack_offset on (off in this file), init_on_free off, "
                          "cr_pinning off (on in this file), switch_mm_cond_ibpb off, switch_to_cond_stibp off (on in this "
                          "file), switch_mm_always_ibpb off, cpu_buf_idle_clear ?")
+        # review s193: with a cut, keys whose state in this file differs are picked first, then shown in the usual
+        # order. The MemLens demo kernel's (name, default, state) triples (python3 -m kflow kernel.elf): the IDA window
+        # (most=3) used to say 'init_on_alloc on, randomize_kstack_offset on, init_on_free off, +7 more'
+        demo = [("init_on_alloc", True, 1), ("init_on_free", False, 0), ("randomize_kstack_offset", True, 1),
+                ("cr_pinning", False, 1), ("bypass_usercopy_checks", False, 0), ("switch_mm_cond_ibpb", False, 0),
+                ("switch_mm_always_ibpb", False, 0), ("switch_to_cond_stibp", False, 0),
+                ("switch_mm_cond_l1d_flush", False, 0), ("cpu_buf_idle_clear", False, 0)]
+        self.assertEqual(core.hardening_text(demo, 3),
+                         "init_on_alloc on, randomize_kstack_offset on, cr_pinning off (on in this file), +7 more")
+        self.assertEqual(core.hardening_text(demo, 3, 110), core.hardening_text(demo, 3))
+        self.assertEqual(core.hardening_text(demo), core.hardening_text(demo, 10))  # no cut: every key, as before
+        self.assertEqual(core.hardening_text(triples, 3),
+                         "randomize_kstack_offset on (off in this file), cr_pinning off (on in this file), "
+                         "switch_to_cond_stibp off (on in this file), +5 more")
+        # width: fewer names while the text is longer (the window's line stays short; differing keys still first)
+        self.assertEqual(core.hardening_text(triples, 3, 110),
+                         "randomize_kstack_offset on (off in this file), cr_pinning off (on in this file), +6 more")
+        self.assertEqual(core.hardening_text(triples[2:4], 3, 60), "randomize_kstack_offset on (off in this file), +1 more")
+        self.assertEqual(core.hardening_text(triples[2:3], 3, 10), "cr_pinning off (on in this file)")  # one name: kept
         # bypass_usercopy_checks is on when the usercopy checks are skipped: the note says what the checks do
         self.assertEqual([core.hardening_text([("bypass_usercopy_checks",) + p]) for p in (
             (False, 0), (False, None), (True, 1), (False, 1), (True, 0), (None, 0), (None, None))], [
