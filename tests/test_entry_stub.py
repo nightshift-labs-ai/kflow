@@ -39,9 +39,9 @@ assert m.STATE["hx"] is None
 assert m.AnnotateAction().activate(None) == 1
 assert [x for x in log if x[0] == "msg" and "jump references added: " in x[1] and "static-key site -> key references: " in x[1]], "Annotate reports its counts"
 TITLE_LINE = "kflow: Annotate finished\n"  # judge s189 #2: the window's first line; review j189 F1: plain, no "TITLE "
-HEADLINE = re.compile(r"^(\d+) of (\d+) static-key NOP sites can jump to code nothing else in this database reaches:\n"
-                      r"kflow's reference is the only one that leads there(; the site's pseudocode comment says so)?\.\n",
-                      re.M)  # review s184 #4: M counts sites, not references
+HEADLINE = re.compile(r"^(\d+) of (\d+) static-key NOP sites can jump to code nothing else in this database reaches"
+                      r"(?::\nkflow's reference is the only one that leads there(; the site's pseudocode comment says so)?\."
+                      r"|(: every target has another way in\.))\n", re.M)  # review s184 #4: M counts sites, not references
 
 
 def hidden_by_function():
@@ -90,7 +90,8 @@ def summary(new):
     assert h is None or h.start() == 0, text
     if h:
         assert int(h.group(1)) <= int(h.group(2)) <= len(m.STATE["tables"]["jump"]), h.group(0)
-        assert bool(h.group(3)) == (m.STATE["hx"] is not None), (h.group(0), m.STATE["hx"])
+        assert (h.group(1) == "0") == bool(h.group(4)), h.group(0)  # review j189 F2: no "only one" claim for N = 0
+        assert h.group(4) or bool(h.group(3)) == (m.STATE["hx"] is not None), (h.group(0), m.STATE["hx"])
     return text, h and (int(h.group(1)), int(h.group(2)))
 
 
@@ -674,6 +675,13 @@ assert _ev.count("hidden_count") == 1 and "wait" in _ev[:_ev.index("hidden_count
 # the summary window's headline N of M: N is the oracle's count of NOP-state sites with a hidden target, M the number
 # of NOP-state sites
 _, nm = summary(log[n_log:])
+# review j189 F2: N = 0 (IDA already reaches every target): the headline says so and claims no "only one" reference
+_n0 = len(log)
+m.summary_window(t, {"comments": 1}, [], (0, max(nm[1] if nm else 1, 1), None))
+_t0 = [x[1] for x in log[_n0:] if x[0] == "buttons"]
+assert len(_t0) == 1 and "\n0 of %d static-key NOP sites can jump to code nothing else in this database reaches: every " \
+    "target has another way in.\n" % max(nm[1] if nm else 1, 1) in _t0[0] and "only one" not in _t0[0] and \
+    "press F5" not in _t0[0] and HEADLINE.search(_t0[0][len(TITLE_LINE):]).group(4), _t0
 by_dst = collections.defaultdict(list)
 for f, to in w["xrefs"]:
     by_dst[to].append((f, to))

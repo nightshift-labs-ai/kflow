@@ -310,8 +310,9 @@ class AnnotateAction(ida_kernwin.action_handler_t):
 
 SUMMARY_TITLE = "kflow: Annotate finished\n"  # a plain first line: the "TITLE " prefix that IDAPython's ask_yn passes is
 # not documented for ask_buttons (the SDK's apidoc lists only HIDECANCEL / HIDENO), so kflow does not rely on it
-HEADLINE = ("%d of %d static-key NOP sites can jump to code nothing else in this database reaches:\n"
-            "kflow's reference is the only one that leads there%s.")
+HEADLINE = "%d of %d static-key NOP sites can jump to code nothing else in this database reaches"
+HEADLINE_SOME = ":\nkflow's reference is the only one that leads there%s."
+HEADLINE_NONE = ": every target has another way in."  # N = 0: no site's comment has the hidden-path sentence
 SUMMARY_BUTTONS = ("Static-key sites", "BUG/WARN sites", "Close")  # ask_buttons: 1, 0, -1 (Esc; the default)
 
 
@@ -387,7 +388,8 @@ def summary_window(t, res, lines, nm=None, analysis_done=True):
     Output window has the text (one line says so)."""
     try:
         hidden, total, best = nm if nm is not None else hidden_count(t, idalayer.current_arch())
-        head = [HEADLINE % (hidden, total, "; the site's pseudocode comment says so" if STATE["hx"] is not None else "")]
+        head = [HEADLINE % (hidden, total) + (HEADLINE_SOME % (
+            "; the site's pseudocode comment says so" if STATE["hx"] is not None else "") if hidden else HEADLINE_NONE)]
         body = (head if total else []) + table_lines(t)
         missed = idalayer.not_code_text(res, analysis_done)
         if missed:
