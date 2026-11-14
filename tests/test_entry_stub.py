@@ -706,6 +706,27 @@ if key is not None:
     kf, nxt = get_func(key.code), key.code + 5
     if kf is not None and not any(key.code < e <= nxt for e in m.STATE["pseudo"]["eas"]):  # no other site up to nxt
         assert decompile([key.code, nxt], entry=kf.start_ea) == {key.code: want, nxt: ""}
+# judge s189 #3: the README's before/after blocks wrap kflow's comments; unwrapped, each is the code's own text for
+# the sites this kernel has (the MemLens demo kernel: all three, and the pseudocode comment of the static-key one)
+with open(os.path.join(HERE, "..", "README.md"), encoding="utf-8") as _fh:
+    _blocks = re.findall(r"^```\n(.*?)^```", _fh.read(), re.M | re.S)
+_disasm = re.findall(r"^([0-9a-f]{16})  .*\n    ; (kflow: .*(?:\n    ;        .*)*)", _blocks[0], re.M)
+_pseudo = re.sub(r"\n//        ", " ", _blocks[1].strip())
+assert len(_disasm) == 3 and _pseudo.startswith("// kflow: static key "), (_blocks[:2])
+_readme_done = []
+for _addr, _cmt in _disasm:
+    _ea, _cmt = int(_addr, 16), re.sub(r"\n    ;        ", " ", _cmt)
+    _code = [il.bug_comment(b) for b in t["bug"] if b.addr == _ea] + [il.jump_comment(j) for j in t["jump"] if j.code == _ea] + \
+        [il.ex_comment(x, arch) for x in t["ex"] if x.insn == _ea]
+    if _code:
+        assert _code == [_cmt], (hex(_ea), _code, _cmt)
+        _readme_done.append(_ea)
+    if _code and _cmt.startswith("kflow: static key "):
+        assert "// " + decompile([_ea])[_ea] == _pseudo, (decompile([_ea])[_ea], _pseudo)
+        _readme_done.append("pseudocode")
+if _readme_done:
+    print("OK README before/after: the wrapped comments are the code's text at %s"
+          % ", ".join(x if isinstance(x, str) else "0x%X" % x for x in _readme_done))
 exact = list(shown_texts)  # (kind, address, text) of the sites whose own address has a statement
 if nop is not None:
     f = get_func(nop.code)

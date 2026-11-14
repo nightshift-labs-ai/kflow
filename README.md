@@ -2,25 +2,31 @@
 
 <img src="assets/logo.png" width="96" align="right" alt="kflow logo">
 
-For kernel reverse engineers (Linux and Android vulnerability research, patch diffing, crash triage): kflow turns the bare traps, NOPs and faulting instructions of a kernel into source lines, static keys and fixups. A `WARNING: CPU: 1 PID: 9 at mm/userfaultfd.c:755 mfill_atomic_copy+0x674/0x9d0` line pasted from a kernel log leads to the trap it names, and a NOP says which key patches it and where it then jumps. On the MemLens demo kernel, 96% of the 8,349 static-key NOP sites jump to code that no direct branch targets and no instruction falls into ([measured](tools/reach_results.md)), so kflow's reference is the only one that leads there.
+For kernel reverse engineers (Linux and Android vulnerability research, patch diffing, crash triage): kflow reads the kernel's own `__jump_table`, `__bug_table` and `__ex_table` and turns bare NOPs, traps and faulting instructions into static keys, source lines and fixups. On the MemLens demo kernel (a Debian 13 6.12 x86_64 kernel exported from a memory image), 96% of the 8,349 static-key NOP sites jump to code that no direct branch targets and no instruction falls into ([measured](tools/reach_results.md)): kflow's reference is the only one that leads there, and its pseudocode comment says that Hex-Rays probably does not show that code. Each BUG/WARN trap gets the `file:line` the kernel recorded, also on kernels without DWARF (GKI `Image`, memory images), and a whole oops report pasted in leads to the trap it names, checked against the build.
 
-Before: what the disassembly shows at three addresses of the [MemLens demo kernel](https://github.com/nightshift-labs-ai/memlens/releases/tag/demo-data) (`objdump -d`). After: the comment kflow writes at each one (text from kflow's fake-IDA test, not an IDA screenshot):
-
-```
-ffffffff8e629bc4  ud2            ; kflow: WARN at mm/userfaultfd.c:755 (the kernel reports and continues after this trap)
-ffffffff8e391de7  xchg %ax,%ax   ; kflow: static key randomize_kstack_offset (static_branch_likely): runtime-patched NOP/branch; jumps to 0xFFFFFFFF8E391DFC when the key is off
-ffffffff8e200029  wrmsr          ; kflow: may fault -> fixup at 0xFFFFFFFF8E20002B (WRMSR)
-```
-
-With the Hex-Rays decompiler, the static-key site's pseudocode line ends with this comment (same fake-IDA test, `tests/test_entry_stub.py` on the demo kernel):
+Before: what `objdump -d` shows at three addresses of the [MemLens demo kernel](https://github.com/nightshift-labs-ai/memlens/releases/tag/demo-data). After: the comment kflow writes at each one (text from kflow's fake-IDA test, not an IDA screenshot; long comments wrapped here):
 
 ```
-// kflow: static key randomize_kstack_offset (likely): jumps to 0xFFFFFFFF8E391DFC when the key is off; nothing else in the database jumps or falls through to 0xFFFFFFFF8E391DFC, so this pseudocode probably does not show that code
+ffffffff8e391de7  xchg %ax,%ax
+    ; kflow: static key randomize_kstack_offset (static_branch_likely): runtime-patched NOP/branch;
+    ;        jumps to 0xFFFFFFFF8E391DFC when the key is off
+ffffffff8e629bc4  ud2
+    ; kflow: WARN at mm/userfaultfd.c:755 (the kernel reports and continues after this trap)
+ffffffff8e200029  wrmsr
+    ; kflow: may fault -> fixup at 0xFFFFFFFF8E20002B (WRMSR)
+```
+
+With the Hex-Rays decompiler, the static-key site's pseudocode line ends with this comment (same fake-IDA test, `tests/test_entry_stub.py` on the demo kernel; one comment in IDA, wrapped here):
+
+```
+// kflow: static key randomize_kstack_offset (likely): jumps to 0xFFFFFFFF8E391DFC when the key is off;
+//        nothing else in the database jumps or falls through to 0xFFFFFFFF8E391DFC,
+//        so this pseudocode probably does not show that code
 ```
 
 ## Status
 
-**kflow has not yet been run inside real IDA.** It was built without access to an IDA installation. The table decoders are checked on seven real kernels and five kernel modules; the IDA layer has only been exercised with fake `ida_*` modules ([details](docs/VERIFICATION.md#status-read-this-first)). Bug reports are very welcome.
+**kflow has not yet been run inside real IDA.** It was built without access to an IDA installation. The table decoders are checked on seven real kernels and six kernel modules; the IDA layer has only been exercised with fake `ida_*` modules ([details](docs/VERIFICATION.md#status-read-this-first)). Bug reports are very welcome.
 
 kflow was built by an AI agent (Claude, operated by Nightshift Labs).
 
@@ -30,9 +36,10 @@ Numbers: MemLens demo kernel ([measured](tools/reach_results.md)).
 
 |Need|Without kflow|With kflow|
 |---|---|---|
-|**Static-key (jump label) sites**|A NOP with no reference.|Key, target and when it jumps, plus a reference to the target: for 96% of the 8,349 NOP sites no direct branch or fall-through reaches it (Ubuntu 6.8: 96% of 8,055).|
-|**WARN/BUG `file:line`**|A debug `vmlinux` with DWARF already has it (`addr2line`, IDA's DWARF import). Hex-Rays prints `BUG();` for WARN too.|Kernels without DWARF (GKI `Image` via vmlinux-to-elf, memory images), and WARN (continues) vs BUG.|
-|**Jump from an oops line**|IDA's Jump dialog already takes `mfill_atomic_copy+0x674`.|kflow's own part: whole-report parsing, a build check, `file:line` to every inlined copy (`mm/userfaultfd.c:755`: 4 sites; 586 lines have 2+, 506 in 2+ functions).|
+|**Static-key (jump label) sites**|A NOP with no reference.|Key, target and when it jumps, plus a reference to the target: for 96% of the 8,349 NOP sites no direct branch or fall-through reaches it (Ubuntu 6.8: 96% of 8,055), so without it the function graph and the pseudocode probably leave that code out.|
+|**Pseudocode**|A NOP usually leaves no statement: nothing marks the site.|A `// kflow:` comment names the key and, where nothing else reaches the skipped code, says it is probably not shown; a decompile check of up to 20 functions names any that stop decompiling after Annotate.|
+|**WARN/BUG `file:line`**|A debug `vmlinux` with DWARF already has it (`addr2line`, IDA's DWARF import). Hex-Rays prints `BUG();` for WARN too.|The same `file:line` from the kernel's own table, also without DWARF (GKI `Image` via vmlinux-to-elf, memory images); WARN (continues) vs BUG (stops).|
+|**Jump from an oops line**|IDA's Jump dialog already takes `mfill_atomic_copy+0x674`.|kflow's own part: whole-report parsing, a check against the build, `file:line` to every inlined copy (`mm/userfaultfd.c:755`: 4 sites; 586 source lines map to 2+ traps, 506 of them in 2+ named functions).|
 |**Exception-table fixups**|Ordinary flow already reaches 336 of 658 sites' fixups (51%).|Comment and reference at each: small gain (51 hidden handlers, 426 bytes).|
 |**Continuing after a WARN `ud2`**|[linux_und.py](https://git.zx2c4.com/ida-plugins/tree/linux_und.py) continues after every `ud2`, BUG included; SDK example `ana_emu_out.py` decodes ARM32 `BUG_INSTR`, still stopping flow.|Experimental, off by default: flow only after the WARN traps `__bug_table` lists.|
 |**Headless**|DIY idalib scripting.|`tools/kflow_headless.py`; `--json` exports every site.|
@@ -43,21 +50,16 @@ As of Nov 2026 we found no public `__jump_table` decoder for IDA, Ghidra or Bina
 
 One line per feature; each one in full: [docs/FEATURES.md](docs/FEATURES.md).
 
-- [**BUG/WARN comments**](docs/FEATURES.md#bugwarn-traps): every trap of the kernel's `__bug_table` gets its source `file:line` (where the kernel recorded one) and whether the kernel continues after it (WARN) or not (BUG).
-- [**BUG/WARN list**](docs/FEATURES.md#bugwarn-traps): **kflow: List BUG/WARN sites** lists every trap with its function and `file:line`; Enter jumps to it.
+- [**BUG/WARN comments and list**](docs/FEATURES.md#bugwarn-traps): every `__bug_table` trap gets its `file:line` (where the kernel recorded one) and WARN (the kernel continues) or BUG; **kflow: List BUG/WARN sites** lists them, Enter jumps.
 - [**Go to oops/WARN line**](docs/FEATURES.md#bugwarn-traps): paste a `WARNING:`, `kernel BUG at`, `RIP:` or `pc :` line, or a whole report, and kflow goes to the trap it names; `python3 -m kflow <kernel> --oops <log>` does the same outside IDA.
-- [**Static-key comments and key references**](docs/FEATURES.md#static-keys-and-exception-table-fixups): each runtime-patched NOP or branch gets its key, its branch target and when it jumps, a reference to the target where IDA has none, and a data reference to its key (X on a key lists its sites).
-- [**Static-key chooser**](docs/FEATURES.md#static-keys-and-exception-table-fixups): **kflow: List static-key sites** shows every site with its key, `jump` / `no jump` now, the target, the size of the out-of-line block there (`bytes / insns`) and the function; the filter finds every site of one key.
+- [**Static-key comments and key references**](docs/FEATURES.md#static-keys-and-exception-table-fixups): each runtime-patched NOP or branch gets its key, target and when it jumps, a reference to the target where IDA has none, and one to its key (X on a key lists its sites).
+- [**Static-key chooser**](docs/FEATURES.md#static-keys-and-exception-table-fixups): **kflow: List static-key sites** shows key, `jump` / `no jump` now, target, the size of the out-of-line block there and the function; filter by key.
 - [**Exception-table fixups**](docs/FEATURES.md#static-keys-and-exception-table-fixups): each instruction that may fault on purpose gets its fixup and type (or handler), and a reference to the fixup.
-- [**What the references add, measured**](tools/reach_results.md): on the MemLens demo kernel, 96% of the 8,349 static-key NOP sites jump to code that no direct branch targets and no instruction falls into. After 90% of the 7,504 WARN traps the code is hidden too; only the experimental [WARN fall-through](docs/warnflow.md) reaches it (Annotate comments WARN sites but adds no reference there).
-- [**Hex-Rays pseudocode comments**](docs/USAGE.md#hex-rays-pseudocode-comments): a `// kflow: ...` comment at the end of the site's pseudocode line (display text only); at a static-key site whose skipped code nothing else in the database reaches, it adds that this pseudocode probably does not show that code.
-- [**Decompile check**](docs/USAGE.md#hex-rays-pseudocode-comments): with the decompiler, Annotate decompiles up to 20 functions that get a new static-key jump reference, before and after, and names any that stopped decompiling.
-- [**Kernel modules**](docs/modules.md) (`.ko`, `.ko.xz`, `.ko.gz`): the command line applies the module's relocations; IDA relocates a `.ko` itself.
-- [**Clean removal**](docs/USAGE.md#step-by-step): **kflow: Remove annotations** takes out only the comments and references kflow added (also after a rebase).
-- [**WARN fall-through**](docs/warnflow.md) (experimental, off by default, x86_64 only): ordinary flow after exactly the WARN `ud2` traps the kernel's `__bug_table` lists, so that IDA can reach the code after them.
-- [**Headless runner**](docs/USAGE.md#headless-idalib): `python3 tools/kflow_headless.py <kernel>` annotates and saves the database without the IDA window (idalib, IDA 9.0+); `--json` exports every site.
-- [**Command-line decoder, no IDA needed**](docs/OUTPUT.md): `python3 -m kflow <kernel ELF>` needs only Python 3.8+ and no packages.
-- [**One-command tests**](docs/VERIFICATION.md#what-was-verified): `sh tests/run_all.sh` runs every test in about two seconds on a pinned Debian arm64 `ext4.ko` (sha256 checked) or on your own files (about a minute on a whole vmlinux).
+- [**Hex-Rays pseudocode comments**](docs/USAGE.md#hex-rays-pseudocode-comments) (display text only) and a [**decompile check**](docs/USAGE.md#hex-rays-pseudocode-comments): up to 20 functions decompiled before and after Annotate.
+- [**What the references add, measured**](tools/reach_results.md): after 90% of the 7,504 WARN traps the code is hidden too; Annotate adds no reference there, only the experimental [**WARN fall-through**](docs/warnflow.md) (off by default, x86_64) lets IDA flow on after exactly the WARN traps `__bug_table` lists.
+- [**Kernel modules**](docs/modules.md) (`.ko`, `.ko.xz`, `.ko.gz`), [**clean removal**](docs/USAGE.md#step-by-step) of only what kflow added (also after a rebase), a [**headless runner**](docs/USAGE.md#headless-idalib) (idalib, IDA 9.0+; `--json` exports every site).
+- [**Command-line decoder, no IDA needed**](docs/OUTPUT.md): `python3 -m kflow <kernel ELF>`, Python 3.8+, no packages.
+- [**One-command tests**](docs/VERIFICATION.md#what-was-verified): `sh tests/run_all.sh` (about two seconds on a pinned Debian arm64 `ext4.ko`, or on your own files).
 
 ## Install
 
@@ -94,7 +96,7 @@ A stripped `vmlinux` (from `extract-vmlinux`) still has `__bug_table` and `__ex_
 ### Steps in short
 
 1. Outside IDA, see what is there: `python3 -m kflow kernel.elf` ([output](docs/OUTPUT.md#what-you-get-real-output-not-ida-screenshots)).
-2. In IDA, open the kernel and, after IDA's auto-analysis has finished, run **Edit > Plugins > kflow: Annotate kernel sites**. It ends with a window titled **kflow: Annotate finished**: how many static-key NOP sites can jump to code nothing else in the database reaches, one line each for the BUG/WARN sites, static-key sites and exception-table fixups, the decompile check's result (with the decompiler), a next step (with the decompiler: the function with the most such sites, to press F5 in), and buttons to the static-key and BUG/WARN lists; the Output window has the counts.
+2. In IDA, open the kernel and, after IDA's auto-analysis has finished, run **Edit > Plugins > kflow: Annotate kernel sites**. It ends with a window titled **kflow: Annotate finished**: the headline count, one line per table, the decompile check (with the decompiler), a next step (with the decompiler, the function to press F5 in) and buttons to the two lists; the Output window has the counts.
 3. **kflow: List BUG/WARN sites** and **kflow: List static-key sites** list the sites; **kflow: Go to oops/WARN line** takes a log line such as `WARNING: CPU: 1 PID: 9 at mm/userfaultfd.c:755 mfill_atomic_copy+0x674/0x9d0`, or the whole report. No log for your kernel? The dialog starts with a `WARNING:` line built from the database's own `__bug_table`, labelled as an example. Outside IDA, the same round trip: `python3 -m kflow kernel.elf --oops "$(python3 -m kflow kernel.elf --oops-example)"` (`--oops` takes a log file, `-` for stdin, or the line itself in quotes).
 4. **kflow: Remove annotations** removes kflow's comments and the references it added; IDA's and yours stay.
 
@@ -115,7 +117,7 @@ Every limit, one line each and then in full: [docs/limits.md](docs/limits.md).
 - [docs/FEATURES.md](docs/FEATURES.md): every feature in full, and the three kernel tables kflow reads.
 - [docs/USAGE.md](docs/USAGE.md): each action step by step, Hex-Rays pseudocode comments, the headless runner and `--json`, a one-minute kernel-module example.
 - [docs/OUTPUT.md](docs/OUTPUT.md): real command-line output on the MemLens demo kernel and the comments kflow writes.
-- [docs/VERIFICATION.md](docs/VERIFICATION.md): the tests and the seven kernels and five modules they were run on.
+- [docs/VERIFICATION.md](docs/VERIFICATION.md): the tests and the seven kernels and six modules they were run on.
 - [docs/limits.md](docs/limits.md): the limits, one line each, then in full.
 - [docs/modules.md](docs/modules.md) (kernel modules), [docs/warnflow.md](docs/warnflow.md) (the experimental WARN fall-through), [CHANGELOG.md](CHANGELOG.md).
 

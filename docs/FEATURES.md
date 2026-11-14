@@ -2,7 +2,7 @@
 
 The one-line list is in the [README](../README.md#features). How to run each action: [USAGE.md](USAGE.md); output: [OUTPUT.md](OUTPUT.md); what was checked: [VERIFICATION.md](VERIFICATION.md); limits: [limits.md](limits.md).
 
-**Status:** the table decoders are checked on seven real kernels and five kernel modules; the IDA layer has not yet been run inside real IDA (only with fake `ida_*` modules). [Details](VERIFICATION.md#status-read-this-first)
+**Status:** the table decoders are checked on seven real kernels and six kernel modules; the IDA layer has not yet been run inside real IDA (only with fake `ida_*` modules). [Details](VERIFICATION.md#status-read-this-first)
 
 ## What kflow reads
 
