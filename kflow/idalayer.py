@@ -166,6 +166,43 @@ def site_key_name(j, cache=None):
     return cache[j.key]
 
 
+def site_class(j, cache=None):
+    """The class of the site's static key (core.key_class of site_key_name): hardening, feature, tracepoint, debug."""
+    return core.key_class(site_key_name(j, cache))
+
+
+def _zero_filled(ea):
+    """True when ea lies in an uninitialized segment (SEG_BSS: ida_segment.pyi, idc.py 'uninitialized segment')."""
+    seg = ida_segment.getseg(ea)
+    return seg is not None and seg.type == ida_segment.SEG_BSS
+
+
+def key_default(j):
+    """core.key_default for the site's key: True / False = on / off by default in this build; None for a module's
+    imported key (its bytes are not in this database) or when the bytes do not read as a static key."""
+    if SITE_KEY.get(j.entry) or _outside_or_extern(j.key):
+        return None
+    return core.key_default(read, j.key, _zero_filled)
+
+
+def hardening_keys(t):
+    """[(name, key_default)] of the hardening keys (core.HARDENING_KEYS) that this database's static-key sites test, in
+    that list's order: the summary window's line. Found by name (ida_name.get_name_ea, one name per address, so the
+    key's label is that name) and from a module's labels, without naming every key."""
+    where = {}
+    for n in core.HARDENING_KEYS:
+        ea = ida_name.get_name_ea(BADADDR, n)
+        if ea != BADADDR:
+            where[ea] = n
+    seen = {}
+    for j in t["jump"]:
+        hit = SITE_KEY.get(j.entry)
+        name = hit[0] if hit else where.get(j.key)
+        if name in core.HARDENING_KEYS and name not in seen:
+            seen[name] = key_default(j)
+    return [(n, seen[n]) for n in core.HARDENING_KEYS if n in seen]
+
+
 ANCHORS = ("_text", "_stext", "stext", "startup_64", "_etext", "_sdata", "linux_banner")
 
 

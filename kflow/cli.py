@@ -1,6 +1,7 @@
 """kflow command line: decode the site tables of a kernel ELF (vmlinux, a MemLens kernel.elf, or a module .ko).
 
-    python3 -m kflow <kernel.elf> [--list bug|warn|jump|ex] [--limit N] [--json out.json]
+    python3 -m kflow <kernel.elf> [--list bug|warn|jump|ex] [--class hardening|feature|tracepoint|debug] [--limit N]
+                     [--json out.json]
     python3 -m kflow <kernel.elf> --oops <log file, - for stdin, or the line itself in quotes> [--json out.json]
     python3 -m kflow <kernel.elf> --oops-example     (a WARNING line from this file's own table, to try --oops)
 """
@@ -14,7 +15,8 @@ import struct
 import sys
 
 from . import __version__
-from .core import TABLES, TRACEPOINT_KEY_OFFSET, decode_bug_table, decode_ex_table, decode_jump_table, key_label
+from .core import (HARDENING_KEYS, KEY_CLASSES, TABLES, TRACEPOINT_KEY_OFFSET, decode_bug_table, decode_ex_table,
+                   decode_jump_table, hardening_text, key_class, key_default, key_label)
 
 
 class InputError(Exception):
@@ -271,6 +273,16 @@ class Elf:
             return "%s+%#x" % (name, off)
         return key_label(lambda a: self.by_addr.get(a, ""), ea, self.read, self._nearest)
 
+    def key_default(self, ea):
+        """core.key_default for the key at ea (a key in .bss is off); None for a module's imported key."""
+        if self.extern_of(ea) is not None:
+            return None
+        return key_default(self.read, ea, self.in_nobits)
+
+    def in_nobits(self, ea):
+        """True when ea lies in a section without contents in the file (SHT_NOBITS: .bss, zero-filled)."""
+        return any(a <= ea < e for nm, (a, e) in self.sections.items() if nm in self.nobits)
+
     def _nearest(self, ea):
         """(name, address) of the closest named address at or before ea, or None."""
         if not hasattr(self, "_named"):
@@ -378,6 +390,12 @@ def summary(elf, t):
         same = sum(1 for j in jumps if elf.func(j.code) and elf.func(j.code) == elf.func(j.target))
         lines.append("__jump_table: %d static-key sites, %d keys named (%d tracepoints, %d pr_debug sites, "
                      "%d as symbol+offset), %d targets in the same function" % (len(jumps), named, tps, dds, offs, same))
+        classes = collections.Counter(key_class(n) for n in labels)
+        lines.append("  sites by key class (--list jump --class): " + ", ".join(
+            "%s %d" % (c, classes[c]) for c in KEY_CLASSES))
+        hard = hardening_keys(elf, jumps, labels)
+        if hard:
+            lines.append("  hardening keys, default in this build: " + hardening_text(hard))
     exs = t.get("ex")
     if exs is not None:
         types = collections.Counter(("handler " + elf.by_addr.get(x.handler, hex(x.handler))) if x.handler is not None
@@ -395,6 +413,15 @@ def summary(elf, t):
     return lines
 
 
+def hardening_keys(elf, jumps, labels):
+    """[(name, build default)] of the hardening keys (core.HARDENING_KEYS) that sites test, in the list's order."""
+    seen = {}
+    for j, n in zip(jumps, labels):
+        if key_class(n) == "hardening" and n not in seen:
+            seen[n] = elf.key_default(j.key)
+    return [(n, seen[n]) for n in HARDENING_KEYS if n in seen]
+
+
 def row_count(text):
     """--limit: a whole number of rows, 0 or more (0 prints only the '... N more' line)."""
     try:
@@ -410,6 +437,8 @@ def main(argv=None):
     ap = argparse.ArgumentParser(prog="kflow", description=__doc__.splitlines()[0])
     ap.add_argument("kernel")
     ap.add_argument("--list", choices=["bug", "warn", "jump", "ex"])
+    ap.add_argument("--class", dest="key_class", choices=KEY_CLASSES, help="with --list jump: only the sites whose key "
+                    "is of this class (hardening: a fixed list of hardening/mitigation keys; debug: dynamic debug)")
     ap.add_argument("--limit", type=row_count, help="rows for --list, 0 or more (default 20)")
     ap.add_argument("--json")
     ap.add_argument("--oops", metavar="LOG", help="a kernel log file (a WARNING / kernel BUG / RIP / pc line or a whole "
@@ -420,6 +449,8 @@ def main(argv=None):
     a = ap.parse_args(argv)
     if a.oops is not None and (a.list or a.limit is not None):
         ap.error("--oops cannot be combined with --list or --limit")
+    if a.key_class and a.list != "jump":
+        ap.error("--class needs --list jump")
     if a.oops_example and (a.oops is not None or a.list or a.limit is not None or a.json):
         ap.error("--oops-example cannot be combined with --oops, --list, --limit or --json")
     limit = 20 if a.limit is None else a.limit
@@ -451,6 +482,8 @@ def main(argv=None):
                 rows.append("%#x %-5s %-40s %s" % (b.addr, "WARN" if b.warn else "BUG", elf.func(b.addr) or "?", b.where() or ""))
         elif a.list == "jump":
             for j in t.get("jump", []):
+                if a.key_class and key_class(elf.key_name(j.key)) != a.key_class:
+                    continue
                 rows.append("%#x -> %#x  %-40s key %s%s" % (j.code, j.target, elf.func(j.code) or "?",
                             elf.key_name(j.key) or "%#x" % j.key, " (likely)" if j.branch else ""))
         else:

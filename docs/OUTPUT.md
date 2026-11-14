@@ -11,6 +11,8 @@ $ python3 -m kflow kernel.elf
 __bug_table (addr,file,line,flags): 9850 sites, 7831 WARN (resume after the trap), 2019 BUG; 9850 with file:line in 1168 source files
   WARN sites that are ud2 here: 7504; sites inside a function symbol: 9329
 __jump_table: 9237 static-key sites, 9237 keys named (1728 tracepoints, 2198 pr_debug sites, 182 as symbol+offset), 9006 targets in the same function
+  sites by key class (--list jump --class): hardening 82, feature 5229, tracepoint 1728, debug 2198
+  hardening keys, default in this build: init_on_alloc on, randomize_kstack_offset on, init_on_free off, cr_pinning off, bypass_usercopy_checks off, switch_mm_cond_ibpb off, switch_mm_always_ibpb off, switch_to_cond_stibp off, switch_mm_cond_l1d_flush off, cpu_buf_idle_clear off
 __ex_table (insn,fixup,data): 671 faulting instructions with a fixup, 635 fixups in the same function; types UACCESS 410, IMM_REG 87, WRMSR 42, RDMSR 39, FAULT_SGX 23, CLEAR_FS 15
 
 $ python3 -m kflow kernel.elf --list jump --limit 3   (summary lines and the '... more' line left out here)

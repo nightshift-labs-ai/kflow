@@ -223,6 +223,62 @@ def key_label(name_at, ea, read=None, nearest=None):
     return None
 
 
+KEY_CLASSES = ("hardening", "feature", "tracepoint", "debug")  # the static-key list's order: keys that change what
+# the kernel does first, then tracing and dynamic debug (pr_debug / dev_dbg / net_dbg sites), which only log
+HARDENING_KEYS = (  # judge s189 diff #3: symbol names of static keys that switch a hardening or mitigation on, each a
+    # key with sites in the MemLens demo kernel (Debian 6.12) and in Ubuntu 6.8 amd64; the last six are x86 only
+    "init_on_alloc",  # mm: zero pages and slab objects on allocation (init_on_alloc=, CONFIG_INIT_ON_ALLOC_DEFAULT_ON)
+    "init_on_free",  # ... on free (init_on_free=, CONFIG_INIT_ON_FREE_DEFAULT_ON)
+    "randomize_kstack_offset",  # random kernel stack offset per syscall (CONFIG_RANDOMIZE_KSTACK_OFFSET_DEFAULT)
+    "cr_pinning",  # x86: CR0.WP and CR4.SMEP/SMAP/UMIP... cannot be cleared once set (native_write_cr0/cr4)
+    "bypass_usercopy_checks",  # CONFIG_HARDENED_USERCOPY: on = the checks are skipped (hardened_usercopy=off)
+    "switch_mm_cond_ibpb", "switch_mm_always_ibpb",  # x86 Spectre v2 user: IBPB on context switch
+    "switch_to_cond_stibp",  # x86 Spectre v2 user: STIBP for tasks that ask for it
+    "switch_mm_cond_l1d_flush",  # x86: L1D flush on context switch for tasks that ask for it (prctl)
+    "cpu_buf_idle_clear",  # x86 MDS: clear CPU buffers before idle (older kernels call it mds_idle_clear: no kernel
+    # here has that name, so it is not listed)
+)
+
+
+def key_class(label):
+    """The class of a static key from its label (key_label): 'tracepoint' (the key of a struct tracepoint), 'debug'
+    (of a struct _ddebug that validates), 'hardening' (a key named exactly as in HARDENING_KEYS) or 'feature'."""
+    label = label or ""
+    if label.startswith("tracepoint "):
+        return "tracepoint"
+    if label.startswith("pr_debug "):
+        return "debug"
+    return "hardening" if label in HARDENING_KEYS else "feature"
+
+
+JUMP_TYPE_TRUE = 1  # include/linux/jump_label.h: bit 0 of struct static_key's type word; set by STATIC_KEY_INIT_TRUE
+
+
+def key_default(read, ea, zero_filled=None):
+    """True / False: the static key at ea is on / off by default in this build (DEFINE_STATIC_KEY_TRUE / _FALSE, and
+    _MAYBE by its config option): bit 0 (JUMP_TYPE_TRUE) of the word after 'enabled' in struct static_key { atomic_t
+    enabled; union { unsigned long type; entries; next } }. A running kernel keeps the bit under the pointer it stores
+    there (memory images). Not a static key (the word is neither a type 0-3 nor a kernel pointer) or not readable: None,
+    unless zero_filled(ea) says the key lies in zero-filled memory (.bss): then False."""
+    raw = read(ea + 8, 8) if read else None
+    if not raw or len(raw) < 8:
+        return False if zero_filled is not None and zero_filled(ea) else None
+    word = struct.unpack("<Q", raw)[0]
+    if word > 3 and word >> 48 != 0xFFFF:
+        return None
+    return bool(word & JUMP_TYPE_TRUE)
+
+
+def hardening_text(pairs, most=None):
+    """'init_on_alloc on, init_on_free off' for [(name, key_default)]: on by default first, then off, then unknown
+    ('?'), each in the given order; with most, at most that many names, then '+N more'."""
+    rank, word = {True: 0, False: 1, None: 2}, {True: "on", False: "off", None: "?"}
+    words = ["%s %s" % (n, word[d]) for n, d in sorted(pairs, key=lambda p: rank[p[1]])]
+    if most is not None and len(words) > most:
+        words = words[:most] + ["+%d more" % (len(words) - most)]
+    return ", ".join(words)
+
+
 def decode_jump_table(read, start, stop, in_text=None):
     size = stop - start
     if size <= 0:

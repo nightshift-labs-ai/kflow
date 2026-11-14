@@ -209,6 +209,46 @@ class Keys(unittest.TestCase):
         self.assertEqual(key_label(at, BASE + 0x628, m.read, near), "other_struct+0x28")
         self.assertEqual(key_label(at, BASE + 0x660, m.read, near), "other_struct+0x60")
 
+    def test_key_classes(self):
+        """judge s189 diff #3: every static key gets a class from its label; hardening keys are a short fixed list of
+        symbol names (checked against the demo kernel's keys), sorted first with the feature keys."""
+        from kflow import core
+        self.assertEqual(core.KEY_CLASSES, ("hardening", "feature", "tracepoint", "debug"))
+        self.assertEqual(core.HARDENING_KEYS, (
+            "init_on_alloc", "init_on_free", "randomize_kstack_offset", "cr_pinning", "bypass_usercopy_checks",
+            "switch_mm_cond_ibpb", "switch_mm_always_ibpb", "switch_to_cond_stibp", "switch_mm_cond_l1d_flush",
+            "cpu_buf_idle_clear"))
+        cases = {"tracepoint sched_switch": "tracepoint", 'pr_debug init/main.c:1 "x"': "debug",
+                 "init_on_alloc": "hardening", "cpu_buf_idle_clear": "hardening", "init_on_alloc+0x10": "feature",
+                 "my_init_on_alloc": "feature", "sched_feat_keys+0x30": "feature", "0xFFFFFFFF81000000": "feature",
+                 "descriptor.1+0x28": "feature", "": "feature", None: "feature"}
+        self.assertEqual({k: core.key_class(k) for k in cases}, cases)
+        # the summary text: on by default first, then off, then unknown ('?'); at most `most` names, then '+N more'
+        pairs = [("init_on_free", False), ("init_on_alloc", True), ("cr_pinning", None), ("randomize_kstack_offset", True)]
+        self.assertEqual(core.hardening_text(pairs),
+                         "init_on_alloc on, randomize_kstack_offset on, init_on_free off, cr_pinning ?")
+        self.assertEqual(core.hardening_text(pairs, 2), "init_on_alloc on, randomize_kstack_offset on, +2 more")
+        self.assertEqual(core.hardening_text(pairs[:1], 3), "init_on_free off")
+
+    def test_key_build_default(self):
+        """The build default of a key: bit 0 (JUMP_TYPE_TRUE) of the word after 'enabled' in struct static_key, set
+        for DEFINE_STATIC_KEY_TRUE; a running kernel keeps it under the entries pointer (memory images). A key in
+        zero-filled memory (.bss) is a false key; unreadable or not a static_key: None."""
+        from kflow.core import key_default
+        m = Mem()
+        m.put(BASE + 0x100, struct.pack("<iiQ", 1, 0, 1))  # vmlinux on disk: STATIC_KEY_INIT_TRUE
+        m.put(BASE + 0x110, struct.pack("<iiQ", 0, 0, 0))  # STATIC_KEY_INIT_FALSE
+        m.put(BASE + 0x120, struct.pack("<iiQ", 1, 0, 0xFFFFFFFF8F82FCF1))  # memory image: entries | JUMP_TYPE_TRUE
+        m.put(BASE + 0x130, struct.pack("<iiQ", 0, 0, 0xFFFF88FD41FE36A2))  # static_key_mod | JUMP_TYPE_LINKED
+        m.put(BASE + 0x140, struct.pack("<iiQ", 1, 0, 3))  # memory image: TRUE | LINKED, no entries
+        m.put(BASE + 0x150, struct.pack("<iiQ", 0, 0, 0x1234567))  # not a pointer, not a type: not a static_key
+        self.assertEqual([key_default(m.read, BASE + o) for o in (0x100, 0x110, 0x120, 0x130, 0x140, 0x150)],
+                         [True, False, True, False, True, None])
+        self.assertIsNone(key_default(m.read, BASE + 0x8000))  # not readable
+        self.assertFalse(key_default(m.read, BASE + 0x8000, lambda ea: ea == BASE + 0x8000))  # .bss: zero
+        self.assertIsNone(key_default(m.read, BASE + 0x8000, lambda ea: False))
+        self.assertIsNone(key_default(None, BASE + 0x100))
+
 
 def module_elf(path, extended=False):
     """A minimal x86_64 relocatable ELF (.ko) with one BUG entry and one static-key entry, both only meaningful
@@ -284,6 +324,38 @@ class Module(unittest.TestCase):
         self.assertEqual(e.key_name(e.externs["my_key"] + 272), "my_key+0x110")
         self.assertEqual(e.key_name(e.externs["__tracepoint_foo"] + 0x600), "__tracepoint_foo+0x600")
         self.assertGreater(j.key, max(end for a, end in e.sections.values()))  # extern slot after the sections
+        self.assertIsNone(e.key_default(j.key))  # an imported key: its bytes are not in this file
+
+    def test_list_jump_class(self):
+        """--list jump --class <name> keeps the rows of one key class; the summary counts the sites per class."""
+        import contextlib
+        import io
+        import tempfile
+        from kflow import cli
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "toy.ko")
+            module_elf(p)
+            outs = {}
+            for cls in (None, "feature", "tracepoint", "hardening", "debug"):
+                out = io.StringIO()
+                with contextlib.redirect_stdout(out):
+                    rc = cli.main([p, "--list", "jump"] + (["--class", cls] if cls else []))
+                self.assertEqual(rc, 0)
+                outs[cls] = out.getvalue().splitlines()
+            err = io.StringIO()
+            for bad in ([p, "--class", "feature"], [p, "--list", "bug", "--class", "feature"],
+                        [p, "--list", "jump", "--class", "pr_debug"]):
+                with contextlib.redirect_stderr(err), self.assertRaises(SystemExit) as caught:
+                    cli.main(bad)
+                self.assertEqual(caught.exception.code, 2)
+        self.assertIn("--class", err.getvalue())
+        rows = {cls: [r for r in lines if " -> " in r] for cls, lines in outs.items()}
+        self.assertEqual([len(rows[c]) for c in (None, "feature", "tracepoint", "hardening", "debug")], [2, 1, 1, 0, 0])
+        self.assertTrue(rows["feature"][0].endswith("key my_key"), rows["feature"])
+        self.assertTrue(rows["tracepoint"][0].endswith("key tracepoint foo"), rows["tracepoint"])
+        self.assertIn("  sites by key class (--list jump --class): hardening 0, feature 1, tracepoint 1, debug 0",
+                      outs[None])
+        self.assertFalse([r for r in outs[None] if "hardening keys" in r])  # no hardening key: no line
 
     def test_extended_section_numbering(self):
         import tempfile
