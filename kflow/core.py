@@ -226,7 +226,8 @@ def key_label(name_at, ea, read=None, nearest=None):
 KEY_CLASSES = ("hardening", "feature", "tracepoint", "debug")  # the static-key list's order: keys that change what
 # the kernel does first, then tracing and dynamic debug (pr_debug / dev_dbg / net_dbg sites), which only log
 HARDENING_KEYS = (  # judge s189 diff #3: symbol names of static keys that switch a hardening or mitigation on, each a
-    # key with sites in the MemLens demo kernel (Debian 6.12) and in Ubuntu 6.8 amd64; the last six are x86 only
+    # key with sites in the MemLens demo kernel (Debian 6.12) and in Ubuntu 6.8 amd64; cr_pinning and the last five are
+    # x86 only (GKI 6.1 / 6.6 arm64 have the other four)
     "init_on_alloc",  # mm: zero pages and slab objects on allocation (init_on_alloc=, CONFIG_INIT_ON_ALLOC_DEFAULT_ON)
     "init_on_free",  # ... on free (init_on_free=, CONFIG_INIT_ON_FREE_DEFAULT_ON)
     "randomize_kstack_offset",  # random kernel stack offset per syscall (CONFIG_RANDOMIZE_KSTACK_OFFSET_DEFAULT)
