@@ -1445,6 +1445,9 @@ def cli_check(path, elf, bugs, reg, tag):
             assert example.startswith("WARNING: CPU: 0 PID: 1 at ") and len(example.splitlines()) == 1, example
             code, got = run(example + "\n")
             assert code == 0 and got.splitlines()[1].startswith("exact: the WARN site at "), (example, got)
+            if os.path.basename(path) == "dm-mod.ko":  # judge s189 #1: the README's quick path quotes this line
+                with open(os.path.join(HERE, "..", "README.md"), encoding="utf-8") as fh:
+                    assert "starts with `%s`" % example in fh.read(), example
         else:
             assert code == 1 and not any(b.warn and b.file for b in bugs), buf.getvalue()
         with contextlib.redirect_stderr(io.StringIO()) as err:

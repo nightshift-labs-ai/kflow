@@ -95,6 +95,24 @@ def summary(new):
 
 
 first_text, first_nm = summary(log)
+# judge s189 #1: the README's quick path says what this file shows; on dm-mod.ko (the try-module) every number and name
+# there is checked against this run and the command line
+QUICK = os.path.basename(sys.argv[1]) == "dm-mod.ko"
+if QUICK:
+    with open(os.path.join(HERE, "..", "README.md"), encoding="utf-8") as _fh:
+        _readme = _fh.read()
+    quick = _readme[_readme.index("**In a few minutes:**"):_readme.index("For the full picture")]
+    _cli = T.load(cli_elf)
+    assert "finds %d BUG/WARN sites (%d WARN), %d static-key sites and %d exception-table fixups" % (
+        len(_cli["bug"]), sum(1 for b in _cli["bug"] if b.warn), len(_cli["jump"]), len(_cli["ex"])) in quick, quick
+    assert "`%d of %d static-key NOP sites can jump to code nothing else in this database reaches`" % first_nm in quick
+    assert "lists the %d sites" % len(m.STATE["tables"]["jump"]) in quick, quick
+    f5 = re.search(r"Press F5 in `(\w+)` \((\d+) `(\w+)` sites and the `(\w+)` tracepoint\)", quick)
+    assert f5 and f5.group(1) == hidden_by_function().most_common(1)[0][0], (f5 and f5.group(0), hidden_by_function())
+    QUICK_F5 = f5.group(1)
+    assert sorted(cli_elf.key_name(j.key) for j in _cli["jump"] if cli_elf.func(j.code) == QUICK_F5) == sorted(
+        [f5.group(3)] * int(f5.group(2)) + ["tracepoint " + f5.group(4)]), f5.group(0)
+    assert hidden_by_function()[QUICK_F5] == int(f5.group(2)) + 1, (hidden_by_function()[QUICK_F5], f5.group(0))
 nop_state = [j for j in m.STATE["tables"]["jump"] if m.idalayer.is_insn(j.code) and not m.idalayer.branches_to(
     j.code, j.target, m.idalayer.current_arch())]
 assert (first_nm is not None) == bool(nop_state), (first_nm, len(nop_state))
@@ -217,6 +235,16 @@ assert len(asks) == 1, first
 example_default = asks[0][2]
 assert ("Go to oops/WARN line starts with a WARNING line built from this database" in first_text) == bool(
     example_default), (first_text, example_default)  # judge s189 #2: the summary window's next step
+if QUICK:  # judge s189 #1: the README's quick path quotes this dialog's first text and the trap it leads to
+    _q = re.search(r"Go to oops/WARN line\*\* starts with `(WARNING: [^`]*)`; OK jumps to that `ud2`, commented `([^`]*)`",
+                   quick)
+    assert _q and _q.group(1) == example_default, (_q and _q.group(1), example_default)
+    m.STATE["oops_text"] = ""
+    _, _used = ask(example_default)
+    _to = [x[1] for x in _used if x[0] == "jump"]
+    _site = [b for b in m.STATE["tables"]["bug"] if _to and b.addr == _to[0]]
+    assert len(_to) == 1 and len(_site) == 1 and elf.read(_to[0], 2) == b"\x0f\x0b", (_to, _site)
+    assert ("kflow: " + _q.group(2) + " ") in m.idalayer.bug_comment(_site[0]), m.idalayer.bug_comment(_site[0])
 assert example_default == "" or example_default.startswith("WARNING: CPU: 0 PID: 1 at "), example_default
 assert example_default or not __import__("kflow.cli", fromlist=["oops_example"]).oops_example(cli_elf, T.load(cli_elf)), "the CLI builds an example line, the dialog offers none"
 if example_default:
@@ -639,6 +667,14 @@ assert (nm is not None) == bool(nop_sites) and (nm is None or nm == (want_n, len
 assert other_ref is None or want_n < len(nop_sites), ("the extra xref makes N < M", want_n, len(nop_sites))
 if other_ref is not None:
     del w["xrefs"][other_ref]
+if QUICK:  # judge s189 #1: F5 in the README's function: every static-key site there gets the hidden-path sentence
+    _f5 = [j for j in t["jump"] if ui.fn.get_func_name(j.code) == QUICK_F5]
+    _got = decompile([j.code for j in _f5])
+    _quoted = re.search(r"comments name the key and end `([^`]*)`", quick).group(1)
+    assert _f5 and all(_got[j.code].endswith(T.HIDDEN_NOP % j.target) and T.HIDDEN_NOP.endswith(_quoted) and
+                       il.site_key_name(j) in _got[j.code] for j in _f5), [(hex(j.code), _got[j.code]) for j in _f5]
+    print("OK README quick path on dm-mod.ko: counts, window headline %d of %d, F5 in %s (%d sites, each with the "
+          "hidden-path sentence), the oops dialog's first text" % (first_nm + (QUICK_F5, len(_f5))))
 print("OK summary headline: %s of %s NOP-state sites (oracle %d of %d)" % (nm and nm[0], nm and nm[1], want_n,
                                                                           len(nop_sites)))
 shown_texts = []
