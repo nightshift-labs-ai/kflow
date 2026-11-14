@@ -2,7 +2,7 @@
 
 Taken from the GitHub release notes. Newest first.
 
-## Unreleased
+## v0.0.8 (2026-11-19)
 
 - Decompile check (menu): you can cancel its wait for IDA to analyse the new references. Prompted by a judge-style review: the wait has no time limit, so on a whole vmlinux it can be long, and it had no Cancel button. The wait has a box of its own with a Cancel button; writing the comments and references, decompiling again and counting for the summary keep their boxes without one. On Cancel (`ida_auto.auto_wait()` returns false, as its IDA 9.1-9.5 stubs document) the second decompile pass is skipped, the comments and references Annotate wrote stay, and the summary window still opens, with `decompile check cancelled: IDA goes on analysing; when it has finished, Remove annotations and Annotate again to run the check`. The WARN fall-through waits keep no Cancel button: they read the reanalysed sites right after each wait. Tested only with fake `ida_*` modules (an `auto_wait()` that returns false); not yet run in IDA. `tests/check_ida_api.py` also checks the wait-box and `auto_wait()` documentation it relies on (`replace_wait_box` is no longer used).
 
