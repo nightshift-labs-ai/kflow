@@ -419,6 +419,35 @@ class Module(unittest.TestCase):
         # review s192: a class without sites says so instead of printing nothing after the summary
         self.assertEqual([r for r in outs["hardening"] if r.startswith("(")], ["(no sites of class hardening)"])
         self.assertEqual([r for r in outs["feature"] if r.startswith("(")], [])
+        # review s193: without a decoded __jump_table it does not say 'no sites of class' (a stripped vmlinux without
+        # __start___jump_table: 'not found'; a table kflow could not decode: 'not decoded'); an empty table still does
+        real_load = cli.load
+
+        def without_jump(error):
+            def fake(elf):
+                t = real_load(elf)
+                del t["jump"]
+                if error:
+                    t["errors"]["jump"] = "jump table size 8 is not a multiple of 16"
+                else:
+                    t["missing"].append("jump")
+                return t
+            return fake
+        got = []
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "toy.ko")
+            module_elf(p)
+            for fake in (without_jump(None), without_jump("size"), lambda elf: dict(real_load(elf), jump=[])):
+                cli.load, out = fake, io.StringIO()
+                try:
+                    with contextlib.redirect_stdout(out):
+                        self.assertEqual(cli.main([p, "--list", "jump", "--class", "hardening"]), 0)
+                finally:
+                    cli.load = real_load
+                got.append([r for r in out.getvalue().splitlines() if r.startswith("(")])
+        self.assertEqual(got, [["(no static-key sites: the __jump_table was not found)"],
+                               ["(no static-key sites: the __jump_table was not decoded)"],
+                               ["(no sites of class hardening)"]])
         # --json: each static-key record has its class (all records: --class only filters the printed rows)
         self.assertEqual([(r["key"], r["class"]) for r in jrecs], [("my_key", "feature"), ("tracepoint foo", "tracepoint")])
 

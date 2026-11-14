@@ -499,8 +499,9 @@ def main(argv=None):
             for x in t.get("ex", []):
                 rows.append("%#x -> %#x  %-40s %s" % (x.insn, x.fixup, elf.func(x.insn) or "?",
                             ("handler " + elf.by_addr.get(x.handler, hex(x.handler))) if x.handler is not None else x.type_name(elf.arch)))
-        if not rows and a.key_class:
-            print("(no sites of class %s)" % a.key_class)
+        if not rows and a.key_class:  # review s193: not 'no sites of class' when there is no decoded table
+            print("(no sites of class %s)" % a.key_class if "jump" in t else "(no static-key sites: the __jump_table "
+                  "was %s)" % ("not decoded" if "jump" in t.get("errors", {}) else "not found"))
         for r in rows[:limit]:
             print(r)
         if len(rows) > limit:
