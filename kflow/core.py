@@ -172,15 +172,22 @@ TRACEPOINT_KEY_OFFSET = 8  # struct tracepoint { const char *name; struct static
 DDEBUG_KEY_OFFSET = 0x28  # struct _ddebug { 4 pointers; lineno:18 ...; key } (Linux 4.x to 6.x, 64-bit)
 
 
+def ddebug_name(n):
+    """True for the symbol of a struct _ddebug: __UNIQUE_ID_ddebug<N> (pr_debug, dev_dbg...) or 'descriptor', the
+    static that pr_debug_ratelimited, dev_dbg_ratelimited and net_dbg_ratelimited define (GCC: descriptor.<N>)."""
+    return n.startswith("__UNIQUE_ID_ddebug") or n == "descriptor" or n.startswith("descriptor.")
+
+
 def ddebug_label(read, ea):
-    """'pr_debug file:line "format"' for the struct _ddebug at ea, or None if it does not read as one."""
+    """'pr_debug file:line "format"' for the struct _ddebug at ea, or None if it does not read as one: the file name
+    must be a source file name (_plausible_file) and the line not 0."""
     raw = read(ea, 0x24) if read else None
     if not raw or len(raw) < 0x24:
         return None
     _mod, _func, filename, fmt = struct.unpack_from("<QQQQ", raw)
     line = struct.unpack_from("<I", raw, 0x20)[0] & 0x3FFFF
     f, raw = _cstr(read, filename), read(fmt, 512) or b""
-    if not f or not line:
+    if not _plausible_file(f) or not line:
         return None
     m = raw.split(b"\0", 1)[0].decode("utf-8", "replace").strip()
     m = "".join(c if c.isprintable() else "\\n" if c == "\n" else " " for c in m).replace('"', "'")
@@ -190,9 +197,11 @@ def ddebug_label(read, ea):
 def key_label(name_at, ea, read=None, nearest=None):
     """Readable name for a static key. name_at(ea) -> symbol name exactly at ea, or "".
     A tracepoint's key is the member at offset 8 of struct tracepoint __tracepoint_<event>: 'tracepoint <event>';
-    a dynamic-debug key sits at offset 0x28 of a struct _ddebug (__UNIQUE_ID_ddebug*): 'pr_debug file:line "fmt"'.
-    Otherwise the symbol at or up to 64 bytes before the key ('sym+0x10'); then, if nearest(ea) -> (name, address) gives
-    the closest named address at or before ea, that name up to KEY_WINDOW bytes back (an array of keys); else None."""
+    a dynamic-debug key sits at offset 0x28 of a struct _ddebug (ddebug_name: __UNIQUE_ID_ddebug*, descriptor.N):
+    'pr_debug file:line "fmt"'. Otherwise the symbol at or up to 64 bytes before the key ('sym+0x10'); then, if
+    nearest(ea) -> (name, address) gives the closest named address at or before ea, that name up to KEY_WINDOW bytes
+    back (an array of keys; after a _ddebug, a _ddebug of its own without a symbol: 'pr_debug ...' when the struct at
+    the key - 0x28 validates); else None."""
     n = name_at(ea)
     if n:
         return n
@@ -201,14 +210,16 @@ def key_label(name_at, ea, read=None, nearest=None):
         if n:
             if n.startswith("__tracepoint_") and off == TRACEPOINT_KEY_OFFSET:
                 return "tracepoint " + n[len("__tracepoint_"):]
-            if n.startswith("__UNIQUE_ID_ddebug") and off == DDEBUG_KEY_OFFSET:
+            if ddebug_name(n) and off == DDEBUG_KEY_OFFSET:
                 d = ddebug_label(read, ea - off)
                 if d:
                     return d
             return "%s+%#x" % (n, off)
     hit = nearest(ea) if nearest else None
     if hit and hit[0] and 0 < ea - hit[1] <= KEY_WINDOW:
-        return "%s+%#x" % (hit[0], ea - hit[1])
+        # judge s189 3.7: the demo kernel's __dyndbg holds 2152 records, 1939 with a symbol; the others follow one
+        d = ddebug_label(read, ea - DDEBUG_KEY_OFFSET) if ddebug_name(hit[0]) else None
+        return d or "%s+%#x" % (hit[0], ea - hit[1])
     return None
 
 

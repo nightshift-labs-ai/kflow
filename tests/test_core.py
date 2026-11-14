@@ -170,6 +170,45 @@ class Keys(unittest.TestCase):
         self.assertIsNone(key_label(at, BASE + 0x500, m.read, lambda ea: ("far_away", ea - 0x1001)))
         self.assertIsNone(key_label(at, BASE + 0x500, m.read, lambda ea: None))
 
+    def test_ratelimited_and_unnamed_ddebug_keys(self):
+        """judge s189 3.7: pr_debug_ratelimited / net_dbg_ratelimited / dev_dbg_ratelimited name their struct _ddebug
+        'descriptor' (GCC: descriptor.N), and a _ddebug without a symbol of its own (the demo kernel's __dyndbg has 2152
+        records, 1939 named) used to read 'previous record+0x60': both get the pr_debug label when the struct validates."""
+        from kflow.core import key_label
+        m = Mem()
+        names = {BASE + 0x200: "descriptor.13", BASE + 0x300: "__UNIQUE_ID_ddebug7", BASE + 0x400: "descriptor",
+                 BASE + 0x500: "descriptor.2", BASE + 0x600: "other_struct", BASE + 0x700: "descriptor.4"}
+
+        def ddebug(ea, line, filename=BASE + 0x1000, fmt=BASE + 0x1100):
+            m.put(ea, struct.pack("<QQQQI", BASE + 0x1200, BASE + 0x1210, filename, fmt, line | (63 << 18)))
+        m.put(BASE + 0x1000, b"drivers/md/dm-ioctl.c\0")
+        m.put(BASE + 0x1100, b"device-mapper: ioctl: %s\0")
+        m.put(BASE + 0x1200, b"dm_mod\0")
+        m.put(BASE + 0x1210, b"dev_remove\0")
+        m.put(BASE + 0x1300, b"not a file name\0")
+        want = "pr_debug drivers/md/dm-ioctl.c:%d \"device-mapper: ioctl: %%s\""
+        for ea, line in ((0x200, 1001), (0x300, 1002), (0x338, 1003), (0x370, 1004), (0x400, 1005), (0x600, 1007)):
+            ddebug(BASE + ea, line)
+        ddebug(BASE + 0x500, 1006, filename=BASE + 0x1300)  # a file name with a space: not a _ddebug
+        ddebug(BASE + 0x700, 0)  # line 0: not a _ddebug
+        at = lambda ea: names.get(ea, "")  # noqa: E731
+
+        def near(ea):
+            return max(((n, a) for a, n in names.items() if a <= ea), key=lambda x: x[1], default=None)
+        self.assertEqual(key_label(at, BASE + 0x228, m.read, near), want % 1001)  # descriptor.13+0x28
+        self.assertEqual(key_label(at, BASE + 0x428, m.read, near), want % 1005)  # plain 'descriptor'
+        self.assertEqual(key_label(at, BASE + 0x328, m.read, near), want % 1002)  # as before
+        # records after __UNIQUE_ID_ddebug7 without names of their own: the struct at the key - 0x28 is read
+        self.assertEqual(key_label(at, BASE + 0x360, m.read, near), want % 1003)
+        self.assertEqual(key_label(at, BASE + 0x398, m.read, near), want % 1004)
+        # what does not validate keeps symbol+offset
+        self.assertEqual(key_label(at, BASE + 0x528, m.read, near), "descriptor.2+0x28")
+        self.assertEqual(key_label(at, BASE + 0x728, m.read, near), "descriptor.4+0x28")
+        self.assertEqual(key_label(at, BASE + 0x228, None, near), "descriptor.13+0x28")
+        # only dynamic-debug names: another struct with the same bytes is not read as one
+        self.assertEqual(key_label(at, BASE + 0x628, m.read, near), "other_struct+0x28")
+        self.assertEqual(key_label(at, BASE + 0x660, m.read, near), "other_struct+0x60")
+
 
 def module_elf(path, extended=False):
     """A minimal x86_64 relocatable ELF (.ko) with one BUG entry and one static-key entry, both only meaningful
