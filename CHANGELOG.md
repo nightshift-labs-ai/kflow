@@ -2,7 +2,7 @@
 
 Taken from the GitHub release notes. Newest first.
 
-## Unreleased
+## v0.0.7 (2026-11-18)
 
 - Supported IDA versions: 9.1 or later (`ida-plugin.json` `idaVersions` `>=9.1`; README, docs and the headless runner's messages say the same). The IDA API names are checked against the IDA 9.1 to 9.5 stubs only, so 9.0 was never checked; same rule as the sister plugin btf2ida. hcli no longer offers this version to IDA 9.0.
 - README front door: the opening leads with static keys (96% of the 8,349 NOP sites on the MemLens demo kernel, now explained at first mention as a Debian 13 6.12 x86_64 kernel exported from a memory image; re-measured with `tools/reach.py`: 8,037 of 8,349, 96.3%), then `file:line` without DWARF, then the oops report; the before/after and pseudocode blocks put each kflow comment under its instruction, wrapped (labelled so), so no code line is over 110 characters (before: 121, 176 and 230); the table's static-key row says what is lost without the reference, the WARN/BUG and oops cells get a verb and units (586 source lines map to 2+ traps, 506 of them in 2+ named functions, re-counted with `python3 -m kflow`'s decoder), and a new Pseudocode row; the Features list is shorter (README 1,775 words before this release's additions, 1,906 now, `wc -w`). `tests/test_core.py` fails on a README code line over 110 characters; on a kernel with the README's addresses (the demo kernel), `tests/test_entry_stub.py` checks that each wrapped comment, unwrapped, is the code's own text. docs/VERIFICATION.md lists the try module `dm-mod.ko` (74 / 22 / 2 sites; six modules now).
