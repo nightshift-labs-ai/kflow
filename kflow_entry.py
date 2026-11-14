@@ -293,7 +293,8 @@ class AnnotateAction(ida_kernwin.action_handler_t):
                 selfcheck.analysis_wait(check)
             finally:
                 ida_kernwin.hide_wait_box()
-        again = check is not None and check.waited and not check.cancelled  # finish() decompiles again
+        # finish() decompiles again; review s193 NIT 3: not after an auto_wait() error (waits() is false then)
+        again = check is not None and check.waited and check.waits() and not check.cancelled
         ida_kernwin.show_wait_box("HIDECANCEL\nkflow: " + ("decompile check: decompiling again" if again else
                                                            "counting sites for the summary"))
         try:

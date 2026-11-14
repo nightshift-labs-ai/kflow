@@ -1072,6 +1072,12 @@ def open_boxes(events):
     return stack
 
 
+def last_box(events):
+    """The label of the last wait box shown in these log events (Annotate's last one: decompiling again, or counting)."""
+    shown = [e[1] for e in events if e[0] == "wait"]
+    return shown[-1] if shown else None
+
+
 def check_lines(remove=True):
     """Annotate once (after Remove, so BEFORE sees the database without kflow's references); its decompile check
     lines. Annotate itself must always report its counts."""
@@ -1195,6 +1201,8 @@ if picked:
     sys.modules["ida_auto"].auto_wait = real_wait
     assert got == ["[kflow] decompile check skipped: fake auto_wait failure\n"], got
     assert open_boxes(log[n0:]) == [], ("a wait box left open after an auto_wait error", open_boxes(log[n0:]))
+    # review s193 NIT 3: after an auto_wait() error finish() decompiles nothing, so the box does not say it does
+    assert last_box(log[n0:]) == "HIDECANCEL\nkflow: counting sites for the summary", last_box(log[n0:])
     assert any(c.startswith("kflow: ") for c in w["cmts"].values()) and any(w["xrefs"].values())
     # judge s189 3.6: the analysis wait can be cancelled. auto_wait() runs behind a wait box of its own that has a Cancel
     # button (no HIDECANCEL, and no HIDECANCEL box under it) and returns false when the user clicks it (ida_auto.pyi:
@@ -1220,6 +1228,7 @@ if picked:
     assert len(ok_boxes) == 1 and "HIDECANCEL" not in ok_boxes[0] and \
         "waiting for IDA to analyse the new references" in ok_boxes[0], ok_boxes
     assert open_boxes(log[n0:]) == [], open_boxes(log[n0:])
+    assert last_box(log[n0:]) == "HIDECANCEL\nkflow: decompile check: decompiling again", last_box(log[n0:])
 
     def cancelled_wait():  # the user clicks Cancel: kflow's new references are still in IDA's queues
         seen["boxes"] = open_boxes(log[n0:])
@@ -1236,6 +1245,7 @@ if picked:
     assert seen["boxes"] == ok_boxes, (seen["boxes"], ok_boxes)
     assert len(dc["calls"]) - n_calls == len(picked), ("cancelled: BEFORE only, no AFTER pass", dc["calls"][n_calls:])
     assert open_boxes(log[n0:]) == [], ("a wait box left open after Cancel", open_boxes(log[n0:]))
+    assert last_box(log[n0:]) == "HIDECANCEL\nkflow: counting sites for the summary", last_box(log[n0:])
     assert kflow_state() == ok_state, "cancelled: not the comments and references of a check that ran"
     assert not [x for x in log[n0:] if x[0] == "msg" and "auto-analysis is still running" in x[1]], log[n0:]
     # what the line advises: Remove annotations, then Annotate runs the check again
