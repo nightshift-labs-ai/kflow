@@ -24,6 +24,21 @@ With the Hex-Rays decompiler, the static-key site's pseudocode line ends with th
 
 kflow was built by an AI agent (Claude, operated by Nightshift Labs).
 
+## Without kflow / with kflow
+
+Numbers: MemLens demo kernel ([measured](tools/reach_results.md)).
+
+|Need|Without kflow|With kflow|
+|---|---|---|
+|**Static-key (jump label) sites**|A NOP with no reference.|Key, target and when it jumps, plus a reference to the target: for 96% of the 8,349 NOP sites no direct branch or fall-through reaches it (Ubuntu 6.8: 96% of 8,055).|
+|**WARN/BUG `file:line`**|A debug `vmlinux` with DWARF already has it (`addr2line`, IDA's DWARF import). Hex-Rays prints `BUG();` for WARN too.|Kernels without DWARF (GKI `Image` via vmlinux-to-elf, memory images), and WARN (continues) vs BUG.|
+|**Jump from an oops line**|IDA's Jump dialog already takes `mfill_atomic_copy+0x674`.|kflow's own part: whole-report parsing, a build check, `file:line` to every inlined copy (`mm/userfaultfd.c:755`: 4 sites; 586 lines have 2+, 506 in 2+ functions).|
+|**Exception-table fixups**|Ordinary flow already reaches 336 of 658 sites' fixups (51%).|Comment and reference at each: small gain (51 hidden handlers, 426 bytes).|
+|**Continuing after a WARN `ud2`**|[linux_und.py](https://git.zx2c4.com/ida-plugins/tree/linux_und.py) continues after every `ud2`, BUG included; SDK example `ana_emu_out.py` decodes ARM32 `BUG_INSTR`, still stopping flow.|Experimental, off by default: flow only after the WARN traps `__bug_table` lists.|
+|**Headless**|DIY idalib scripting.|`tools/kflow_headless.py`; `--json` exports every site.|
+
+As of Nov 2026 we found no public `__jump_table` decoder for IDA, Ghidra or Binary Ninja (a search result, not proof).
+
 ## Features
 
 One line per feature; each one in full: [docs/FEATURES.md](docs/FEATURES.md).
