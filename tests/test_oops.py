@@ -1451,6 +1451,13 @@ def cli_check(path, elf, bugs, reg, tag):
                 code = cli.main([path, "--oops", example])
             assert code == 0 and buf.getvalue().splitlines()[1] == got.splitlines()[1], (example, buf.getvalue(), got)
             assert "reading the argument itself as the log" in err.getvalue(), err.getvalue()
+            # review s190 F4: a missing argument that reads like a path is a file name (no such file, exit 2), even with
+            # BUG or :<digit> in it; a bare frame like func+0x10/0x40 is still read as the log
+            for missing in ("/nonexistent-s190/BUG-report.txt", "./BUG:1.log", "dmesg-BUG.txt", "~/oops:3"):
+                with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()) as err:
+                    code = cli.main([path, "--oops", missing])
+                assert code == 2 and "no such file" in err.getvalue(), (missing, code, err.getvalue())
+            assert cli.PATH_LIKE.match("func+0x674/0x9d0") is None and cli.PATH_LIKE.match(example) is None
             # and - still reads stdin
             real_stdin, sys.stdin = sys.stdin, io.StringIO(example + "\n")
             try:

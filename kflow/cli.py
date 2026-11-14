@@ -489,15 +489,19 @@ def site_records(elf, t, path):
 
 # a --oops argument that is no file but reads like a log line (judge s189 #5: the --oops-example line pasted as is)
 LOG_LIKE = re.compile(r"\n|WARNING:|BUG|RIP:|pc :|\+0x[0-9a-fA-F]|:\d")
+# ... unless it reads like a path: no whitespace and starting with / ~ . or ending in .log/.txt (review s190 F4:
+# a missing /tmp/BUG-report.txt used to be read as log text). func+0x674/0x9d0 does not match.
+PATH_LIKE = re.compile(r"(?:[~./]\S*|\S+\.(?:log|txt))\Z")
 
 
 def oops_log_text(arg):
     """--oops LOG: '-' reads stdin; an existing path is read as a file; otherwise an argument that reads like a log
-    line (a newline, WARNING:, BUG, RIP:, pc :, +0x.., :<digits>) is the log itself (a note on stderr says so).
+    line (a newline, WARNING:, BUG, RIP:, pc :, +0x.., :<digits>) is the log itself (a note on stderr says so),
+    unless it reads like a path (PATH_LIKE): then a missing file is an error.
     Anything else: InputError naming the three ways."""
     if arg == "-":
         return sys.stdin.read()
-    if os.path.exists(arg) or not LOG_LIKE.search(arg):
+    if os.path.exists(arg) or not LOG_LIKE.search(arg) or PATH_LIKE.match(arg):
         try:
             with open(arg, encoding="utf-8", errors="replace") as fh:
                 return fh.read()
