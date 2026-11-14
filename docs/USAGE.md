@@ -29,7 +29,7 @@ Without the IDA window (idalib, IDA 9.1+): `python3 tools/kflow_headless.py <ker
 
 ```
 {"addr": "0xFFFFFFFF8E629BC4", "kind": "WARN", "function": "mfill_atomic_copy", "file": "mm/userfaultfd.c", "line": 755}
-{"addr": "0xFFFFFFFF8E391DE7", "key": "randomize_kstack_offset", "kind": "likely", "now": "no jump", "target": "0xFFFFFFFF8E391DFC", "function": "arch_exit_to_user_mode_prepare.isra.0"}
+{"addr": "0xFFFFFFFF8E391DE7", "key": "randomize_kstack_offset", "class": "hardening", "kind": "likely", "now": "no jump", "target": "0xFFFFFFFF8E391DFC", "function": "arch_exit_to_user_mode_prepare.isra.0"}
 {"addr": "0xFFFFFFFF8E200029", "fixup": "0xFFFFFFFF8E20002B", "type": "WRMSR", "handler": null, "function": "sev_es_terminate"}
 ```
 
