@@ -35,15 +35,32 @@ Without the IDA window (idalib, IDA 9.0+): `python3 tools/kflow_headless.py <ker
 
 The file has the lists `bug`, `jump` and `ex` of such records, plus `input`, `bug_layout` (the field order of the kernel's own `__bug_table` entries, not of these records), `missing` (tables not found) and `errors` (tables found but not decoded, whose list is then empty).
 
-## Try a real module (one minute, 377 KB download)
+## Try a real module (a few minutes, 129 KB download)
+
+Download [`kflow-try-module.zip`](https://github.com/nightshift-labs-ai/kflow/releases/download/try-module/kflow-try-module.zip) (129 KB): Debian 13's x86_64 `dm-mod.ko`, with its sources in `README.txt`. From the kflow folder (the one with README.md):
+
+```
+python3 -m kflow dm-mod.ko
+python3 -m kflow dm-mod.ko --oops "$(python3 -m kflow dm-mod.ko --oops-example)"
+```
+
+The first finds 74 BUG/WARN sites (37 WARN), 22 static-key sites and 2 exception-table fixups; the second builds a `WARNING:` line from the module's own `__bug_table` and maps it back to its site (`exact`, rc 0). Then open `dm-mod.ko` in IDA (a module is analysed in seconds) and run **Edit > Plugins > kflow: Annotate kernel sites**. What you should see (texts from kflow's fake-IDA test on this file; kflow has not yet run in real IDA):
+
+1. The summary window starts with the line **kflow: Annotate finished**, then `22 of 22 static-key NOP sites can jump to code nothing else in this database reaches` (the fake IDA has no other references, so real IDA may show fewer where its own analysis already reaches a target).
+2. Its **Static-key sites** button lists the 22 sites. Press F5 in `dm_submit_bio` (4 `zoned_enabled` sites and the `block_split` tracepoint): the sites' `// kflow:` comments name the key and end `so this pseudocode probably does not show that code`.
+3. **kflow: Go to oops/WARN line** starts with `WARNING: CPU: 0 PID: 1 at drivers/md/dm-zone.c:35 dm_blk_do_report_zones.isra.0+0x91/0xc0 [dm_mod]`; OK jumps to that `ud2`, commented `WARN at drivers/md/dm-zone.c:35`.
+
+## Or an arm64 module (one minute, 377 KB download)
 
 Debian's installer ships kernel modules in small packages. The arm64 `ext4.ko` has all three tables (any Linux with `curl`, `ar`, `tar` and Python 3.8+; nothing is installed):
 
 ```
-curl -sO https://deb.debian.org/debian/pool/main/l/linux-signed-arm64/ext4-modules-6.12.94+deb13-arm64-di_6.12.94-1_arm64.udeb
-sha256sum ext4-modules-6.12.94+deb13-arm64-di_6.12.94-1_arm64.udeb   # f7957d08ff7b2d63775a2b97897e1934de2066b9d668cad101fa09147d35aaa0
-ar x ext4-modules-6.12.94+deb13-arm64-di_6.12.94-1_arm64.udeb && tar -xf data.tar.xz
-PYTHONPATH=/path/to/kflow python3 -m kflow lib/modules/6.12.94+deb13-arm64/kernel/fs/ext4/ext4.ko.xz --list jump --limit 3
+deb=ext4-modules-6.12.94+deb13-arm64-di_6.12.94-1_arm64.udeb
+curl -sO https://deb.debian.org/debian/pool/main/l/linux-signed-arm64/$deb
+sha256sum $deb   # f7957d08ff7b2d63775a2b97897e1934de2066b9d668cad101fa09147d35aaa0
+ar x $deb && tar -xf data.tar.xz
+PYTHONPATH=/path/to/kflow python3 -m kflow \
+    lib/modules/6.12.94+deb13-arm64/kernel/fs/ext4/ext4.ko.xz --list jump --limit 3
 ```
 
 (`/path/to/kflow` = the kflow folder, the one with README.md, e.g. the installed plugin under your IDA user directory's `plugins/kflow`). Output:
