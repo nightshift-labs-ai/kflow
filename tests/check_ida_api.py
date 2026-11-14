@@ -85,7 +85,17 @@ SHAPES = [("ida_hexrays", "Hexrays_Hooks", r"def func_printed\(self, cfunc: cfun
           ("ida_ua", None, r"def decode_insn\(out: insn_t, ea: ida_idaapi.ea_t\) -> int:"),
           ("ida_ua", "insn_t", r"def add_cref\(self, to: ida_idaapi.ea_t, opoff: int, type: cref_t\) -> None:"),
           ("ida_xref", None, r"^fl_F: int  # 21"), ("ida_auto", None, r"def plan_ea\(ea: ida_idaapi.ea_t\) -> None:"),
-          ("ida_auto", None, r"def auto_wait\(\) -> bool:"), ("ida_bytes", None, r"def get_flags\(ea: ida_idaapi.ea_t\) -> int:"),
+          # judge s189 3.6, the decompile check's analysis wait: auto_wait() gives false on Cancel in the caller's wait box,
+          # a box without HIDECANCEL has a Cancel button, NODELAY shows it at once, one hide_wait_box() per show_wait_box()
+          ("ida_auto", None, r"def auto_wait\(\) -> bool:(?: \.\.\.)?\s+r?\"\"\"Process everything in the queues and return "
+                             r"true\.\s+[:@]returns:? false if the user clicked cancel\. \(the wait box must be displayed by "
+                             r"the caller if desired\)"),
+          ("ida_kernwin", None, r"def show_wait_box\(message: str\) -> None:(?s:(?:(?!\ndef ).)*?)\"NODELAY\\n\": the dialog "
+                                r"will show immediately(?s:(?:(?!\ndef ).)*?)\"HIDECANCEL\\n\": the cancel button won't be "
+                                r"added to the dialog box(?s:(?:(?!\ndef ).)*?)call hide_wait_box\(\) exactly as many\s+times "
+                                r"as it called show_wait_box\(\)"),
+          ("ida_kernwin", None, r"def hide_wait_box\(\) -> None:"),
+          ("ida_bytes", None, r"def get_flags\(ea: ida_idaapi.ea_t\) -> int:"),
           ("ida_bytes", None, r"def is_flow\(F: int\) -> bool:"), ("ida_bytes", None, r"def is_code\(F: int\) -> bool:"),
           ("ida_funcs", None, r"def append_func_tail\(pfn: func_t, ea1: ida_idaapi.ea_t, ea2: ida_idaapi.ea_t\) -> bool:"),
           ("ida_funcs", None, r"def remove_func_tail\(pfn: func_t, tail_ea: ida_idaapi.ea_t\) -> bool:"),
