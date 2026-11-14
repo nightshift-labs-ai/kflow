@@ -254,6 +254,7 @@ for fake, want in ((lambda t: [("init_on_alloc", True), ("init_on_free", False),
         m.idalayer.hardening_keys = real_hard
     _w = [x[1] for x in log[n:] if x[0] == "buttons"]
     assert len(_w) == 1 and [x for x in _w[0].split("\n") if x.startswith("Hardening keys")] == ([want] if want else []), _w
+    assert not want or re.search(r"^\d+ static-key sites: .*\nHardening keys, ", _w[0], re.M), _w  # under the static-key line
     assert not [x for x in log[n:] if x[0] == "msg" and "summary window not shown" in x[1]], log[n:]
 # review s184 #2: no window when nothing was annotated (an all-zero annotate result); the counts still go to Output
 real_annotate, n = m.idalayer.annotate, len(log)

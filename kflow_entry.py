@@ -343,7 +343,8 @@ def hidden_count(t, arch):
 
 
 def table_lines(t):
-    """One line per table Annotate worked on, in the README's nouns (judge s189 #2)."""
+    """One line per table Annotate worked on, in the README's nouns (judge s189 #2); the static-key line is followed by
+    the hardening line when there is one (hardening_line)."""
     out = []
     bugs = t["bug"]
     if bugs:
@@ -355,6 +356,7 @@ def table_lines(t):
     if t["jump"]:
         out.append("%d static-key sites: key and target in a comment; a reference to the target where IDA has none, "
                    "and one to the key" % len(t["jump"]))
+        out += hardening_line(t)
     if t["ex"]:
         out.append("%d exception-table fixups: fixup in a comment; a reference to the fixup where IDA has none"
                    % len(t["ex"]))
@@ -403,7 +405,7 @@ def summary_window(t, res, lines, nm=None, analysis_done=True):
         hidden, total, best = nm if nm is not None else hidden_count(t, idalayer.current_arch())
         head = [HEADLINE % (hidden, total) + (HEADLINE_SOME % (
             "; the site's pseudocode comment says so" if STATE["hx"] is not None else "") if hidden else HEADLINE_NONE)]
-        body = (head if total else []) + table_lines(t) + hardening_line(t)
+        body = (head if total else []) + table_lines(t)
         missed = idalayer.not_code_text(res, analysis_done)
         if missed:
             body.append(missed[0].upper() + missed[1:])

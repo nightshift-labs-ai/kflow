@@ -482,10 +482,11 @@ def main(argv=None):
                 rows.append("%#x %-5s %-40s %s" % (b.addr, "WARN" if b.warn else "BUG", elf.func(b.addr) or "?", b.where() or ""))
         elif a.list == "jump":
             for j in t.get("jump", []):
-                if a.key_class and key_class(elf.key_name(j.key)) != a.key_class:
+                name = elf.key_name(j.key)
+                if a.key_class and key_class(name) != a.key_class:
                     continue
                 rows.append("%#x -> %#x  %-40s key %s%s" % (j.code, j.target, elf.func(j.code) or "?",
-                            elf.key_name(j.key) or "%#x" % j.key, " (likely)" if j.branch else ""))
+                            name or "%#x" % j.key, " (likely)" if j.branch else ""))
         else:
             for x in t.get("ex", []):
                 rows.append("%#x -> %#x  %-40s %s" % (x.insn, x.fixup, elf.func(x.insn) or "?",
