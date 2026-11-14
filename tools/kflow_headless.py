@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""kflow without the IDA window, through idalib (IDA 9.0 or newer).
+"""kflow without the IDA window, through idalib (IDA 9.1 or newer).
 
     python3 tools/kflow_headless.py <vmlinux or kernel ELF, or an existing database> [--no-analysis] [--remove]
                                     [--json sites.json]
@@ -64,7 +64,7 @@ def main(argv=None):
     try:
         import idapro  # must be imported before any ida_* module
     except ImportError as error:
-        print("kflow_headless: idalib is not available (%s). It needs IDA 9.0 or newer; see the top of this file." % error, file=sys.stderr)
+        print("kflow_headless: idalib is not available (%s). It needs IDA 9.1 or newer; see the top of this file." % error, file=sys.stderr)
         return 2
     if idapro.open_database(args.input, not args.no_analysis) != 0:
         print("kflow_headless: IDA could not open %s" % args.input, file=sys.stderr)

@@ -55,6 +55,6 @@ kflow reads these tables from the database and, in IDA, comments every site and 
 
 ## Without the IDA window
 
-- [**Headless runner**](USAGE.md#headless-idalib): `python3 tools/kflow_headless.py <kernel>` annotates (or with `--remove` removes) and saves the database without the IDA window (idalib, IDA 9.0+); `--json` exports every site with IDA's function names.
+- [**Headless runner**](USAGE.md#headless-idalib): `python3 tools/kflow_headless.py <kernel>` annotates (or with `--remove` removes) and saves the database without the IDA window (idalib, IDA 9.1+); `--json` exports every site with IDA's function names.
 - [**Command-line decoder, no IDA needed**](OUTPUT.md#what-you-get-real-output-not-ida-screenshots): `python3 -m kflow <kernel ELF>` needs only Python 3.8+ and no packages; `--list warn`, `bug`, `jump` or `ex` lists the sites; `--oops <log>` finds the site a kernel log names.
 - [**One-command tests**](VERIFICATION.md#what-was-verified): `sh tests/run_all.sh` runs every test in about two seconds on a pinned Debian arm64 `ext4.ko` (sha256 checked) or on your own files (about a minute on a whole vmlinux).

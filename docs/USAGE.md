@@ -23,7 +23,7 @@ The short version is in the [README](../README.md#try-it) (what you need, instal
 
 ## Headless (idalib)
 
-Without the IDA window (idalib, IDA 9.0+): `python3 tools/kflow_headless.py <kernel> [--no-analysis] [--remove] [--json sites.json]` does steps 2 and 5 and saves the database. Not yet run with a real idalib (tested on fake `idapro` / `ida_*` modules).
+Without the IDA window (idalib, IDA 9.1+): `python3 tools/kflow_headless.py <kernel> [--no-analysis] [--remove] [--json sites.json]` does steps 2 and 5 and saves the database. Not yet run with a real idalib (tested on fake `idapro` / `ida_*` modules).
 
 `--json sites.json` also writes every decoded site with IDA's function names, for scripts (for example to match `file:line` across kernel versions when patch diffing). Addresses are hex strings. Without IDA, `python3 -m kflow <kernel> --json sites.json` writes the same records with the ELF's symbol names and file addresses (a module's are kflow's own section layout, [not necessarily IDA's](modules.md)), without the `now` field and with each BUG/WARN record's `flags`: 19,758 records on the MemLens demo kernel. Three records from the MemLens demo kernel (fake-IDA test output; function names there come from the ELF symbols):
 

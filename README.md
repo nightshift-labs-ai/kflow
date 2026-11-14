@@ -57,7 +57,7 @@ One line per feature; each one in full: [docs/FEATURES.md](docs/FEATURES.md).
 - [**Exception-table fixups**](docs/FEATURES.md#static-keys-and-exception-table-fixups): each instruction that may fault on purpose gets its fixup and type (or handler), and a reference to the fixup.
 - [**Hex-Rays pseudocode comments**](docs/USAGE.md#hex-rays-pseudocode-comments) (display text only) and a [**decompile check**](docs/USAGE.md#hex-rays-pseudocode-comments): up to 20 functions decompiled before and after Annotate.
 - [**What the references add, measured**](tools/reach_results.md): after 90% of the 7,504 WARN traps the code is hidden too; Annotate adds no reference there, only the experimental [**WARN fall-through**](docs/warnflow.md) (off by default, x86_64) lets IDA flow on after exactly the WARN traps `__bug_table` lists.
-- [**Kernel modules**](docs/modules.md) (`.ko`, `.ko.xz`, `.ko.gz`), [**clean removal**](docs/USAGE.md#step-by-step) of only what kflow added (also after a rebase), a [**headless runner**](docs/USAGE.md#headless-idalib) (idalib, IDA 9.0+; `--json` exports every site).
+- [**Kernel modules**](docs/modules.md) (`.ko`, `.ko.xz`, `.ko.gz`), [**clean removal**](docs/USAGE.md#step-by-step) of only what kflow added (also after a rebase), a [**headless runner**](docs/USAGE.md#headless-idalib) (idalib, IDA 9.1+; `--json` exports every site).
 - [**Command-line decoder, no IDA needed**](docs/OUTPUT.md): `python3 -m kflow <kernel ELF>`, Python 3.8+, no packages.
 - [**One-command tests**](docs/VERIFICATION.md#what-was-verified): `sh tests/run_all.sh` (about two seconds on a pinned Debian arm64 `ext4.ko`, or on your own files).
 
