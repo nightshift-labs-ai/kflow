@@ -45,7 +45,7 @@ kflow reads these tables from the database and, in IDA, comments every site and 
 ## Hex-Rays decompiler
 
 - [**Hex-Rays pseudocode comments**](USAGE.md#hex-rays-pseudocode-comments): with the decompiler, a `// kflow: ...` comment at the end of the site's pseudocode line where it has one (display text only, nothing saved; tested only against a fake `ida_hexrays` module).
-- [**Decompile check**](USAGE.md#hex-rays-pseudocode-comments): with the Hex-Rays decompiler, Annotate decompiles up to 20 functions that get a new static-key jump reference before and after it adds anything, and says in one line whether any of them stopped decompiling (and names them). You can cancel its wait for IDA's analysis: the comments and references stay, and the line says the check was cancelled. Tested only with fake `ida_*` modules; not yet run in IDA.
+- [**Decompile check**](USAGE.md#hex-rays-pseudocode-comments): with the Hex-Rays decompiler, Annotate decompiles up to 20 functions that get a new static-key jump reference before and after it adds anything, and says in one line whether any of them stopped decompiling (and names them). In the menu you can cancel its wait for IDA's analysis: the comments and references stay, and the line says the check was cancelled. Tested only with fake `ida_*` modules; not yet run in IDA.
 
 ## Kernel modules, clean removal, WARN fall-through
 
