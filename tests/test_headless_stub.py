@@ -25,7 +25,7 @@ sys.modules["idapro"] = idapro
 auto_ok = [True]  # IDA's auto-analysis state after open_database (review s159 NIT 2: the runner asks IDA, not the flag)
 sys.modules["ida_auto"] = types.ModuleType("ida_auto")
 sys.modules["ida_auto"].auto_is_ok = lambda: auto_ok[0]
-sys.modules["ida_auto"].auto_wait = lambda: calls.append(("auto_wait",))
+sys.modules["ida_auto"].auto_wait = lambda: calls.append(("auto_wait",)) or True  # -> bool; false only on a user Cancel
 dialogs = []  # tripwire only: kflow_headless never imports kflow_entry (the summary window lives there), so this stays empty unless that import is ever added
 if "ida_kernwin" not in sys.modules:
     sys.modules["ida_kernwin"] = types.ModuleType("ida_kernwin")
@@ -123,6 +123,18 @@ assert line.startswith("[kflow] decompile check skipped: ") and "--remove" in li
 assert "Remove annotations" not in line and "Annotate again" not in line, line
 with contextlib.redirect_stdout(io.StringIO()):
     assert H.main([sys.argv[1], "--remove"]) == 0
+# judge s189 3.6: auto_wait() false (ida_auto.pyi: 'false if the user clicked cancel') skips the AFTER pass; the
+# headless line gives the runner's own steps, not the menu actions
+if picked:
+    real_wait, n_calls = sys.modules["ida_auto"].auto_wait, len(dc["calls"])
+    sys.modules["ida_auto"].auto_wait = lambda: False
+    line = headless_check_line([sys.argv[1]])
+    sys.modules["ida_auto"].auto_wait = real_wait
+    assert line == ("[kflow] decompile check cancelled: IDA's analysis wait was cancelled; run with --remove, then "
+                    "again to run the check"), line
+    assert len(dc["calls"]) - n_calls == len(picked), ("BEFORE only", dc["calls"][n_calls:])
+    with contextlib.redirect_stdout(io.StringIO()):
+        assert H.main([sys.argv[1], "--remove"]) == 0
 sys.modules["ida_hexrays"] = None
 w.pop("func_of")
 print("OK headless decompile check: %s" % first_line)

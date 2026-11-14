@@ -1056,6 +1056,22 @@ if picked:
     assert big in exact and big not in below, (hex(big), size, len(exact), len(below))
 
 
+def open_boxes(events):
+    """The wait boxes still open after these log events, oldest first (show_wait_box pushes, hide_wait_box pops,
+    replace_wait_box replaces the top label: ida_kernwin.pyi show_wait_box)."""
+    stack = []
+    for e in events:
+        if e[0] == "wait":
+            stack.append(e[1])
+        elif e[0] == "hide":
+            assert stack, "hide_wait_box without an open wait box"
+            stack.pop()
+        elif e[0] == "wait_replace":
+            assert stack, "replace_wait_box without an open wait box"
+            stack[-1] = e[1]
+    return stack
+
+
 def check_lines(remove=True):
     """Annotate once (after Remove, so BEFORE sees the database without kflow's references); its decompile check
     lines. Annotate itself must always report its counts."""
@@ -1080,9 +1096,11 @@ if picked:
     assert dc["flags"] and all(f & 1 for f in dc["flags"][-2 * len(picked):]), dc["flags"][-3:]
     # review s174 api MAJOR 1: IDA's auto-analysis runs after Annotate and before the AFTER pass
     assert T.AUTO_WAITS and T.AUTO_WAITS[-1] == len(dc["calls"]) - len(picked), (T.AUTO_WAITS[-3:], len(dc["calls"]))
-    # re-review s175 code MINOR 1 / claims MINOR 2: before auto_wait() the wait box says what IDA is doing (no limit)
-    waits = [x[1] for x in log if x[0] == "wait_replace"]
-    assert waits and "waiting for IDA to analyse the new references" in waits[-1], waits[-3:]
+    # re-review s175 code MINOR 1 / claims MINOR 2: before auto_wait() the wait box says what IDA is doing (no limit);
+    # judge s189 3.6: a box of its own, with a Cancel button (no HIDECANCEL); every box is hidden again
+    waits = [x[1] for x in log if x[0] == "wait" and "waiting for IDA to analyse the new references" in x[1]]
+    assert waits and not waits[-1].startswith("HIDECANCEL") and "Cancel skips the check" in waits[-1], waits[-3:]
+    assert not [x for x in log if x[0] == "wait_replace"] and open_boxes(log) == [], open_boxes(log)
     n_waits_box = len(waits)
     # re-review s175 (code MINOR 2, claims MINOR 1): Annotate again without Remove: BEFORE would see kflow's own
     # references (and blame them on 'before'), so the check is skipped with the reason and decompiles nothing
@@ -1091,7 +1109,8 @@ if picked:
     assert again == ["[kflow] decompile check skipped: kflow's references from an earlier Annotate are still in the "
                      "database; Remove annotations and Annotate again to run the check\n"], again
     assert len(dc["calls"]) == n_calls, "no decompile when the database is already annotated"
-    assert len([x for x in log if x[0] == "wait_replace"]) == n_waits_box, "skipped check: no analysis wait message"
+    assert len([x for x in log if x[0] == "wait" and "waiting for IDA to analyse" in x[1]]) == n_waits_box, \
+        "skipped check: no analysis wait box"
     # fails after Annotate: blamed by name; the AFTER decompile is not the cached BEFORE result
     victim = picked[len(picked) // 2]
     dc["after"] = {victim}
@@ -1171,10 +1190,57 @@ if picked:
     def bad_wait():
         raise RuntimeError("fake auto_wait failure")
     sys.modules["ida_auto"].auto_wait = bad_wait
+    n0 = len(log)
     got = check_lines()
     sys.modules["ida_auto"].auto_wait = real_wait
     assert got == ["[kflow] decompile check skipped: fake auto_wait failure\n"], got
+    assert open_boxes(log[n0:]) == [], ("a wait box left open after an auto_wait error", open_boxes(log[n0:]))
     assert any(c.startswith("kflow: ") for c in w["cmts"].values()) and any(w["xrefs"].values())
+    # judge s189 3.6: the analysis wait can be cancelled. auto_wait() runs behind a wait box of its own that has a Cancel
+    # button (no HIDECANCEL, and no HIDECANCEL box under it) and returns false when the user clicks it (ida_auto.pyi:
+    # 'false if the user clicked cancel (the wait box must be displayed by the caller if desired)'). Then the AFTER pass
+    # is skipped and the line says so (also in the window); the comments and references are the same as after a check
+    # that ran; every wait box is hidden again; and Annotate does not say auto-analysis is still running although
+    # auto_is_ok() is false now (it was true before Annotate: IDA is only working through kflow's new references)
+    def kflow_state():
+        return (dict(w["cmts"]), dict(w["xrefs"]), dict(w.get("drefs", {})),
+                {k: dict(v) for k, v in w["netnodes"].items()})
+    seen = {}
+    real_ok = sys.modules["ida_auto"].auto_is_ok
+
+    def watched_wait():  # the check that runs: which wait boxes are open while IDA analyses
+        seen["boxes"] = open_boxes(log[n0:])
+        return real_wait()
+    sys.modules["ida_auto"].auto_wait = watched_wait
+    n0 = len(log)
+    assert check_lines() == ["[kflow] decompile check: %d functions with static-key sites decompile before and after "
+                             "Annotate\n" % len(picked)]
+    sys.modules["ida_auto"].auto_wait = real_wait
+    ok_boxes, ok_state = seen.pop("boxes"), kflow_state()
+    assert len(ok_boxes) == 1 and "HIDECANCEL" not in ok_boxes[0] and \
+        "waiting for IDA to analyse the new references" in ok_boxes[0], ok_boxes
+    assert open_boxes(log[n0:]) == [], open_boxes(log[n0:])
+
+    def cancelled_wait():  # the user clicks Cancel: kflow's new references are still in IDA's queues
+        seen["boxes"] = open_boxes(log[n0:])
+        seen["pending"] = True
+        return False
+    sys.modules["ida_auto"].auto_wait = cancelled_wait
+    sys.modules["ida_auto"].auto_is_ok = lambda: not seen.get("pending") and real_ok()
+    n0, n_calls = len(log), len(dc["calls"])
+    got = check_lines()
+    sys.modules["ida_auto"].auto_wait, sys.modules["ida_auto"].auto_is_ok = real_wait, real_ok
+    seen.pop("pending")
+    assert got == ["[kflow] decompile check cancelled: IDA goes on analysing; when it has finished, Remove annotations "
+                   "and Annotate again to run the check\n"], got
+    assert seen["boxes"] == ok_boxes, (seen["boxes"], ok_boxes)
+    assert len(dc["calls"]) - n_calls == len(picked), ("cancelled: BEFORE only, no AFTER pass", dc["calls"][n_calls:])
+    assert open_boxes(log[n0:]) == [], ("a wait box left open after Cancel", open_boxes(log[n0:]))
+    assert kflow_state() == ok_state, "cancelled: not the comments and references of a check that ran"
+    assert not [x for x in log[n0:] if x[0] == "msg" and "auto-analysis is still running" in x[1]], log[n0:]
+    # what the line advises: Remove annotations, then Annotate runs the check again
+    assert check_lines() == ["[kflow] decompile check: %d functions with static-key sites decompile before and after "
+                             "Annotate\n" % len(picked)]
 else:
     assert got == ["[kflow] decompile check: no function has a static-key site that gets a new jump reference\n"], got
 # s174 own review MINOR 1: while IDA's auto-analysis still runs, BEFORE/AFTER would compare a changing database, so the
@@ -1205,7 +1271,7 @@ n_calls = len(hx_log["dc"]["calls"])
 assert check_lines() == [] and len(hx_log["dc"]["calls"]) == n_calls
 p.term()
 print("OK decompile check: %d functions picked; all OK / fails after (blamed) / fails before (not blamed) / time bound / "
-      "exception / no decompiler" % len(picked))
+      "exception / analysis wait cancelled (box with Cancel, no AFTER pass) / no decompiler" % len(picked))
 for kind, ea, text in shown_texts:
     print("  pseudocode, %s site 0x%X:  %s" % (kind, ea, text))
 print("OK pseudocode: comments on BUG/WARN %s, static key %s, NOP static key %s, exception %s; none before Annotate, "

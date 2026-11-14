@@ -371,7 +371,9 @@ def install_ui(w, log):
         auto.auto_is_ok = lambda: w.get("auto_ok", True)
         sys.modules["ida_auto"] = auto
     if not hasattr(sys.modules["ida_auto"], "auto_wait"):  # s174: the decompile check waits for IDA before its AFTER pass
-        sys.modules["ida_auto"].auto_wait = lambda: AUTO_WAITS.append(len(DC_STATE["s"]["calls"]) if "s" in DC_STATE else -1)
+        # True: IDA processed everything (ida_auto.pyi: auto_wait() -> bool, false only if the user clicked cancel)
+        sys.modules["ida_auto"].auto_wait = lambda: AUTO_WAITS.append(
+            len(DC_STATE["s"]["calls"]) if "s" in DC_STATE else -1) or True
     return types.SimpleNamespace(kw=kw, fn=fn, lines=lines_mod, get_func=get_func)
 
 

@@ -266,6 +266,10 @@ def flush_pseudocode():
         pass
 
 
+ANALYSIS_WAIT = ("NODELAY\nkflow: decompile check: waiting for IDA to analyse the new references (Cancel skips the "
+                 "check; the comments and references stay)")
+
+
 class AnnotateAction(ida_kernwin.action_handler_t):
     @guarded
     def activate(self, ctx):
@@ -276,18 +280,34 @@ class AnnotateAction(ida_kernwin.action_handler_t):
         try:
             check = selfcheck.start(t, idalayer.current_arch())  # with Hex-Rays: decompile a few functions first
             res = idalayer.annotate(t, idalayer.current_arch())
-            if check is not None and check.waits():  # re-review s175 code MINOR 1: this wait has no time limit
-                ida_kernwin.replace_wait_box("HIDECANCEL\nkflow: decompile check: waiting for IDA to analyse the new "
-                                             "references, then decompiling again")
+        finally:
+            ida_kernwin.hide_wait_box()
+        if check is not None and check.waits():  # re-review s175 code MINOR 1: this wait has no time limit
+            # judge s189 3.6: so it gets a Cancel button. A box of its own (the one above is closed: whether a nested
+            # box gets a Cancel button is not documented) without HIDECANCEL (ida_kernwin.pyi show_wait_box: with it
+            # "the cancel button won't be added"), NODELAY as before (HIDECANCEL implied it), around auto_wait() only:
+            # a click while Hex-Rays decompiles could fail that decompile and blame kflow. Cancel only skips the AFTER
+            # pass (selfcheck.analysis_wait); the comments and references are all written by now and stay
+            ida_kernwin.show_wait_box(ANALYSIS_WAIT)
+            try:
+                selfcheck.analysis_wait(check)
+            finally:
+                ida_kernwin.hide_wait_box()
+        again = check is not None and check.waited and not check.cancelled  # finish() decompiles again
+        ida_kernwin.show_wait_box("HIDECANCEL\nkflow: " + ("decompile check: decompiling again" if again else
+                                                           "counting sites for the summary"))
+        try:
             line = selfcheck.finish(check)
-            try:  # review s184 #3: the slow part of the summary window, while the wait box is still up
+            try:  # review s184 #3: the slow part of the summary window, while a wait box is up
                 nm = hidden_count(t, idalayer.current_arch())
             except Exception:  # noqa: BLE001
                 nm = None
         finally:
             ida_kernwin.hide_wait_box()
         import ida_auto
-        done = ida_auto.auto_is_ok()
+        # cancelled: auto-analysis had finished before Annotate (selfcheck.start checks it, else no wait), and IDA now
+        # only works through kflow's new references, as after a wait that ran; the sites need no second Annotate
+        done = ida_auto.auto_is_ok() or (check is not None and check.cancelled)
         counts = idalayer.annotate_text(res, analysis_done=done)
         report(counts)
         if line:
@@ -755,6 +775,9 @@ class WarnFlowAction(ida_kernwin.action_handler_t):
             ida_kernwin.warning("kflow: IDA did not accept the processor hook; nothing was changed.")
             return 0
         start = time.time()
+        # no Cancel here, unlike the decompile check's wait (judge s189 3.6): warnflow.enable() reads the reanalysed sites
+        # right after each auto_wait() (tails, counts), and auto-analysis was idle before (checked above), so the waits
+        # cover only these sites; a cancelled wait would leave tails and counts from half-done analysis
         ida_kernwin.show_wait_box("HIDECANCEL\nkflow: letting WARN sites fall through (IDA reanalyses them)")
         try:
             res = warnflow.enable(t, hook)
@@ -800,6 +823,7 @@ class WarnFlowOffAction(ida_kernwin.action_handler_t):
             return 0
         from kflow import warnflow
         warnflow_stop()  # first: then nothing adds the flow when IDA reanalyses the sites
+        # no Cancel either: warnflow.disable() deletes its record after the waits, so it must not stop half-way
         ida_kernwin.show_wait_box("HIDECANCEL\nkflow: removing WARN fall-through (IDA reanalyses the sites)")
         try:
             res = warnflow.disable()

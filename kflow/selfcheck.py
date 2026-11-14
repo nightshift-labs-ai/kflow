@@ -130,6 +130,8 @@ class DecompileCheck:
         self.error = None
         self.skip = None     # a reason to skip the whole check (auto-analysis still running)
         self.reasons = {}    # function -> Hex-Rays' reason for its last failed decompile
+        self.waited = False     # analysis_wait() has run: finish() does not wait again
+        self.cancelled = False  # judge s189 3.6: the user cancelled the analysis wait, so there is no AFTER pass
 
     def _run(self, funcs, out, limit):
         for ea in funcs:
@@ -155,7 +157,7 @@ class DecompileCheck:
         return self.skip is None and self.error is None and any(self.before_ok.values())
 
     def after(self):
-        if self.error is not None or self.skip is not None:
+        if self.error is not None or self.skip is not None or self.cancelled:
             return
         try:
             # reviews s174 (api MINOR 3/NIT 7, claims F1): its own half of the budget, and only functions that decompiled
@@ -169,6 +171,11 @@ class DecompileCheck:
             return "decompile check skipped: %s" % self.skip
         if self.error is not None:
             return "decompile check skipped: %s" % (str(self.error) or type(self.error).__name__)
+        if self.cancelled:  # judge s189 3.6: Annotate's comments and references are all in; only the AFTER pass is missing
+            return ("decompile check cancelled: IDA's analysis wait was cancelled; run with --remove, then again to run "
+                    "the check" if self.headless else
+                    "decompile check cancelled: IDA goes on analysing; when it has finished, Remove annotations and "
+                    "Annotate again to run the check")
         if not self.picked:
             return "decompile check: no function has a static-key site that gets a new jump reference"
         checked = list(self.after_ok)  # functions that decompiled before Annotate and were decompiled again after it
@@ -226,16 +233,33 @@ def start(t, arch, headless=False):
     return check
 
 
+def analysis_wait(check):
+    """After annotate(), before the AFTER pass: let IDA analyse the references Annotate just added (ida_auto.auto_wait(),
+    no time limit), once, and only when finish() will decompile again (check.waits()). False when the user clicked
+    Cancel: ida_auto.pyi (IDA 9.1-9.5): auto_wait() "returns false if the user clicked cancel. (the wait box must be
+    displayed by the caller if desired)"; the menu action shows that box, with a Cancel button, around this call only.
+    Then check.cancelled is set and finish() skips the AFTER pass. finish() calls this itself if the caller did not
+    (tools/kflow_headless.py: no wait box). Never raises: an error is kept for the summary line."""
+    if check is None or check.waited or not check.waits():  # re-review s174 MINOR 2: nothing decompiled → no wait
+        return True
+    check.waited = True
+    try:
+        import ida_auto
+        # review s174 api MAJOR 1: auto-analysis was idle before Annotate (start() checked it), so this only lets IDA
+        # react to the references Annotate just added; the AFTER pass then sees what F5 will see
+        if not ida_auto.auto_wait():
+            check.cancelled = True
+    except Exception as e:  # noqa: BLE001  (the check must never stop Annotate)
+        check.error = e
+    return not check.cancelled
+
+
 def finish(check):
     """The summary line after annotate() (None without the decompiler); never raises."""
     if check is None:
         return None
     try:
-        if check.waits():  # re-review s174 MINOR 2: nothing decompiled before Annotate → no auto_wait()
-            import ida_auto
-            # review s174 api MAJOR 1: auto-analysis was idle before Annotate (start() checked it), so this only lets IDA
-            # react to the references Annotate just added; the AFTER pass then sees what F5 will see
-            ida_auto.auto_wait()
+        analysis_wait(check)  # nothing to do when the caller ran it already (the menu action, behind its wait box)
         check.after()
         return check.text()
     except Exception as e:  # noqa: BLE001
