@@ -44,7 +44,8 @@ def site_records(t, arch, path):
         "errors": {k: str(v) for k, v in t.get("errors", {}).items()},   # a table found but not decoded (its list is empty)
         "bug": [{"addr": h(b.addr), "kind": "WARN" if b.warn else "BUG", "function": fn(b.addr), "file": b.file,
                  "line": b.line} for b in t["bug"]],
-        "jump": [{"addr": h(j.code), "key": idalayer.site_key_name(j, names), "kind": "likely" if j.branch else "unlikely",
+        "jump": [{"addr": h(j.code), "key": idalayer.site_key_name(j, names), "class": idalayer.site_class(j, names),
+                  "kind": "likely" if j.branch else "unlikely",
                   "now": "jump" if idalayer.branches_to(j.code, j.target, arch) else "no jump", "target": h(j.target),
                   "function": fn(j.code)} for j in t["jump"]],
         "ex": [{"addr": h(x.insn), "fixup": h(x.fixup), "type": None if x.data is None else x.type_name(arch),

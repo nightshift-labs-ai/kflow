@@ -105,8 +105,8 @@ for r, b in zip(js["bug"], bugs):
     assert r == {"addr": "0x%X" % b.addr, "kind": "WARN" if b.warn else "BUG", "function": e.func(b.addr) or None,
                  "file": b.file, "line": b.line, "flags": b.flags}, r
 for r, j in zip(js["jump"], jumps):
-    assert r == {"addr": "0x%X" % j.code, "key": e.key_name(j.key) or "0x%X" % j.key, "kind": "likely" if j.branch else "unlikely",
-                 "target": "0x%X" % j.target, "function": e.func(j.code) or None}, r
+    assert r == {"addr": "0x%X" % j.code, "key": e.key_name(j.key) or "0x%X" % j.key, "class": cli.key_class(e.key_name(j.key)),
+                 "kind": "likely" if j.branch else "unlikely", "target": "0x%X" % j.target, "function": e.func(j.code) or None}, r
 for r, x in zip(js["ex"], exs):
     assert r == {"addr": "0x%X" % x.insn, "fixup": "0x%X" % x.fixup, "type": None if x.data is None else x.type_name(e.arch),
                  "handler": None if x.handler is None else "0x%X" % x.handler, "function": e.func(x.insn) or None}, r
@@ -129,33 +129,40 @@ if jumps:
         with contextlib.redirect_stdout(out):
             assert cli.main([sys.argv[1], "--list", "jump", "--class", c, "--limit", "100000"]) == 0
         assert len([r for r in out.getvalue().splitlines() if " -> " in r]) == classes[c], c
-# hardening keys and their build default (bit 0 of struct static_key's type word, JUMP_TYPE_TRUE)
-hard = {}
+# hardening keys and their build default (bit 0 of struct static_key's type word, JUMP_TYPE_TRUE); review s192: and
+# their state in this file (struct static_key's 'enabled', offset 0), noted in the line where it differs
+hard, state = {}, {}
 for j, n in zip(jumps, labels):
     if core.key_class(n) == "hardening":
         hard.setdefault(n, e.key_default(j.key))
+        state.setdefault(n, e.key_enabled(j.key))
 hl = [x for x in lines if x.startswith("  hardening keys, default in this build: ")]
-assert len(hl) == bool(hard), hl
-# exact counts on the README's two samples and GKI 6.1 (measured on this branch: python3 -m kflow <file>)
+assert hl == (["  hardening keys, default in this build: " + core.hardening_text(
+    [(n, hard[n], state[n]) for n in core.HARDENING_KEYS if n in hard])] if hard else []), hl
+differs = {n: s for n, s in state.items() if hard[n] is not None and s is not None and s >= 0 and (s > 0) != hard[n]}
+# exact counts on the README's two samples and GKI 6.1 (measured on this branch: python3 -m kflow <file>); the third
+# item: the keys whose state in this file differs from the build default (only the memory image's cr_pinning, which
+# the running kernel switched on at boot; on disk the state is the default)
 EXACT = {("kernel.elf", 9237): ({"hardening": 82, "feature": 5229, "tracepoint": 1728, "debug": 2198},
                                 {"init_on_alloc": True, "init_on_free": False, "randomize_kstack_offset": True,
                                  "cr_pinning": False, "bypass_usercopy_checks": False, "switch_mm_cond_ibpb": False,
                                  "switch_mm_always_ibpb": False, "switch_to_cond_stibp": False,
-                                 "switch_mm_cond_l1d_flush": False, "cpu_buf_idle_clear": False}),
-         ("dm-mod.ko", 22): ({"hardening": 0, "feature": 12, "tracepoint": 3, "debug": 7}, {}),
+                                 "switch_mm_cond_l1d_flush": False, "cpu_buf_idle_clear": False}, {"cr_pinning": 1}),
+         ("dm-mod.ko", 22): ({"hardening": 0, "feature": 12, "tracepoint": 3, "debug": 7}, {}, {}),
          # Android GKI 6.1 arm64 (vmlinux-to-elf); its embedded config (IKCFG_ST) has CONFIG_INIT_ON_ALLOC_DEFAULT_ON=y,
          # '# CONFIG_INIT_ON_FREE_DEFAULT_ON is not set', '# CONFIG_RANDOMIZE_KSTACK_OFFSET_DEFAULT is not set'
-         ("gki.elf", 10629): ({"hardening": 35, "feature": 7911, "tracepoint": 2683, "debug": 0},
+         ("gki.elf", 10629): ({"hardening": 40, "feature": 7906, "tracepoint": 2683, "debug": 0},
                               {"init_on_alloc": True, "init_on_free": False, "randomize_kstack_offset": False,
-                               "bypass_usercopy_checks": False})}
+                               "bypass_usercopy_checks": False, "dynamic_scs_enabled": False}, {})}
 want = EXACT.get((os.path.basename(sys.argv[1]), len(jumps)))
 if want:
     assert dict(classes) == {k: v for k, v in want[0].items() if v}, dict(classes)
     assert hard == want[1], hard
+    assert differs == want[2], differs
     assert not [n for n in labels if n.startswith(("descriptor", "__UNIQUE_ID_ddebug"))], \
         collections.Counter(n.split("+")[0].split(".")[0] for n in labels if n.startswith(("descriptor", "__UNIQUE")))
 if jumps:
     print("  key classes: %s; hardening keys: %s" % (", ".join("%s %d" % (c, classes[c]) for c in core.KEY_CLASSES),
-                                                     ", ".join("%s %s" % kv for kv in hard.items()) or "none"))
+                                                     hl[0].split(": ", 1)[1] if hl else "none"))
 print("OK: %d bug sites (%d WARN), %d jump sites (%d enabled checked), %d ex sites"
       % (len(bugs), sum(b.warn for b in bugs), len(jumps), checked, len(exs)))

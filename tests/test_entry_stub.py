@@ -85,7 +85,7 @@ def summary(new):
     assert hl == ([m.idalayer.core.hardening_text(hard, 3)] if hard else []), (hl, hard)
     if hard:
         assert len(hl[0]) <= 110 and re.search(r"^\d+ static-key sites: .*\nHardening keys, ", body, re.M), text
-        assert [n for n, d in hard if d is None] or "?" not in hl[0], hl
+        assert [h for h in hard if h[1] is None] or "?" not in hl[0], hl
     nxt = re.search(r"^Next: (.*)$", body, re.M)
     assert nxt, text
     # review j189 P1: the oracle is a full hidden-path pass (slow on a whole kernel); only the F5 line needs it
@@ -246,7 +246,11 @@ real_hard = m.idalayer.hardening_keys
 for fake, want in ((lambda t: [("init_on_alloc", True), ("init_on_free", False), ("cr_pinning", None),
                                ("randomize_kstack_offset", True)],
                     "Hardening keys, default in this build: init_on_alloc on, randomize_kstack_offset on, "
-                    "init_on_free off, +1 more"), (lambda t: 1 // 0, None)):
+                    "init_on_free off, +1 more"),
+                   # review s192: the state in this database, where it differs from the default (a memory image)
+                   (lambda t: [("init_on_alloc", True, 1), ("cr_pinning", False, 1), ("bypass_usercopy_checks", False, 0)],
+                    "Hardening keys, default in this build: init_on_alloc on, cr_pinning off (on in this file), "
+                    "bypass_usercopy_checks off (checks on)"), (lambda t: 1 // 0, None)):
     m.idalayer.hardening_keys, n = fake, len(log)
     try:
         m.summary_window(m.STATE["tables"], {"comments": 1}, [])

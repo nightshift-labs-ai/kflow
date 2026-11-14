@@ -16,7 +16,7 @@ import sys
 
 from . import __version__
 from .core import (HARDENING_KEYS, KEY_CLASSES, TABLES, TRACEPOINT_KEY_OFFSET, decode_bug_table, decode_ex_table,
-                   decode_jump_table, hardening_text, key_class, key_default, key_label)
+                   decode_jump_table, hardening_text, key_class, key_default, key_enabled, key_label)
 
 
 class InputError(Exception):
@@ -279,6 +279,13 @@ class Elf:
             return None
         return key_default(self.read, ea, self.in_nobits)
 
+    def key_enabled(self, ea):
+        """core.key_enabled for the key at ea: its state in this file (a key in .bss is 0); None for a module's imported
+        key."""
+        if self.extern_of(ea) is not None:
+            return None
+        return key_enabled(self.read, ea, self.in_nobits)
+
     def in_nobits(self, ea):
         """True when ea lies in a section without contents in the file (SHT_NOBITS: .bss, zero-filled)."""
         return any(a <= ea < e for nm, (a, e) in self.sections.items() if nm in self.nobits)
@@ -414,12 +421,13 @@ def summary(elf, t):
 
 
 def hardening_keys(elf, jumps, labels):
-    """[(name, build default)] of the hardening keys (core.HARDENING_KEYS) that sites test, in the list's order."""
+    """[(name, build default, state in this file)] of the hardening keys (core.HARDENING_KEYS) that sites test, in the
+    list's order (core.hardening_text notes a state that differs from the default: memory images)."""
     seen = {}
     for j, n in zip(jumps, labels):
         if key_class(n) == "hardening" and n not in seen:
-            seen[n] = elf.key_default(j.key)
-    return [(n, seen[n]) for n in HARDENING_KEYS if n in seen]
+            seen[n] = (n, elf.key_default(j.key), elf.key_enabled(j.key))
+    return [seen[n] for n in HARDENING_KEYS if n in seen]
 
 
 def row_count(text):
@@ -491,6 +499,8 @@ def main(argv=None):
             for x in t.get("ex", []):
                 rows.append("%#x -> %#x  %-40s %s" % (x.insn, x.fixup, elf.func(x.insn) or "?",
                             ("handler " + elf.by_addr.get(x.handler, hex(x.handler))) if x.handler is not None else x.type_name(elf.arch)))
+        if not rows and a.key_class:
+            print("(no sites of class %s)" % a.key_class)
         for r in rows[:limit]:
             print(r)
         if len(rows) > limit:
@@ -514,8 +524,9 @@ def site_records(elf, t, path):
         "errors": {k: str(v) for k, v in t.get("errors", {}).items()},   # a table found but not decoded (its list is empty)
         "bug": [{"addr": h(b.addr), "kind": "WARN" if b.warn else "BUG", "function": elf.func(b.addr) or None,
                  "file": b.file, "line": b.line, "flags": b.flags} for b in t.get("bug", [])],
-        "jump": [{"addr": h(j.code), "key": elf.key_name(j.key) or h(j.key), "kind": "likely" if j.branch else "unlikely",
-                  "target": h(j.target), "function": elf.func(j.code) or None} for j in t.get("jump", [])],
+        "jump": [{"addr": h(j.code), "key": n or h(j.key), "class": key_class(n),
+                  "kind": "likely" if j.branch else "unlikely", "target": h(j.target), "function": elf.func(j.code) or None}
+                 for j, n in ((j, elf.key_name(j.key)) for j in t.get("jump", []))],
         "ex": [{"addr": h(x.insn), "fixup": h(x.fixup), "type": None if x.data is None else x.type_name(elf.arch),
                 "handler": h(x.handler), "function": elf.func(x.insn) or None} for x in t.get("ex", [])],
     }

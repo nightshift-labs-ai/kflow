@@ -217,9 +217,10 @@ class Keys(unittest.TestCase):
         self.assertEqual(core.HARDENING_KEYS, (
             "init_on_alloc", "init_on_free", "randomize_kstack_offset", "cr_pinning", "bypass_usercopy_checks",
             "switch_mm_cond_ibpb", "switch_mm_always_ibpb", "switch_to_cond_stibp", "switch_mm_cond_l1d_flush",
-            "cpu_buf_idle_clear"))
+            "cpu_buf_idle_clear", "dynamic_scs_enabled"))
         cases = {"tracepoint sched_switch": "tracepoint", 'pr_debug init/main.c:1 "x"': "debug",
                  "init_on_alloc": "hardening", "cpu_buf_idle_clear": "hardening", "init_on_alloc+0x10": "feature",
+                 "mds_idle_clear": "feature", "dynamic_scs_enabled": "hardening",  # mds_idle_clear: no sample has it
                  "my_init_on_alloc": "feature", "sched_feat_keys+0x30": "feature", "0xFFFFFFFF81000000": "feature",
                  "descriptor.1+0x28": "feature", "": "feature", None: "feature"}
         self.assertEqual({k: core.key_class(k) for k in cases}, cases)
@@ -229,6 +230,22 @@ class Keys(unittest.TestCase):
                          "init_on_alloc on, randomize_kstack_offset on, init_on_free off, cr_pinning ?")
         self.assertEqual(core.hardening_text(pairs, 2), "init_on_alloc on, randomize_kstack_offset on, +2 more")
         self.assertEqual(core.hardening_text(pairs[:1], 3), "init_on_free off")
+        # review s192: the state in this file when it differs from the build default (a memory image: CR pinning is a
+        # false key that the running kernel switched on); with the default unknown or the state unknown, no note
+        triples = [("init_on_alloc", True, 1), ("init_on_free", False, 0), ("cr_pinning", False, 1),
+                   ("randomize_kstack_offset", True, 0), ("switch_mm_cond_ibpb", False, None), ("cpu_buf_idle_clear", None, 1),
+                   ("switch_to_cond_stibp", False, 2), ("switch_mm_always_ibpb", False, -1)]
+        self.assertEqual(core.hardening_text(triples),
+                         "init_on_alloc on, randomize_kstack_offset on (off in this file), init_on_free off, "
+                         "cr_pinning off (on in this file), switch_mm_cond_ibpb off, switch_to_cond_stibp off (on in this "
+                         "file), switch_mm_always_ibpb off, cpu_buf_idle_clear ?")
+        # bypass_usercopy_checks is on when the usercopy checks are skipped: the note says what the checks do
+        self.assertEqual([core.hardening_text([("bypass_usercopy_checks",) + p]) for p in (
+            (False, 0), (False, None), (True, 1), (False, 1), (True, 0), (None, 0), (None, None))], [
+            "bypass_usercopy_checks off (checks on)", "bypass_usercopy_checks off (checks on)",
+            "bypass_usercopy_checks on (checks off)", "bypass_usercopy_checks off (on in this file: checks off)",
+            "bypass_usercopy_checks on (off in this file: checks on)", "bypass_usercopy_checks ?",
+            "bypass_usercopy_checks ?"])
 
     def test_key_build_default(self):
         """The build default of a key: bit 0 (JUMP_TYPE_TRUE) of the word after 'enabled' in struct static_key, set
@@ -248,6 +265,23 @@ class Keys(unittest.TestCase):
         self.assertFalse(key_default(m.read, BASE + 0x8000, lambda ea: ea == BASE + 0x8000))  # .bss: zero
         self.assertIsNone(key_default(m.read, BASE + 0x8000, lambda ea: False))
         self.assertIsNone(key_default(None, BASE + 0x100))
+
+    def test_key_state_in_this_file(self):
+        """review s192: key_enabled is the atomic_t 'enabled' at offset 0 of struct static_key (a running kernel's state
+        in a memory image; on disk it equals the build default); the MemLens demo kernel's cr_pinning reads enabled=1,
+        type=0x2 (a false key switched on at boot), so the summary says 'cr_pinning off (on in this file)'."""
+        from kflow.core import hardening_text, key_default, key_enabled
+        m = Mem()
+        m.put(BASE + 0x100, struct.pack("<iiQ", 1, 0, 2))  # demo kernel cr_pinning: enabled 1, JUMP_TYPE_LINKED
+        m.put(BASE + 0x110, struct.pack("<iiQ", 0, 0, 0))
+        m.put(BASE + 0x120, struct.pack("<iiQ", 3, 0, 0xFFFFFFFF8F82FCF1))  # a count above 1: on
+        m.put(BASE + 0x130, struct.pack("<iiQ", -1, 0, 0))  # being switched on (static_key_slow_inc): signed
+        self.assertEqual([key_enabled(m.read, BASE + o) for o in (0x100, 0x110, 0x120, 0x130)], [1, 0, 3, -1])
+        self.assertIsNone(key_enabled(m.read, BASE + 0x8000))
+        self.assertIsNone(key_enabled(None, BASE + 0x100))
+        ea = BASE + 0x100
+        self.assertEqual(hardening_text([("cr_pinning", key_default(m.read, ea), key_enabled(m.read, ea))]),
+                         "cr_pinning off (on in this file)")
 
 
 def module_elf(path, extended=False):
@@ -325,11 +359,13 @@ class Module(unittest.TestCase):
         self.assertEqual(e.key_name(e.externs["__tracepoint_foo"] + 0x600), "__tracepoint_foo+0x600")
         self.assertGreater(j.key, max(end for a, end in e.sections.values()))  # extern slot after the sections
         self.assertIsNone(e.key_default(j.key))  # an imported key: its bytes are not in this file
+        self.assertIsNone(e.key_enabled(j.key))
 
     def test_list_jump_class(self):
         """--list jump --class <name> keeps the rows of one key class; the summary counts the sites per class."""
         import contextlib
         import io
+        import json
         import tempfile
         from kflow import cli
         with tempfile.TemporaryDirectory() as d:
@@ -342,6 +378,11 @@ class Module(unittest.TestCase):
                     rc = cli.main([p, "--list", "jump"] + (["--class", cls] if cls else []))
                 self.assertEqual(rc, 0)
                 outs[cls] = out.getvalue().splitlines()
+            js = os.path.join(d, "toy.json")
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(cli.main([p, "--json", js]), 0)
+            with open(js) as fh:
+                jrecs = json.load(fh)["jump"]
             err = io.StringIO()
             for bad in ([p, "--class", "feature"], [p, "--list", "bug", "--class", "feature"],
                         [p, "--list", "jump", "--class", "pr_debug"]):
@@ -356,6 +397,11 @@ class Module(unittest.TestCase):
         self.assertIn("  sites by key class (--list jump --class): hardening 0, feature 1, tracepoint 1, debug 0",
                       outs[None])
         self.assertFalse([r for r in outs[None] if "hardening keys" in r])  # no hardening key: no line
+        # review s192: a class without sites says so instead of printing nothing after the summary
+        self.assertEqual([r for r in outs["hardening"] if r.startswith("(")], ["(no sites of class hardening)"])
+        self.assertEqual([r for r in outs["feature"] if r.startswith("(")], [])
+        # --json: each static-key record has its class (all records: --class only filters the printed rows)
+        self.assertEqual([(r["key"], r["class"]) for r in jrecs], [("my_key", "feature"), ("tracepoint foo", "tracepoint")])
 
     def test_extended_section_numbering(self):
         import tempfile

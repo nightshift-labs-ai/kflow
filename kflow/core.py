@@ -226,8 +226,9 @@ def key_label(name_at, ea, read=None, nearest=None):
 KEY_CLASSES = ("hardening", "feature", "tracepoint", "debug")  # the static-key list's order: keys that change what
 # the kernel does first, then tracing and dynamic debug (pr_debug / dev_dbg / net_dbg sites), which only log
 HARDENING_KEYS = (  # judge s189 diff #3: symbol names of static keys that switch a hardening or mitigation on, each a
-    # key with sites in the MemLens demo kernel (Debian 6.12) and in Ubuntu 6.8 amd64; cr_pinning and the last five are
-    # x86 only (GKI 6.1 / 6.6 arm64 have the other four)
+    # key with sites in the MemLens demo kernel (Debian 6.12) and in Ubuntu 6.8 amd64, except dynamic_scs_enabled (sites
+    # in GKI 6.1 / 6.6 / 6.12 arm64); cr_pinning and the five after bypass_usercopy_checks are x86 only (GKI 6.1 / 6.6
+    # arm64 have the other four and dynamic_scs_enabled)
     "init_on_alloc",  # mm: zero pages and slab objects on allocation (init_on_alloc=, CONFIG_INIT_ON_ALLOC_DEFAULT_ON)
     "init_on_free",  # ... on free (init_on_free=, CONFIG_INIT_ON_FREE_DEFAULT_ON)
     "randomize_kstack_offset",  # random kernel stack offset per syscall (CONFIG_RANDOMIZE_KSTACK_OFFSET_DEFAULT)
@@ -236,8 +237,10 @@ HARDENING_KEYS = (  # judge s189 diff #3: symbol names of static keys that switc
     "switch_mm_cond_ibpb", "switch_mm_always_ibpb",  # x86 Spectre v2 user: IBPB on context switch
     "switch_to_cond_stibp",  # x86 Spectre v2 user: STIBP for tasks that ask for it
     "switch_mm_cond_l1d_flush",  # x86: L1D flush on context switch for tasks that ask for it (prctl)
-    "cpu_buf_idle_clear",  # x86 MDS: clear CPU buffers before idle (older kernels call it mds_idle_clear: no kernel
-    # here has that name, so it is not listed)
+    "cpu_buf_idle_clear",  # x86 MDS: clear CPU buffers before idle (older kernels call it mds_idle_clear: review s192
+    # looked again, no sample here has that symbol, so it is still not listed)
+    "dynamic_scs_enabled",  # arm64 CONFIG_DYNAMIC_SCS: shadow call stack switched on at boot on CPUs without pointer
+    # authentication (tested by scs_is_dynamic(); GKI 6.1 and 6.6: 5 sites, GKI 6.12: 6)
 )
 
 
@@ -270,11 +273,42 @@ def key_default(read, ea, zero_filled=None):
     return bool(word & JUMP_TYPE_TRUE)
 
 
-def hardening_text(pairs, most=None):
-    """'init_on_alloc on, init_on_free off' for [(name, key_default)]: on by default first, then off, then unknown
-    ('?'), each in the given order; with most, at most that many names, then '+N more'."""
+def key_enabled(read, ea, zero_filled=None):
+    """The state of the static key at ea in this file: the atomic_t 'enabled' at offset 0 of struct static_key, signed
+    (0 = off, 1 or more = on: static_key_slow_inc counts its users; -1 while the first user switches it on). On disk it
+    equals the build default (STATIC_KEY_INIT_TRUE sets it to 1); a memory image holds the running kernel's state.
+    None when the bytes are not readable or do not read as a static key (the same type-word check as key_default),
+    unless zero_filled(ea) says the key lies in zero-filled memory (.bss): then 0."""
+    raw = read(ea, 16) if read else None
+    if not raw or len(raw) < 16:
+        return 0 if zero_filled is not None and zero_filled(ea) else None
+    enabled, word = struct.unpack("<i4xQ", raw)
+    if word > 3 and word >> 48 != 0xFFFF:
+        return None
+    return enabled
+
+
+USERCOPY_BYPASS = "bypass_usercopy_checks"  # the one hardening key that is on when its hardening is off
+
+
+def hardening_text(keys, most=None):
+    """'init_on_alloc on, init_on_free off' for [(name, key_default)] or [(name, key_default, key_enabled)]: on by
+    default first, then off, then unknown ('?'), each in the given order; with most, at most that many names, then
+    '+N more'. With the state in this file (key_enabled; a memory image's can differ from the build default), a note
+    where it differs: 'cr_pinning off (on in this file)'; a negative or unknown state, or an unknown default, gives
+    none. bypass_usercopy_checks also says what the usercopy checks do: 'off (checks on)'."""
     rank, word = {True: 0, False: 1, None: 2}, {True: "on", False: "off", None: "?"}
-    words = ["%s %s" % (n, word[d]) for n, d in sorted(pairs, key=lambda p: rank[p[1]])]
+    words = []
+    for k in sorted(keys, key=lambda k: rank[k[1]]):
+        name, default = k[0], k[1]
+        enabled = k[2] if len(k) > 2 else None
+        state = None if enabled is None or enabled < 0 else enabled > 0
+        note = []
+        if default is not None and state is not None and state != default:
+            note.append("%s in this file" % word[state])
+        if default is not None and name == USERCOPY_BYPASS:
+            note.append("checks %s" % word[not (default if state is None else state)])
+        words.append("%s %s" % (name, word[default]) + (" (%s)" % ": ".join(note) if note else ""))
     if most is not None and len(words) > most:
         words = words[:most] + ["+%d more" % (len(words) - most)]
     return ", ".join(words)
